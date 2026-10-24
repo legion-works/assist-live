@@ -1076,3 +1076,227 @@ uv run python tools/check_public_tree.py --root . --private-denylist "$WORKSPACE
 PASS own Git root
 PASS public data matches=0
 ```
+
+## Marketplace release status
+
+Date: 2026-10-24 (UTC).
+
+The first test command from `$WORKSPACE/assist-live` was:
+
+```sh
+uv run pytest tests/test_marketplace.py -q
+```
+
+```text
+E       ModuleNotFoundError: No module named 'tools.check_marketplace'
+tests/test_marketplace.py:7: ModuleNotFoundError
+1 failed in 0.22s
+```
+
+The explicit network command was:
+
+```sh
+uv run python tools/check_marketplace.py --minimum 2026.11 --live --record-status
+```
+
+```text
+STATUS Q3 pending_release (recorded observation, not acceptance)
+PASS Q3 status recorded
+```
+
+The [dated Marketplace record](research/q3-marketplace.md) gives the official sources and the pinned development source.
+PyPI and GitHub reported `2026.10.4` as the latest stable release.
+No stable `2026.11.x` release was in those responses.
+The November release-note URL gave HTTP 404.
+
+The rule document says that the Marketplace refuses repositories with HA OS apps.
+The development source has an app-refusal branch only when the repository has no integration directory.
+The released check must test app-only and mixed fixtures to resolve this difference.
+The three-repository layout stays unchanged.
+No Marketplace install trial ran. HACS validation is not Marketplace acceptance.
+
+The offline status command was:
+
+```sh
+uv run pytest tests/test_marketplace.py -q && uv run python tools/check_marketplace.py --minimum 2026.11 --report docs/research/q3-marketplace.md --record-status
+```
+
+```text
+25 passed in 0.34s
+STATUS Q3 pending_release (recorded observation, not acceptance)
+PASS Q3 status recorded
+```
+
+The acceptance command was:
+
+```sh
+uv run python tools/check_marketplace.py --minimum 2026.11 --report docs/research/q3-marketplace.md --require-accepted
+```
+
+```text
+FAIL Q3 pending_release: HA 2026.11 has no recorded stable release
+```
+
+This command gave exit 1, as necessary before a release and actual install results.
+
+The repository command was:
+
+```sh
+PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+```
+
+```text
+32 files already formatted
+All checks passed!
+Success: no issues found in 9 source files
+205 passed in 6.12s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=8
+PASS public data matches=0
+```
+
+The Python `3.14.2` matrix commands used the same explicit audio dependencies as the pipeline checks above:
+
+```sh
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.1 --with pytest-homeassistant-custom-component==0.13.372 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.3 --with pytest-homeassistant-custom-component==0.13.374 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+```
+
+```text
+205 passed in 6.17s
+205 passed in 6.11s
+```
+
+No new external executable is necessary for these tests or the probe.
+The network mode uses the Python standard library and must have the explicit `--live` flag.
+The repository-local `pyright tools/check_marketplace.py tests/test_marketplace.py` command gave:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+The editor diagnostic snapshot reported 15 unresolved-import errors for the new test module.
+The repository-local Pyright command, mypy command, and unit tests resolved the module with no errors.
+Markdown has no language-server diagnostic source.
+The ASD-STE100 checker and privacy checker examine those documents.
+
+The ASD-STE100 checker gave 0 findings for each changed Markdown file.
+The publication-file self-scan gave:
+
+```text
+self-scan denylist=0 host_paths=1 rfc1918=0
+```
+
+The one host-path literal is an unchanged public-URL test vector in the privacy checker tests.
+The worktree check command was:
+
+```sh
+uv run python tools/check_public_tree.py --root . --private-denylist "$WORKSPACE/.opencode/private/denylist.txt"
+```
+
+```text
+PASS own Git root
+PASS public data matches=0
+```
+
+## Marketplace acceptance record invariants
+
+Date: 2026-10-24 (UTC).
+The status stays `pending_release`. The three-repository layout stays unchanged.
+
+The offline status gate must find the complete check-again section, its five steps, release condition, validator path, and acceptance command.
+A released record must have a stable validator tag equal to `release_version` and a source URL with that tag.
+For each official release source, `latest_stable` must be equal to or newer than `release_version`.
+The checker compares versions as numeric tuples.
+
+The rule quotation includes the full official paragraphs about the HACS custom integration and HA OS apps.
+The live probe can use `GITHUB_TOKEN` or `GH_TOKEN` for HTTPS GitHub API requests.
+The token does not go to other sources or into output.
+An API rate limit gives the named `github_rate_limit` failure with token instructions.
+Fake-opener tests check this behavior without network access.
+
+The test and status command from `$WORKSPACE/assist-live` was:
+
+```sh
+uv run pytest tests/test_marketplace.py -q && uv run python tools/check_marketplace.py --minimum 2026.11 --report docs/research/q3-marketplace.md --record-status
+```
+
+```text
+42 passed in 0.35s
+STATUS Q3 pending_release (recorded observation, not acceptance)
+PASS Q3 status recorded
+```
+
+The tests include a synthetic released-and-installed record that gives `PASS Q3 accepted` through `main()`.
+This synthetic record is not an actual Marketplace install result.
+The actual dated record gives exit 1 with this command:
+
+```sh
+uv run python tools/check_marketplace.py --minimum 2026.11 --report docs/research/q3-marketplace.md --require-accepted
+```
+
+```text
+FAIL Q3 pending_release: HA 2026.11 has no recorded stable release
+```
+
+The mutation tests remove the full procedure or its first four steps and corrupt release-source or validator-tag data.
+Each corrupted record must give exit 1:
+
+```sh
+uv run pytest tests/test_marketplace.py -q -k 'pending_report_requires or stale_latest_stable or nonrelease_validator_tag or dev_commit_url'
+```
+
+```text
+11 passed, 31 deselected in 0.22s
+```
+
+The repository gate was:
+
+```sh
+PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+```
+
+```text
+32 files already formatted
+All checks passed!
+Success: no issues found in 9 source files
+222 passed in 6.02s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=8
+PASS public data matches=0
+```
+
+The Python `3.14.2` matrix commands above ran again with the same pinned dependencies.
+The results for HA `2026.10.1` and HA `2026.10.3`, in that order, were:
+
+```text
+222 passed in 6.00s
+222 passed in 5.99s
+```
+
+The network-isolated command was:
+
+```sh
+unshare -rn sh -c 'uv run pytest tests/test_marketplace.py -q && uv run python tools/check_marketplace.py --minimum 2026.11 --report docs/research/q3-marketplace.md --record-status'
+```
+
+```text
+42 passed in 0.34s
+STATUS Q3 pending_release (recorded observation, not acceptance)
+PASS Q3 status recorded
+```
+
+The repository-root command `pyright tools/check_marketplace.py tests/test_marketplace.py` gave:
+
+```text
+0 errors, 0 warnings, 0 informations
+```
+
+The editor snapshot cannot resolve this module from the nested workspace root.
+It reported 24 unresolved-import errors in the test module, with no checker-file errors or warnings.
+Markdown has no language-server diagnostic source.
+No import or configuration changes hide this difference.
