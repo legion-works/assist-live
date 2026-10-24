@@ -897,3 +897,182 @@ self-scan denylist=0 host_paths=1 rfc1918=0
 The one host-path literal is a pre-existing public-URL test vector in the privacy checker tests.
 The public-tree checker gave `PASS public data matches=0`.
 No new external executable is necessary for the corpus tests or tool.
+
+## Pipeline public interface
+
+Date: 2026-10-24.
+
+The initial test-first command from `$WORKSPACE/assist-live` was:
+
+```sh
+uv run pytest tests/test_pipeline_contract.py -q
+```
+
+```text
+E       ModuleNotFoundError: No module named 'tools.probe_pipelines'
+1 failed in 0.43s
+```
+
+The public-interface criterion is the component `__all__` export.
+HA `2026.10.3` exports `async_create_default_pipeline` and `async_update_pipeline`.
+The [pipeline report](research/q2-pipelines.md) gives the signatures, side effects, automatic setup sequence, and manual fallback.
+The contract test checks each export and signature on the two HA versions in CI.
+
+The HA harness checks creation, selected voice, changed engines, stable IDs, duplicate creation, and creation refusal.
+It also checks two test-only satellites through their select entities.
+The integration does not supply the duplicate-selection repair at this time.
+
+The live command used explicit `--url`, `--token-file`, `--stt-engine`, `--tts-engine`, and `--tts-voice` arguments:
+
+```sh
+uv run python tools/probe_pipelines.py --url "$HA_TEST_URL" --token-file "$HA_TEST_TOKEN_FILE" --stt-engine "$HA_TEST_STT" --tts-engine "$HA_TEST_TTS" --tts-voice "$HA_TEST_VOICE"
+```
+
+The target was an isolated HA `2026.10.3` instance with an offline test provider.
+The probe checked a non-null voice through creation, read, update, and read.
+It did not run audio synthesis or use a debug endpoint.
+
+```text
+PASS live HA 2026.10.3 pipeline create/get/update with non-null voice
+PASS cleanup: two probe pipelines deleted; pipeline IDs and preferred unchanged
+```
+
+An initial live run used the incorrect `pipeline` key for read and delete.
+The correct public WebSocket key is `pipeline_id`.
+The probe removed the one pipeline from that run and checked the list again:
+
+```text
+PASS initial probe pipeline removed; no probe pipelines remain
+```
+
+The WebSocket update schema accepts only the complete pipeline fields, not only the changed fields.
+The corrected probe uses that schema.
+The in-process update function accepts keyword updates.
+The live probe is the preference and cleanup oracle.
+HA does not export a preferred-pipeline getter through `__all__`.
+Device trial not run: no test device at this time.
+
+## Pipeline test dependencies
+
+Date: 2026-10-24.
+
+The HA wheel does not include all component requirements.
+The first harness run found `ModuleNotFoundError` for `hassil` and `mutagen`.
+The development group and CI use the requirements from these component manifests:
+
+| Component | Requirement pins in HA 2026.10.1 and 2026.10.3 |
+|---|---|
+| `conversation` | `gazetteer-matcher==1.1.0`, `hassil==3.12.1`, `home-assistant-intents==2026.10.6` |
+| `tts` | `mutagen==1.48.1` |
+| `ffmpeg` | `ha-ffmpeg==3.2.2` |
+| `assist_pipeline` | `pymicro-vad==1.0.1`, `pyspeex-noise==1.0.2` |
+
+The manifests have the same pins on the two HA versions.
+The transitive components `http`, `intent`, `llm`, `stt`, and `wake_word` have no more requirements in these versions.
+Source URLs, accessed 2026-10-24:
+
+- [HA 2026.10.1 component manifests](https://github.com/home-assistant/core/tree/2026.10.1/homeassistant/components).
+- [HA 2026.10.3 component manifests](https://github.com/home-assistant/core/tree/2026.10.3/homeassistant/components).
+- [pymicro-vad 1.0.1 package metadata](https://pypi.org/pypi/pymicro-vad/1.0.1/json).
+- [pyspeex-noise 1.0.2 package metadata](https://pypi.org/pypi/pyspeex-noise/1.0.2/json).
+
+The two compiled packages do not have CPython 3.14 Linux wheels on PyPI.
+The `pymicro-vad` wheel list ends at CPython 3.12.
+The `pyspeex-noise` release has only a source archive.
+The lock file records the source archives and SHA-256 hashes:
+
+```text
+pymicro_vad-1.0.1.tar.gz
+60e0508b338b694c7ad71c633c0da6fcd2678a88abb8e948b80fa68934965111
+pyspeex_noise-1.0.2.tar.gz
+56a888ca2ef7fdea2316aa7fad3636d2fcf5f4450f3a0db58caa7c10a614b254
+```
+
+The source archives use `setuptools`, `pybind11`, and a C++17 compiler.
+Their `setup.py` files use `Pybind11Extension` with `language="c++"` and `cxx_std=17`.
+They do not call `make` or `cmake`.
+The initial local source build and dependency sync took 29.052 seconds.
+The CI tasks check `gcc --version` and `g++ --version` before dependency setup.
+The [GitHub runner image toolchain](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) supplies those compilers.
+
+An FFmpeg executable and audio conversion are not necessary for these tests.
+HA `ffmpeg/__init__.py:58-69,119-133` does not refuse setup when the version query gives `None`.
+The fixture replaces only the external FFmpeg version query, not HA imports or pipeline behavior.
+The fixture also initializes `homeassistant` before `conversation` to load the exposed-entity configuration.
+
+HA `http/server.py:290` uses a string key and causes an `aiohttp` `NotAppKeyWarning`.
+HA `pyproject.toml:457-468` does not promote this warning to an error, but this project does.
+The fixture asserts this warning only around HTTP setup with `pytest.warns`.
+The assertion must stop the test if HA removes the warning. No global warning filter changes.
+
+The harness does not open a WebSocket because HA HTTP authentication causes a different, once-per-key request warning.
+The live instance supplies the WebSocket results.
+
+## Pipeline checks
+
+Date: 2026-10-24.
+
+From `$WORKSPACE/assist-live`, the contract command was:
+
+```sh
+uv run pytest tests/test_pipeline_contract.py -q && uv run python tools/probe_pipelines.py --check --report docs/research/q2-pipelines.md
+```
+
+```text
+7 passed in 0.44s
+PASS Q2 pipeline contract
+```
+
+The repository gate was:
+
+```sh
+UV_LINK_MODE=copy PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+```
+
+```text
+29 files already formatted
+All checks passed!
+Success: no issues found in 8 source files
+180 passed in 7.20s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=7
+PASS public data matches=0
+```
+
+The CI-version commands were:
+
+```sh
+UV_LINK_MODE=copy uv run --no-project --python 3.14.2 --with "homeassistant==2026.10.1" --with "pytest-homeassistant-custom-component==0.13.372" --with PyYAML==6.0.3 --with "gazetteer-matcher==1.1.0" --with "ha-ffmpeg==3.2.2" --with "hassil==3.12.1" --with "home-assistant-intents==2026.10.6" --with "mutagen==1.48.1" --with "pymicro-vad==1.0.1" --with "pyspeex-noise==1.0.2" pytest tests/ -q
+UV_LINK_MODE=copy uv run --no-project --python 3.14.2 --with "homeassistant==2026.10.3" --with "pytest-homeassistant-custom-component==0.13.374" --with PyYAML==6.0.3 --with "gazetteer-matcher==1.1.0" --with "ha-ffmpeg==3.2.2" --with "hassil==3.12.1" --with "home-assistant-intents==2026.10.6" --with "mutagen==1.48.1" --with "pymicro-vad==1.0.1" --with "pyspeex-noise==1.0.2" pytest tests/ -q
+```
+
+```text
+180 passed in 12.70s
+180 passed in 10.15s
+```
+
+The workflow syntax check `actionlint .github/workflows/ci.yml` had no output and exit code 0.
+The ASD-STE100 checker had 0 findings for each changed Markdown file.
+The Python and YAML language servers gave 0 errors and 0 warnings.
+The Markdown, TOML, and lock files have no language-server diagnostic source.
+The formatter, tests, and public-tree checker examine those files.
+
+The publication-file self-scan gave these counts:
+
+```text
+self-scan denylist=0 host_paths=1 rfc1918=0
+```
+
+The one host-path literal is the same public-URL test vector in the privacy checker tests.
+The public worktree command was:
+
+```sh
+uv run python tools/check_public_tree.py --root . --private-denylist "$WORKSPACE/.opencode/private/denylist.txt"
+```
+
+```text
+PASS own Git root
+PASS public data matches=0
+```

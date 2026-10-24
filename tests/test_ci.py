@@ -22,7 +22,9 @@ def test_ci_has_required_jobs():
     }
 
 
-@pytest.mark.parametrize("mutation", ["condition", "needs", "skip", "matrix"])
+@pytest.mark.parametrize(
+    "mutation", ["condition", "needs", "skip", "matrix", "ha_requirements", "compiler"]
+)
 def test_ci_rejects_weakened_completion(tmp_path, mutation):
     from tools.check_ci import check_jobs
 
@@ -34,8 +36,20 @@ def test_ci_rejects_weakened_completion(tmp_path, mutation):
         complete["needs"].remove("ha")
     elif mutation == "skip":
         complete["steps"][-1]["run"] += " || true"
-    else:
+    elif mutation == "matrix":
         workflow["jobs"]["ha"]["strategy"]["matrix"]["include"].pop()
+    elif mutation == "ha_requirements":
+        step = next(
+            s
+            for s in workflow["jobs"]["ha"]["steps"]
+            if s.get("name") == "Test all contracts on the exact HA version"
+        )
+        step["run"] = step["run"].replace('--with "mutagen==1.48.1"', "")
+    else:
+        steps = workflow["jobs"]["ha"]["steps"]
+        workflow["jobs"]["ha"]["steps"] = [
+            s for s in steps if s.get("name") != "Check source build compilers"
+        ]
     path = tmp_path / "ci.yml"
     path.write_text(yaml.safe_dump(workflow))
     with pytest.raises(ValueError):

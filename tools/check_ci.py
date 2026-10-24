@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shlex
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,15 @@ RESULT_COMMAND = 'uv run --locked python tools/check_ci.py --results "$NEEDS_JSO
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
     {"ha": "2026.10.3", "plugin": "0.13.374", "member": "current"},
+]
+HA_COMPONENT_REQUIREMENTS = [
+    "gazetteer-matcher==1.1.0",
+    "ha-ffmpeg==3.2.2",
+    "hassil==3.12.1",
+    "home-assistant-intents==2026.10.6",
+    "mutagen==1.48.1",
+    "pymicro-vad==1.0.1",
+    "pyspeex-noise==1.0.2",
 ]
 
 
@@ -45,6 +55,50 @@ def check_jobs(path: str | Path) -> set[str]:
         if any(step.get("continue-on-error") or "if" in step for step in job["steps"]):
             failures.append(f"step result {name}")
     ha = jobs.get("ha", {})
+    for name in ("lint", "typecheck", "unit", "ha"):
+        job_steps = jobs.get(name, {}).get("steps", [])
+        compilers = [
+            i
+            for i, step in enumerate(job_steps)
+            if step.get("name") == "Check source build compilers"
+            and step.get("run") == "gcc --version && g++ --version"
+        ]
+        first_uv = next(
+            (
+                i
+                for i, step in enumerate(job_steps)
+                if step.get("run", "").startswith("uv ")
+            ),
+            -1,
+        )
+        if len(compilers) != 1 or not 0 <= compilers[0] < first_uv:
+            failures.append(f"source build compilers {name}")
+    command = next(
+        (
+            step.get("run", "")
+            for step in ha.get("steps", [])
+            if step.get("name") == "Test all contracts on the exact HA version"
+        ),
+        "",
+    )
+    required = [
+        "uv",
+        "run",
+        "--no-project",
+        "--python",
+        "3.14.2",
+        "--with",
+        "homeassistant==$HA_VERSION",
+        "--with",
+        "pytest-homeassistant-custom-component==$PLUGIN_VERSION",
+        "--with",
+        "PyYAML==6.0.3",
+    ]
+    for requirement in HA_COMPONENT_REQUIREMENTS:
+        required.extend(["--with", requirement])
+    required.extend(["pytest", "tests/", "-q"])
+    if shlex.split(command) != required:
+        failures.append("HA component requirements command")
     if ha.get("strategy") != {"fail-fast": False, "matrix": {"include": HA_MATRIX}}:
         failures.append("HA matrix")
     if ha.get("outputs") != {
