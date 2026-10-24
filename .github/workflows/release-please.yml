@@ -1,0 +1,23 @@
+name: Release proposal
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    # Release proposals and releases need write access after operator approval.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Require release authorization
+        env:
+          APPROVED: ${{ vars.ASSIST_LIVE_RELEASES_APPROVED }}
+        run: test "$APPROVED" = true
+      - uses: googleapis/release-please-action@c2a5a2bd6a758a0937f1ddb1e8950609867ed15c # v4.3.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

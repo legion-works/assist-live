@@ -6,5 +6,7 @@ from homeassistant import config_entries
 class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     VERSION = 1
 
-    async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
+    async def async_step_user(
+        self, user_input: dict[str, object] | None = None
+    ) -> config_entries.ConfigFlowResult:
         return self.async_abort(reason="bootstrap_only")

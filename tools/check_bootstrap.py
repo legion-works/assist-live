@@ -4,8 +4,9 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from .check_public_tree import scan_data
 else:
     from check_public_tree import scan_data
@@ -57,7 +58,7 @@ MANIFEST_FIELDS = {
 }
 
 
-def check_bootstrap(root):
+def check_bootstrap(root: str | Path) -> list[str]:
     root = Path(root)
     failures = []
     for name in REQUIRED_FILES:
@@ -136,7 +137,7 @@ def check_bootstrap(root):
     return failures
 
 
-def main():
+def main() -> int:
     failures = check_bootstrap(Path(__file__).resolve().parents[1])
     for failure in failures:
         print(f"FAIL {failure}")

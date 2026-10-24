@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "assist-live",
+      "extra-files": [
+        {"type": "json", "path": "custom_components/assist_live/manifest.json", "jsonpath": "$.version"}
+      ]
+    }
+  }
+}

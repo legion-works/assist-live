@@ -216,12 +216,12 @@ The checker always calls `gitleaks git` for `--history`, also when there are no 
 A missing tool or a nonzero scanner exit stops the gate.
 No commits gives an explicit `commits=0` result, not a claim that history contains examined commits.
 Shallow history stops the gate because it cannot prove a complete history check.
-The integration has no gitleaks configuration or exemptions.
+The integration extends the default Gitleaks rules and has no exemptions.
 
 ## Deferred checks
 
-The HA runtime harness, integrated type checks, and HACS validation are not part of bootstrap.
-CI must add these checks.
+CI includes the HA test harness, strict type checks, and mandatory HACS validation.
+Local HACS validation cannot run without GitHub credentials and a published repository.
 Stock hassfest validation below uses no project dependency changes.
 The bootstrap config flow aborts and makes no config entry.
 No runtime, hardware, cloud, release, or Marketplace acceptance result follows from these checks.
@@ -438,8 +438,8 @@ Date: 2026-10-24 (UTC).
 
 The review examined the `assist-live`, `assist-live-server`, and `assist-live-esphome` bootstrap repositories.
 It checked cross-repository contracts, convention drift, comment and prose hygiene, and privacy across Git history.
-Result: `REVISE` (2 Must, 7 Should across the three repositories).
-The verification record uses public project state and topic headings.
+Result: the verification records held process notes, and the server documents did not follow the shared conventions.
+This record uses public project state and topic headings.
 The checker maintenance rule names the metadata constraints.
 The repository's document set and runtime code did not change.
 
@@ -475,3 +475,221 @@ PASS public data matches=0
 
 The earlier `commits=0` results are the empty-history baseline at initialization.
 The current history check examines the bootstrap commit also.
+
+## CI and local checks
+
+Date: 2026-10-24 (UTC).
+The project is experimental and has no release.
+The single mandatory GitHub check is `ci-complete`.
+Repository administrators must select this check in branch protection after publication.
+Its dependencies are `lint`, `typecheck`, `unit`, `ha`, `hassfest`, `hacs`, and `secrets`.
+It runs with `if: always()` and rejects each result other than `success`.
+
+Each HA matrix member must supply a `success` output.
+A missing or skipped member gives a failure, regardless of the matrix `job` result.
+The GitHub runner ignores empty `job` outputs, so each member supplies only its own output.
+Source: `actions/runner`, `src/Runner.Worker/JobExtension.cs`, `job` output analysis.
+
+The HA matrix runs all of `tests/` on the two selected versions.
+The TTS lookup and voice-option contract files are not in the repository at this time.
+The same matrix will run them when the runtime implementation adds them.
+No result here proves that those contracts are satisfactory.
+
+The local `task check` runs the current HA member, Ruff, strict mypy, all tests, and the bootstrap and CI checkers.
+It also runs the public-tree checker with history.
+Set `PRIVATE_DENYLIST` to an external, nonempty private denylist before this command.
+Do not commit that file.
+Use `task ha-minimum` for the other HA member.
+
+Use `task hassfest` and `task hacs` for the official container checks.
+The HACS container uses `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
+Use `task secrets` for Gitleaks history and file checks.
+Use `actionlint` for workflow syntax checks.
+
+The local `task package-check` examines the manifest and HACS fields for this package shape.
+It also checks the package files and English config-flow strings.
+It is not remote Marketplace validation or HACS-default acceptance.
+Strict mypy checks `custom_components/assist_live` and `tools/` without import suppression.
+The development environment includes HA imports from the installed package.
+
+### HA test dependency sources
+
+PyPI release metadata gives these mappings:
+
+| Test package | HA requirement | Python requirement |
+| --- | --- | --- |
+| `pytest-homeassistant-custom-component==0.13.372` | `homeassistant==2026.10.1` | `>=3.14` |
+| `pytest-homeassistant-custom-component==0.13.374` | `homeassistant==2026.10.3` | `>=3.14` |
+
+Sources:
+
+- <https://pypi.org/pypi/pytest-homeassistant-custom-component/0.13.372/json>
+- <https://pypi.org/pypi/pytest-homeassistant-custom-component/0.13.374/json>
+
+HA itself specifies Python `>=3.14.2`.
+The Python floor and `.python-version` stay unchanged.
+The development group pins `ruff==0.17.2`, `mypy==2.4.0`, `PyYAML==6.0.3`, and `types-PyYAML==6.0.12.20260906`.
+Their PyPI `info.requires_python` values, in the same order, are `>=3.7`, `>=3.10`, `>=3.8`, and `>=3.10`.
+The Ruff target is `py314` with rules `E`, `F`, `W`, `I`, `B`, and `UP`.
+All rule sets stay active.
+
+### GitHub Actions sources and pins
+
+The GitHub REST tag data gave these commit IDs on 2026-10-24:
+
+| Action | Tag | Commit |
+| --- | --- | --- |
+| `actions/checkout` | `v4.2.2` | `11bd71901bbe5b1630ceea73d27597364c9af683` |
+| `astral-sh/setup-uv` | `v6.8.0` | `d0cc045d04ccac9d8b7881df0226f9e82c39688e` |
+| `hacs/action` | `22.5.0` | `d556e736723344f83838d08488c983a15381059a` |
+| `googleapis/release-please-action` | `v4.3.0` | `c2a5a2bd6a758a0937f1ddb1e8950609867ed15c` |
+
+For each row, the source command is `gh api repos/OWNER/REPOSITORY/git/ref/tags/TAG`.
+Each tag points directly to a commit, not an annotated tag.
+The GitHub Actions definitions at these commits supply the inputs used in the workflows.
+
+The only `home-assistant/actions` release tag, `1.0.0`, has no usable `hassfest/action.yml`.
+The workflow pins the official `master` commit `cd6f3635a740c84d8a14f6121a90068b8ece6bf6`.
+Sources: `gh api repos/home-assistant/actions/commits/master` and that commit's `hassfest/action.yml`.
+The comment states the source branch and date, not an invented version.
+
+This composite GitHub Actions step runs the moving image `ghcr.io/home-assistant/hassfest`.
+The HACS GitHub Actions step also runs a moving image, `ghcr.io/hacs/action:main`.
+The GitHub Actions SHAs do not pin these two image contents.
+Local validator image digests were:
+
+```text
+ghcr.io/home-assistant/hassfest@sha256:ac7d08c82d8b583ff7dc356faf993d08650cfc3015087cace566d65827a04c85
+ghcr.io/hacs/action@sha256:187499a09c5d41f9f0d42ff80d203ed87b974c028290140913b61e005fb0aab2
+```
+
+The Gitleaks image uses the pin `zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9`.
+Source: `docker pull zricethezav/gitleaks:v8.30.0` and `docker image inspect`.
+The Gitleaks configuration extends the default rules without path exemptions.
+`Renovate` groups GitHub Actions and Python updates and pins GitHub Actions and image digests.
+It runs each Monday before 06:00 UTC.
+Automerge is off.
+
+### Release authorization
+
+The two release workflows run only from `workflow_dispatch`.
+Their first step stops with a failure unless `vars.ASSIST_LIVE_RELEASES_APPROVED == 'true'`.
+`ASSIST_LIVE_RELEASES_APPROVED` is not set.
+The operator sets it only after publication approval and release authorization.
+Only the release-please `job` has write permissions, for release proposals and releases.
+Its manifest starts at `0.0.0`.
+
+The archive workflow checks an archive in runner temporary storage and uploads nothing.
+No push, release, or publication command ran during these checks.
+
+### CI test-first result
+
+Command from `$WORKSPACE/assist-live`:
+
+```sh
+uv run pytest tests/test_ci.py -q
+```
+
+Initial result before the CI checker was in the repository:
+
+```text
+E       ModuleNotFoundError: No module named 'tools.check_ci'
+1 failed in 0.01s
+```
+
+The project metadata stayed unchanged for this test.
+
+### Official validators
+
+Commands from `$WORKSPACE/assist-live`:
+
+```sh
+docker run --rm -v "$PWD":/github/workspace ghcr.io/home-assistant/hassfest
+docker run --rm -e INPUT_CATEGORY=integration -e GITHUB_REPOSITORY=legion-works/assist-live -v "$PWD":/github/workspace ghcr.io/hacs/action:main
+```
+
+Hassfest result:
+
+```text
+Integrations: 1
+Invalid integrations: 0
+```
+
+No manifest change was necessary. The empty `codeowners` list was satisfactory.
+The local HACS command stopped before validation:
+
+```text
+::ERROR:: No GitHub token found, use env GITHUB_TOKEN to set this.
+```
+
+HACS validation did not run locally: a token and a published repository are necessary.
+CI runs it after publication, without exemptions or a skip condition.
+This record makes no HACS acceptance claim.
+
+### Local CI results
+
+Date: 2026-10-24 (UTC).
+Commands from `$WORKSPACE/assist-live`, with `PRIVATE_DENYLIST` set:
+
+```sh
+uv run pytest tests/test_ci.py -q && task check && task package-check && gitleaks dir . --redact --exit-code 1
+actionlint
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.1 --with pytest-homeassistant-custom-component==0.13.372 --with PyYAML==6.0.3 pytest tests/ -q
+```
+
+Result lines:
+
+```text
+14 passed in 0.33s
+22 files already formatted
+All checks passed!
+Success: no issues found in 6 source files
+78 passed in 2.43s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=2
+PASS public data matches=0
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+INF no leaks found
+PASS actionlint
+78 passed in 2.47s
+```
+
+`actionlint` gave no diagnostics.
+The last test result is the HA `2026.10.1` environment.
+The locked development environment uses HA `2026.10.3` and test package `0.13.374`.
+All 64 earlier tests stay unchanged and are part of each complete run.
+The HA plugin test makes sure that pytest loads the HA test harness.
+
+Static analysis reports no errors or warnings after selection of `.venv` in the Pyright configuration.
+No import suppression is necessary.
+
+Tests parse the workflow and make temporary copies with two changes:
+
+- Remove `if: always()` from `ci-complete`.
+- Remove `ha` from its `needs` list.
+
+The CI checker rejects each copy with exit code `1`.
+More tests reject a weakened `ci-complete` command and a missing matrix member.
+The `ci-complete` simulation gave:
+
+```text
+no-always exit=1 FAIL CI completion condition
+missing-needs exit=1 FAIL CI completion dependencies
+HA minimum=success: PASS
+HA minimum=skipped: FAIL
+HA minimum=failure: FAIL
+HA minimum=cancelled: FAIL
+unit=success: PASS
+unit=skipped: FAIL
+unit=failure: FAIL
+unit=cancelled: FAIL
+PASS completion mutations and result simulation
+```
+
+The public-tree check reports 0 private-data findings in files and history.
+A different literal search reports 0 denylist findings and 0 RFC 1918 addresses.
+It reports one deliberate public URL test vector with the user-path substring.
+The context-aware public-tree check accepts this vector.
+The ASD-STE100 checker reports 0 findings for this file and the pull request template.

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "docker:pinDigests"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Etc/UTC",
+  "automerge": false,
+  "packageRules": [
+    {"matchManagers": ["github-actions"], "groupName": "GitHub actions", "pinDigests": true},
+    {"matchManagers": ["pep621"], "groupName": "Python development dependencies"},
+    {"matchDatasources": ["docker"], "groupName": "CI images", "pinDigests": true}
+  ]
+}

@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from collections import Counter
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from pathlib import Path
 
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\w)(?!\.\d)")
@@ -51,7 +52,7 @@ AUDIO_SUFFIXES = {
 }
 
 
-def git(root, *args):
+def git(root: str | Path, *args: str) -> bytes:
     result = subprocess.run(
         ["git", "--no-replace-objects", "-C", str(root), *args],
         capture_output=True,
@@ -60,7 +61,9 @@ def git(root, *args):
     return result.stdout
 
 
-def require_own_toplevel(path, *, toplevel=None):
+def require_own_toplevel(
+    path: str | Path, *, toplevel: str | Path | None = None
+) -> Path:
     """Raise ValueError if path is not an isolated Git root."""
     root = Path(path).resolve()
     try:
@@ -80,11 +83,12 @@ def require_own_toplevel(path, *, toplevel=None):
     return root
 
 
-def scan_text(text, denylist):
-    findings = Counter()
+def scan_text(text: str, denylist: Iterable[str]) -> Counter[str]:
+    findings: Counter[str] = Counter()
     folded = text.casefold()
     findings["denylist"] = sum(folded.count(term) for term in denylist)
     findings["private_path"] = len(PRIVATE_PATH.findall(text))
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address
     for token in IPV4.findall(text):
         try:
             address = ipaddress.IPv4Address(token)
@@ -100,7 +104,9 @@ def scan_text(text, denylist):
     return +findings
 
 
-def scan_data(data, denylist, licensed_audio, name):
+def scan_data(
+    data: bytes, denylist: Iterable[str], licensed_audio: Collection[str], name: str
+) -> Counter[str]:
     findings = scan_text(data.decode("utf-8", errors="replace"), denylist)
     audio = (
         Path(name).suffix.lower() in AUDIO_SUFFIXES
@@ -128,7 +134,7 @@ def scan_data(data, denylist, licensed_audio, name):
     return +findings
 
 
-def read_list(path, *, hashes=False):
+def read_list(path: str | Path, *, hashes: bool = False) -> set[str]:
     entries = {
         line.strip().casefold()
         for line in Path(path).read_text(encoding="utf-8").splitlines()
@@ -142,7 +148,7 @@ def read_list(path, *, hashes=False):
     return entries
 
 
-def worktree_files(root):
+def worktree_files(root: Path) -> Iterator[tuple[str, bytes, bytes | None]]:
     names = set(git(root, "ls-files", "-co", "--exclude-standard", "-z").split(b"\0"))
     for name in sorted(names - {b""}):
         path = root / os.fsdecode(name)
@@ -158,8 +164,13 @@ def worktree_files(root):
         # Deleted tracked files remain in reachable history, not in the worktree.
 
 
-def public_findings(root, denylist, licensed_audio, commits):
-    findings = []
+def public_findings(
+    root: Path,
+    denylist: Collection[str],
+    licensed_audio: Collection[str],
+    commits: Iterable[str],
+) -> list[tuple[str, str, Counter[str]]]:
+    findings: list[tuple[str, str, Counter[str]]] = []
     for identifier, name, data in worktree_files(root):
         counts = scan_data(name, denylist, set(), "")
         counts.update(
@@ -202,7 +213,7 @@ def public_findings(root, denylist, licensed_audio, commits):
     return findings
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--root", type=Path, required=True)
@@ -260,7 +271,7 @@ def main(argv=None):
         print("FAIL public data input_or_scan_error=1")
         return 1
     if findings:
-        total = Counter()
+        total: Counter[str] = Counter()
         for kind, identifier, counts in findings:
             total.update(counts)
             detail = " ".join(f"{key}={value}" for key, value in sorted(counts.items()))

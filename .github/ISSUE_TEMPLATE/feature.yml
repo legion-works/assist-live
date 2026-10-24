@@ -1,0 +1,13 @@
+name: Feature request
+description: Give a necessary change.
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach household recordings, personal data, or secrets.
+  - type: textarea
+    id: need
+    attributes:
+      label: Problem and proposed result
+      description: Give the problem and the result that is necessary.
+    validations:
+      required: true

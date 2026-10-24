@@ -1,0 +1,101 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv sync --locked
+      - run: uv run --locked ruff format --check . && uv run --locked ruff check .
+      - run: uv run --locked python tools/check_bootstrap.py && uv run --locked python tools/check_ci.py && uv run --locked python tools/check_packaging.py
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv sync --locked
+      - run: uv run --locked mypy
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv sync --locked
+      - run: uv run --locked pytest tests/ -q
+  ha:
+    name: HA ${{ matrix.ha }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ha: '2026.10.1'
+            plugin: '0.13.372'
+            member: minimum
+          - ha: '2026.10.3'
+            plugin: '0.13.374'
+            member: current
+    outputs:
+      minimum: ${{ steps.result.outputs.minimum }}
+      current: ${{ steps.result.outputs.current }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Test all contracts on the exact HA version
+        env:
+          HA_VERSION: ${{ matrix.ha }}
+          PLUGIN_VERSION: ${{ matrix.plugin }}
+        run: >-
+          uv run --no-project --python 3.14.2
+          --with "homeassistant==$HA_VERSION"
+          --with "pytest-homeassistant-custom-component==$PLUGIN_VERSION"
+          --with PyYAML==6.0.3 pytest tests/ -q
+      - id: result
+        env:
+          MEMBER: ${{ matrix.member }}
+        run: echo "$MEMBER=success" >> "$GITHUB_OUTPUT"
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master @ 2026-10-24 (no usable release tag)
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The action SHA does not pin its moving ghcr.io/hacs/action:main image.
+      - uses: hacs/action@d556e736723344f83838d08488c983a15381059a # 22.5.0
+        with:
+          category: integration
+          comment: 'false'
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Scan history and files
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 git . --redact --exit-code 1
+          docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 dir . --redact --exit-code 1
+  ci-complete:
+    needs: [lint, typecheck, unit, ha, hassfest, hacs, secrets]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: uv run --locked python tools/check_ci.py --results "$NEEDS_JSON"

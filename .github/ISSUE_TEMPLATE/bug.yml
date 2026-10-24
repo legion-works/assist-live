@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a defect in this experimental integration.
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach household recordings, personal data, or secrets. The project has no release.
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Give the HA version and integration commit.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps and result
+      description: Give the steps, the expected result, and the actual result. Remove private data from logs.
+    validations:
+      required: true

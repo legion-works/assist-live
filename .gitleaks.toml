@@ -1,0 +1,4 @@
+title = "assist-live secret checks"
+
+[extend]
+useDefault = true
