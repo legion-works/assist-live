@@ -20,8 +20,8 @@ uvx ruff format --check .
 uvx ruff check .
 ```
 
-HA runtime tests, type checks, hassfest, and HACS validation belong to the next tooling task.
-This bootstrap gives no results for those checks.
+CI must add HA runtime tests, integrated type checks, hassfest, and HACS validation.
+See `docs/verification.md` for the current standalone check results.
 
 Before publication, use an operator-supplied denylist external to Git:
 

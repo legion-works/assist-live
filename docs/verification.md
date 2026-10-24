@@ -1,6 +1,6 @@
 # Verification record
 
-## Environment source
+## Package metadata
 
 Date: 2026-10-24 (UTC).
 The source is [PyPI metadata for HA 2026.10.3](https://pypi.org/pypi/homeassistant/2026.10.3/json), field `info.requires_python`.
@@ -12,7 +12,7 @@ The [HACS manifest documentation](https://www.hacs.xyz/docs/publish/start/#hacsj
 It does not list `render_readme`, so this bootstrap does not include that key.
 The package is not in the repository root, so it does not set `content_in_root`.
 
-## Test-first package boundary
+## Package boundary tests
 
 Date: 2026-10-24 (UTC).
 The standalone command ran before the project had metadata:
@@ -44,9 +44,9 @@ test "$(git rev-parse --show-toplevel)" = "$(pwd -P)" && printf 'PASS own Git ro
 ```
 
 Result: `PASS own Git root`.
-The repository has 0 commits and no remote. No publication occurred.
+At initialization, the repository had 0 commits and no remote. No publication occurred.
 
-## Mandatory checks
+## Bootstrap validation
 
 Date: 2026-10-24 (UTC).
 The mandatory bootstrap command ran from `$WORKSPACE/assist-live`:
@@ -100,7 +100,7 @@ The command for each file was:
 python3 "$STE_CHECK" "$FILE"
 ```
 
-Here, `STE_CHECK` is the external `write-plain/scripts/ste_check.py` checker.
+Here, `STE_CHECK` is the external ASD-STE100 checker.
 
 The public-tree gate ran with the operator's external denylist:
 
@@ -137,10 +137,10 @@ FAIL public data objects=1 matches=1
 PASS mutation removal exit=0
 ```
 
-## Diagnostic environment limit
+## Static analysis baseline
 
 Date: 2026-10-24 (UTC).
-`aft_inspect` examined this repository with its `scope` set to the repository root.
+A static analysis snapshot examines the repository root.
 Its snapshot was `FRESH`, with authoritative diagnostics for 6 of 6 Python files.
 Its first full report had 4 errors and 0 warnings:
 
@@ -152,7 +152,7 @@ config_flow.py:7: No parameter named "domain" [Pyright]
 ```
 
 The project environment intentionally contains pytest only, not HA.
-The task owner deferred these environment diagnostics to B04, which adds HA type tooling.
+CI must add the HA type environment before these diagnostics can give a clean result.
 This is `not a passing type check`.
 
 After the stock HA correction below, the last snapshot has 3 errors and 0 warnings:
@@ -166,7 +166,7 @@ config_flow.py:6: No parameter named "domain" [Pyright]
 ## Stock HA import and type checks
 
 Date: 2026-10-24 (UTC).
-The task owner approved temporary HA and mypy environments with no project dependency change.
+Temporary HA and mypy environments check the package without project dependency changes.
 The import command was:
 
 ```sh
@@ -198,7 +198,7 @@ import ok custom_components.assist_live.config_flow
 Success: no issues found in 2 source files
 ```
 
-The stock HA check does not replace B04's integrated type tooling and HA runtime tests.
+The stock HA check does not replace integrated type tooling and HA runtime tests.
 
 ## Public-tree checker contract
 
@@ -218,18 +218,19 @@ No commits gives an explicit `commits=0` result, not a claim that history contai
 Shallow history stops the gate because it cannot prove a complete history check.
 The integration has no gitleaks configuration or exemptions.
 
-## Checks not part of bootstrap
+## Deferred checks
 
-The HA runtime harness, integrated type checks, and HACS validation belong to subsequent work.
-The repair round below adds a stock hassfest check without project dependency changes.
+The HA runtime harness, integrated type checks, and HACS validation are not part of bootstrap.
+CI must add these checks.
+Stock hassfest validation below uses no project dependency changes.
 The bootstrap config flow aborts and makes no config entry.
 No runtime, hardware, cloud, release, or Marketplace acceptance result follows from these checks.
 
-## `Fix round 1`
+## Metadata and privacy validation
 
 Date: 2026-10-24 (UTC).
-The review found errors in manifest order, config steps, IPv4 punctuation, private paths, and nested-repository detection.
-The repairs keep the package experimental and keep its setup-abort behavior.
+Validation examines manifest order, config steps, IPv4 punctuation, private paths, and nested-repository detection.
+The package is experimental and aborts setup.
 
 The manifest uses `domain`, `name`, then alphabetical keys.
 The English strings contain a `user` step with a title and description that state the bootstrap limit.
@@ -296,11 +297,11 @@ PASS public data matches=0
 All checks passed!
 ```
 
-### Stock hassfest
+### Hassfest validation
 
 The validator source came from the `home-assistant/core` tag `2026.10.3` archive.
 `HASSFEST_ROOT` below is the temporary directory with that tag's `script` package.
-The method uses the stock validator and stock HA in a temporary environment, as in the review.
+The method uses the stock validator and stock HA in a temporary environment.
 It does not skip plugins or change validator source.
 
 The first run stopped on an upstream import:
@@ -329,7 +330,7 @@ All 23 integration plugins ran. The empty `codeowners` list is correct for this 
 HACS validation is a different future check.
 No HA, validator, or mypy dependency went into `pyproject.toml` or `uv.lock`.
 
-### Other gates
+### Privacy and static analysis checks
 
 The different publishable-file check used literal denylist searches and a different address-check implementation.
 It gave:
@@ -340,25 +341,24 @@ files=28 denylist=0 private_path=0 rfc1918=0
 PASS independent publishable-file self-scan
 ```
 
-The scoped AFT snapshot is `FRESH`, with authoritative reports for 6 of 6 Python files.
+A static analysis snapshot is `FRESH`, with authoritative reports for 6 of 6 Python files.
 It has the same 3 HA-environment errors and 0 warnings recorded above.
-The task-owner-approved B04 deferral applies. This is `not a passing type check`.
-No Python signature changed in this repair round.
+The HA type environment is not part of bootstrap. This is `not a passing type check`.
 
-The standard STE checker ran on each of the 12 public Markdown files and the implementation report.
+The ASD-STE100 checker ran on each of the 12 public Markdown files.
 Each file has 0 findings and exit code 0.
 The command for each file was `python3 "$STE_CHECK" "$FILE"`, as specified above.
 
-## `Fix round 2`
+## HA minimum and portable package tests
 
 Date: 2026-10-24 (UTC).
-The Unix-path expression rejects local user paths but accepts the two public URL test inputs from the review.
+The Unix-path expression rejects local user paths but accepts the two public URL test inputs.
 The four no-trailing-separator tests continue to reject private paths.
 
-The project selects HA `2026.10.1` as the HACS minimum, in agreement with the planned B04 matrix.
+The project selects HA `2026.10.1` as the HACS minimum for the planned version matrix.
 The bootstrap checker rejects the former `2026.10.0` minimum.
 The design marks the HA minimum, `integration_type`, and `iot_class` as project decisions, not frozen-spec requirements.
-The package test resolves its root from `Path(__file__).resolve().parents[1]` and keeps all plan assertions.
+The package test resolves its root from `Path(__file__).resolve().parents[1]` and checks the package boundary.
 
 ### Test-first results
 
@@ -388,7 +388,7 @@ E   FileNotFoundError: [Errno 2] No such file or directory: 'custom_components/a
 1 failed in 0.02s
 ```
 
-### Requested gates
+### Package validation
 
 From `$WORKSPACE/assist-live`:
 
@@ -424,5 +424,54 @@ uv run pytest test_package.py -q
 1 passed in 0.00s
 ```
 
-The scoped AFT result is `FRESH` and has the same 3 HA-environment errors and 0 warnings recorded above.
-The prior B04 deferral applies. This is `not a passing type check`.
+A static analysis result is `FRESH` and has the same 3 HA-environment errors and 0 warnings recorded above.
+The HA type environment is not part of bootstrap. This is `not a passing type check`.
+
+## Checker maintenance
+
+The bootstrap checker uses constant HACS metadata, manifest fields, and Python minimum values.
+CI must update the checker and its tests in the same change when it changes those values.
+
+## Review of all three repositories
+
+Date: 2026-10-24 (UTC).
+
+The review examined the `assist-live`, `assist-live-server`, and `assist-live-esphome` bootstrap repositories.
+It checked cross-repository contracts, convention drift, comment and prose hygiene, and privacy across Git history.
+Result: `REVISE` (2 Must, 7 Should across the three repositories).
+The verification record uses public project state and topic headings.
+The checker maintenance rule names the metadata constraints.
+The repository's document set and runtime code did not change.
+
+## Current bootstrap checks
+
+Date: 2026-10-24 (UTC).
+Commands from `$WORKSPACE/assist-live`:
+
+```sh
+uv sync --locked && uv run pytest tests/test_package.py -q && uv run python tools/check_bootstrap.py
+uv run pytest tests/test_public_tree.py -q
+uv run pytest tests/test_package.py tests/test_public_tree.py -q
+uvx ruff format --check .
+uvx ruff check .
+uv run --project "$WORKSPACE/assist-live" python "$WORKSPACE/assist-live/tools/check_public_tree.py" --history --root . --private-denylist "$PRIVATE_DENYLIST"
+```
+
+Result lines:
+
+```text
+Resolved 7 packages in 1ms
+Checked 5 packages in 0.06ms
+1 passed in 0.00s
+PASS integration bootstrap
+63 passed in 1.42s
+64 passed in 1.43s
+18 files already formatted
+All checks passed!
+PASS own Git root
+PASS history secrets commits=1
+PASS public data matches=0
+```
+
+The earlier `commits=0` results are the empty-history baseline at initialization.
+The current history check examines the bootstrap commit also.
