@@ -1,0 +1,15 @@
+[project]
+name = "assist-live"
+version = "0.0.0"
+description = "Experimental Home Assistant Assist integration"
+readme = "README.md"
+requires-python = ">=3.14.2"
+license = "Apache-2.0"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

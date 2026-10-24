@@ -1,0 +1,19 @@
+# Repository structure
+
+| Path | Purpose |
+|---|---|
+| `custom_components/assist_live/` | HA package, config flow, manifest, and English strings |
+| `hacs.json` | HACS package metadata |
+| `docs/design.md` | Public design and phase gates |
+| `docs/research/contracts.md` | Upstream contracts and prototype limits |
+| `docs/verification.md` | Commands and gate results |
+| `tests/test_package.py` | Package boundary test |
+| `tests/test_public_tree.py` | Bootstrap and privacy checker tests |
+| `tools/check_bootstrap.py` | Package and document checks |
+| `tools/check_public_tree.py` | Worktree and reachable-history checks |
+| `pyproject.toml`, `uv.lock`, `.python-version` | Python metadata and test dependencies |
+| Root Markdown files | Project status, architecture, contribution rules, and vulnerability reports |
+| `LICENSE` | Full Apache-2.0 license |
+
+The HA app and server are not in this repository.
+The ESPHome component is in a different GPL-3.0 repository.
