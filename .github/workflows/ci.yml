@@ -79,6 +79,9 @@ jobs:
         with:
           category: integration
           comment: 'false'
+          # The project has no brand image at this time. Remove this entry when
+          # custom_components/assist_live/brand/icon.png exists.
+          ignore: brands
   secrets:
     runs-on: ubuntu-latest
     steps:

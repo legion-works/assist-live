@@ -556,6 +556,17 @@ The comment states the source branch and date, not an invented version.
 This composite GitHub Actions step runs the moving image `ghcr.io/home-assistant/hassfest`.
 The HACS GitHub Actions step also runs a moving image, `ghcr.io/hacs/action:main`.
 The GitHub Actions SHAs do not pin these two image contents.
+
+The HACS step ignores the `brands` check.
+That check gives a failure if `custom_components/assist_live/brand/icon.png` and an entry in the Home Assistant brands repository are not available.
+The project has no brand image at this time.
+Source: `custom_components/hacs/validate/brands.py` in `hacs/integration`.
+
+When the project adds a brand image that it owns, remove the ignore entry.
+All other HACS checks stay mandatory.
+If the repository has no description, the `description` check gives a failure.
+If the repository has no topic, the `topics` check gives a failure.
+
 Local validator image digests were:
 
 ```text

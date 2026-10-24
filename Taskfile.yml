@@ -32,7 +32,7 @@ tasks:
       - docker run --rm -v "$PWD":/github/workspace ghcr.io/home-assistant/hassfest
   hacs:
     cmds:
-      - docker run --rm -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e INPUT_CATEGORY=integration -v "$PWD":/github/workspace ghcr.io/hacs/action:main
+      - docker run --rm -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e INPUT_CATEGORY=integration -e INPUT_IGNORE=brands -v "$PWD":/github/workspace ghcr.io/hacs/action:main
   secrets:
     cmds:
       - gitleaks git . --redact --exit-code 1
