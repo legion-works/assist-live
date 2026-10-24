@@ -704,3 +704,82 @@ A different literal search reports 0 denylist findings and 0 RFC 1918 addresses.
 It reports one deliberate public URL test vector with the user-path substring.
 The context-aware public-tree check accepts this vector.
 The ASD-STE100 checker reports 0 findings for this file and the pull request template.
+
+## Publication
+
+Date: 2026-10-24 (UTC).
+
+The project published three public repositories in the `legion-works` organization:
+
+| Repository | First published revision | Visibility |
+|---|---|---|
+| `legion-works/assist-live` | `6422737` | `PUBLIC` |
+| `legion-works/assist-live-server` | `df74b48` | `PUBLIC` |
+| `legion-works/assist-live-esphome` | `4007354` | `PUBLIC` |
+
+Checks on each repository before publication:
+
+```sh
+test "$(git rev-parse --show-toplevel)" = "$(pwd -P)"
+task check
+gitleaks dir . --redact --exit-code 1
+gitleaks git . --redact --exit-code 1
+uv run --project "$WORKSPACE/assist-live" python "$WORKSPACE/assist-live/tools/check_public_tree.py" --history --root . --private-denylist "$PRIVATE_DENYLIST"
+git diff --check
+git diff --cached --check
+```
+
+```text
+PASS own Git root
+no leaks found
+PASS history secrets
+PASS public data matches=0
+```
+
+Each repository has a description and topics, because the HACS `description` and `topics` checks use them.
+The project publishes only `main`.
+
+### First hosted CI runs
+
+```sh
+gh run view RUN_ID --repo legion-works/REPOSITORY --json conclusion,headSha,jobs
+```
+
+| Repository | Run | Revision | Result |
+|---|---|---|---|
+| `assist-live-server` | `40121627999` | `df74b48` | `success` |
+| `assist-live` | `40121617665` | `6422737` | `failure` |
+| `assist-live-esphome` | `40121638839` | `4007354` | `failure` |
+
+In `assist-live`, the `unit` CI task and the two HA CI tasks each gave `16 failed, 62 passed`.
+Each failure printed `FAIL history secrets missing_tool=1`.
+The public-tree checker tests run Gitleaks, and hosted runners do not include it.
+A local run without Gitleaks on the `PATH` gave the same `16 failed, 62 passed`.
+These CI tasks install the pinned Gitleaks release at this time and check its SHA-256.
+
+In `assist-live-esphome`, a Python 3.12 archive probe identified a source file as an archive.
+The `assist-live-esphome` verification record gives the cause and the repair.
+
+### CI runs after the repairs
+
+| Repository | Run | Revision | Result |
+|---|---|---|---|
+| `assist-live` | `40124434376` | `135e98d` | `success` |
+| `assist-live-esphome` | `40124438901` | `e4ef10f` | `success` |
+
+In `assist-live`, these CI tasks gave `success`: `lint`, `typecheck`, `unit`, `HA 2026.10.1`, `HA 2026.10.3`, `hassfest`, `hacs`, `secrets`, and `ci-complete`.
+The `hacs` CI task ran the hosted HACS validation with the `brands` check ignored.
+In `assist-live-esphome`, `checks`, `compile (2026.10.0)`, and `ci-complete` gave `success`.
+
+```sh
+gh repo view legion-works/REPOSITORY --json nameWithOwner,visibility
+```
+
+```text
+legion-works/assist-live PUBLIC
+legion-works/assist-live-server PUBLIC
+legion-works/assist-live-esphome PUBLIC
+```
+
+The release workflows stop unless the `ASSIST_LIVE_RELEASES_APPROVED` repository setting is `true`.
+That setting is not set at this time.
