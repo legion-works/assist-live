@@ -783,3 +783,117 @@ legion-works/assist-live-esphome PUBLIC
 
 The release workflows stop unless the `ASSIST_LIVE_RELEASES_APPROVED` repository setting is `true`.
 That setting is not set at this time.
+
+## Corpus contract
+
+Date: 2026-10-24.
+
+The corpus tooling uses only the Python standard library.
+No new package or external executable is necessary.
+Tests make temporary WAV files with no voice.
+They test a complete 650-record fixture, license and consent checks, partitions, sample limits, hashes, path safety, and freeze changes.
+The temporary files do not supply human voice results.
+
+The test-first command was:
+
+```sh
+uv run pytest tests/test_corpus.py -q
+```
+
+The initial result was:
+
+```text
+E       ModuleNotFoundError: No module named 'tools.corpus'
+1 failed in 0.25s
+```
+
+After implementation, the same command gave:
+
+```text
+93 passed in 4.32s
+```
+
+The pause-interval test calculates two-sided Clopper-Pearson 95% limits with the standard library.
+The maximum limit is 8.5176053% for 3 cuts in 100 samples and 5.6183548% for 9 cuts in 300 samples.
+Only 0 or 1 cut satisfies the two limits at 100 samples.
+The held-out pause experiment uses 300 samples selected before the experiment.
+See [Corpus contract](testing/corpus.md) for the schema, commands, and arithmetic.
+
+## Corpus supply
+
+Date: 2026-10-24.
+
+```text
+BLOCKED corpus supply: no human recordings at this time
+```
+
+The P0 baseline and P1 acceptance stay blocked until an approved human corpus is available.
+The committed human and synthetic input files each contain 0 rows.
+The digest file records the empty metadata state, not corpus acceptance.
+No dataset import, synthetic voice generation, or human recording occurred.
+The operator must select and give approval for the corpus source.
+Signed consent records and audio must stay external to Git.
+
+With `CORPUS_AUDIO` set to an empty external directory, this command gives exit status 1:
+
+```sh
+uv run python tools/corpus.py check --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --synthetic tests/data/synthetic.jsonl --licenses tests/data/LICENSES.json --consent tests/data/consent-index.json --freeze tests/data/corpus.sha256
+```
+
+```text
+FAIL held_out replay count 0 < 200
+FAIL held_out replay speakers 0 < 10
+FAIL held_out pause count 0 < 300
+FAIL held_out pause speakers 0 < 10
+FAIL held_out prefix count 0 < 30
+FAIL tuning replay count 0 < 50
+FAIL tuning pause count 0 < 100
+FAIL tuning prefix count 0 < 30
+```
+
+The command does not change the digest file on failure.
+The temporary complete-corpus test checks the three success lines and checks that `--verify-freeze` does not change the digest file.
+
+## Corpus tooling checks
+
+Date: 2026-10-24.
+
+From `$WORKSPACE/assist-live`, the local gate was:
+
+```sh
+PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+```
+
+```text
+26 files already formatted
+All checks passed!
+Success: no issues found in 7 source files
+171 passed in 11.80s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=6
+PASS public data matches=0
+```
+
+The CI-version test commands were:
+
+```sh
+uv run --no-project --python 3.14.2 --with "homeassistant==2026.10.1" --with "pytest-homeassistant-custom-component==0.13.372" --with PyYAML==6.0.3 pytest tests/ -q
+uv run --no-project --python 3.14.2 --with "homeassistant==2026.10.3" --with "pytest-homeassistant-custom-component==0.13.374" --with PyYAML==6.0.3 pytest tests/ -q
+```
+
+```text
+171 passed in 11.49s
+171 passed in 11.64s
+```
+
+The publication-file self-scan gave these counts:
+
+```text
+self-scan denylist=0 host_paths=1 rfc1918=0
+```
+
+The one host-path literal is a pre-existing public-URL test vector in the privacy checker tests.
+The public-tree checker gave `PASS public data matches=0`.
+No new external executable is necessary for the corpus tests or tool.
