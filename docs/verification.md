@@ -1945,7 +1945,11 @@ A generic log line and an HA repair report invalid stored entries without their 
 The private-denylist tests check unset, correct, missing-file, and denied inputs through the Taskfile command.
 An unset `PRIVATE_DENYLIST` prints `NOT CHECKED private denylist` and keeps all other checks.
 A set `PRIVATE_DENYLIST` keeps failure behavior for unavailable input and denied content.
-Fifteen mutation tests found weakened record, response-group, stream, stored-state, fixture-source, and private-denylist guards.
+This repository command checks the record, response-group, stream, stored-state, fixture-source, and private-denylist guards:
+
+```sh
+uv run --locked pytest tests/test_test_environment.py tests/test_config_flow.py tests/test_ci.py -q
+```
 
 ## Client source and HA checks
 
@@ -1981,3 +1985,68 @@ PASS packaging (local check, not Marketplace or HACS-default acceptance)
 
 The check without the private denylist also printed `NOT CHECKED private denylist`.
 Hassfest gave `Integrations: 1` and `Invalid integrations: 0`.
+
+## Package files and virtual record boundaries
+
+Date: 2026-10-25.
+
+The package checker has an explicit source-file set.
+In a Git worktree, it checks files in the Git index and untracked files that Git does not ignore.
+Without Git metadata, it checks all files in the package folder.
+No Python bytecode file is in the permitted set.
+Tests check nested agent copies, unexpected files, ignored bytecode, bytecode in the Git index, and archive contents.
+
+The stored-state tests also check a correct satellite name that is not in the config entry.
+The fixture-source tests remove each necessary agent file independently.
+Each missing file gives one named failure.
+
+The replayed corpus text is not an STT result.
+The intent and operation check does not compare the input transcript with itself.
+The public inventory check uses entity states and identifiers on the selected timer device.
+
+```sh
+uv run --locked pytest tests/test_test_environment.py tests/test_config_flow.py tests/test_ci.py -q
+uv run --locked pytest tests/test_test_environment.py -q
+```
+
+```text
+95 passed in 5.80s
+22 passed in 0.59s
+```
+
+The isolated-container command in [Virtual intent tests](testing/virtual-intents.md) gave the unchanged result lines:
+
+```text
+PASS virtual intent coverage
+PASS short and long groups
+PASS transcript intent action evidence
+```
+
+The full gates used these commands:
+
+```sh
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+env -u PRIVATE_DENYLIST task check
+task ha-minimum
+task package-check
+task hassfest
+```
+
+The private-denylist run gave `496 passed in 24.03s`.
+The run without that input gave `496 passed in 20.44s` and `NOT CHECKED private denylist`.
+The minimum HA run gave `496 passed in 21.65s`.
+The other result lines were:
+
+```text
+54 files already formatted
+All checks passed!
+Success: no issues found in 16 source files
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=22
+PASS public data matches=0
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+Integrations: 1
+Invalid integrations: 0
+```

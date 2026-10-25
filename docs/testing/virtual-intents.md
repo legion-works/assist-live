@@ -37,6 +37,9 @@ Commands with a time interval use native HA timers and the same virtual light ta
 `intents.json` maps each corpus intent to its necessary virtual targets.
 An unknown corpus intent stops the run.
 
+Before replay, the tool checks each inventory entity against public HA state.
+It also checks the timer target against identifiers on the selected device.
+
 The tool hides all entities from Assist, then shows only the virtual light and fan.
 Do not use this configuration on a different HA instance.
 
@@ -68,6 +71,11 @@ They are not audio replays or P0/P1 acceptance measurements.
 The agent sends `assist_live_test_record` public events.
 The tool subscribes to these events through the public WebSocket API.
 It does not read administrator pipeline-debug APIs.
+
+The record's `recognized_transcript` is the replayed corpus `transcript`, not an STT result.
+The `PASS transcript intent action evidence` line checks the intent and operation records for that text.
+Different tests measure the STT path.
+
 The agent records:
 
 - The input transcript, selected HA intent, and slots.

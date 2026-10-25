@@ -89,6 +89,36 @@ def test_timer_operation_agrees_with_selected_slots(evidence):
     assert validate_run_evidence(evidence)
 
 
+def test_label_evidence_does_not_claim_transcript_recognition(evidence):
+    from tools.test_environment import validate_intent_action_evidence
+
+    label = {
+        "transcript": "a different label text",
+        "intent": {"name": "HassStartTimer", "slots": {"minutes": 5}},
+    }
+    assert validate_intent_action_evidence(evidence, label) == []
+    evidence["selected_intent"]["name"] = "HassTurnOff"
+    assert validate_intent_action_evidence(evidence, label) == ["intent differs"]
+    evidence["selected_intent"]["name"] = "HassStartTimer"
+    evidence["actions"][0]["seconds"] = 301
+    assert validate_intent_action_evidence(evidence, label) == [
+        "timer duration differs"
+    ]
+
+
+def test_transcript_record_documentation_states_the_text_path_limit():
+    text = (ROOT / "docs/testing/virtual-intents.md").read_text()
+    assert (
+        "The record's `recognized_transcript` is the replayed corpus `transcript`, "
+        "not an STT result." in text
+    )
+    assert (
+        "The `PASS transcript intent action evidence` line checks "
+        "the intent and operation records for that text." in text
+    )
+    assert "Different tests measure the STT path." in text
+
+
 def test_groups_are_constant_and_each_has_fifty_held_out_replays():
     from tools.corpus import load_corpus
     from tools.test_environment import reply_groups
@@ -122,6 +152,23 @@ def test_fixture_has_no_debug_api_reads(tmp_path):
     assert validate_agent_source(tmp_path) == ["agent reads a debug API"]
 
 
+@pytest.mark.parametrize(
+    "missing", ["__init__.py", "conversation.py", "config_flow.py"]
+)
+def test_each_required_agent_file_has_its_own_failure(tmp_path, missing):
+    import shutil
+
+    from tools.test_environment import validate_agent_source
+
+    fixture = ROOT / "tests/fixtures/custom_components/assist_live_test_agent"
+    shutil.copytree(fixture, tmp_path, dirs_exist_ok=True)
+    assert validate_agent_source(tmp_path) == []
+    (tmp_path / missing).unlink()
+    assert validate_agent_source(tmp_path) == [
+        f"missing agent fixture source {missing}"
+    ]
+
+
 def test_install_refuses_another_container_volume(monkeypatch):
     from tools.test_environment import install_virtual
 
@@ -140,6 +187,40 @@ def test_inventory_covers_the_frozen_corpus():
     inventory = json.loads((ROOT / "tests/fixtures/intents.json").read_text())
     assert not validate_inventory(rows, inventory)
     assert validate_inventory(rows, {})
+
+
+@pytest.mark.parametrize("missing", ["light.virtual_light", "assist_live_virtual"])
+def test_live_inventory_resolves_entities_and_its_timer_device(missing):
+    from tools.test_environment import validate_live_inventory
+
+    inventory = {
+        "HassStartTimer": {"entities": ["assist_live_virtual"]},
+        "HassTurnOn": {"entities": ["light.virtual_light"]},
+    }
+    states = [{"entity_id": "light.virtual_light"}]
+    devices = [
+        {
+            "id": "virtual-device",
+            "identifiers": [["assist_live_test_agent", "assist_live_virtual"]],
+        }
+    ]
+    assert validate_live_inventory(inventory, states, devices, "virtual-device") == []
+    if missing == "light.virtual_light":
+        states = []
+    else:
+        devices[0]["id"] = "a-different-device"
+    assert validate_live_inventory(inventory, states, devices, "virtual-device") == [
+        f"virtual inventory target missing: {missing}"
+    ]
+
+
+def test_mutation_record_uses_a_reproducible_repository_command():
+    text = (ROOT / "docs/verification.md").read_text()
+    assert "Fifteen mutation tests found" not in text
+    assert (
+        "uv run --locked pytest tests/test_test_environment.py "
+        "tests/test_config_flow.py tests/test_ci.py -q"
+    ) in text
 
 
 async def test_real_ha_agent_records_timer_and_streams(configured_hass, monkeypatch):  # noqa: F811

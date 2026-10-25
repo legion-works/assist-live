@@ -126,6 +126,24 @@ def validate_run_evidence(record: dict[str, Any]) -> list[str]:
     return failures
 
 
+def validate_intent_action_evidence(
+    record: dict[str, Any], label: dict[str, Any]
+) -> list[str]:
+    failures = []
+    if (record.get("selected_intent") or {}).get("name") != label["intent"]["name"]:
+        failures.append("intent differs")
+    expected_seconds = sum(
+        int(label["intent"]["slots"].get(key, 0)) * factor
+        for key, factor in (("hours", 3600), ("minutes", 60), ("seconds", 1))
+    )
+    if label["intent"]["name"] == "HassStartTimer" and not any(
+        action.get("kind") == "timer" and action.get("seconds") == expected_seconds
+        for action in record["actions"]
+    ):
+        failures.append("timer duration differs")
+    return failures
+
+
 def reply_groups(
     rows: list[dict[str, Any]], split: str
 ) -> dict[str, list[dict[str, Any]]]:
@@ -158,13 +176,36 @@ def validate_inventory(
     ]
 
 
+def validate_live_inventory(
+    inventory: dict[str, Any],
+    states: list[dict[str, Any]],
+    devices: list[dict[str, Any]],
+    device_id: str,
+) -> list[str]:
+    available = {state["entity_id"] for state in states}
+    available.update(
+        identifier
+        for device in devices
+        if device["id"] == device_id
+        for domain, identifier in device["identifiers"]
+        if domain == "assist_live_test_agent"
+    )
+    required = {
+        target
+        for description in inventory.values()
+        for target in description["entities"]
+    }
+    return [
+        f"virtual inventory target missing: {target}"
+        for target in sorted(required - available)
+    ]
+
+
 def validate_agent_source(directory: Path) -> list[str]:
     failures = []
-    if any(
-        not (directory / name).is_file()
-        for name in ("__init__.py", "conversation.py", "config_flow.py")
-    ):
-        failures.append("missing agent fixture source")
+    for name in ("__init__.py", "conversation.py", "config_flow.py"):
+        if not (directory / name).is_file():
+            failures.append(f"missing agent fixture source {name}")
     for path in directory.glob("*.py"):
         source = path.read_text(encoding="utf-8")
         if any(
@@ -353,6 +394,14 @@ async def run_live(
                 for state in states
                 if state["entity_id"] == "conversation.assist_live_short"
             )
+            inventory_errors = validate_live_inventory(
+                json.loads((FIXTURES / "intents.json").read_text()),
+                states,
+                await command("config/device_registry/list"),
+                device_id,
+            )
+            if inventory_errors:
+                raise ValueError("; ".join(inventory_errors))
             visible = {"light.virtual_light", "fan.virtual_fan"}
             if not visible <= {state["entity_id"] for state in states}:
                 raise ValueError("virtual entity inventory missing")
@@ -388,26 +437,7 @@ async def run_live(
                         record = pending[-1]
                         record.update(recording_id=row["id"], phase=phase)
                         errors = validate_run_evidence(record)
-                        if (
-                            record["recognized_transcript"] != row["transcript"]
-                            or (record.get("selected_intent") or {}).get("name")
-                            != row["intent"]["name"]
-                        ):
-                            errors.append("transcript or intent differs")
-                        expected_seconds = sum(
-                            int(row["intent"]["slots"].get(key, 0)) * factor
-                            for key, factor in (
-                                ("hours", 3600),
-                                ("minutes", 60),
-                                ("seconds", 1),
-                            )
-                        )
-                        if row["intent"]["name"] == "HassStartTimer" and not any(
-                            action.get("kind") == "timer"
-                            and action.get("seconds") == expected_seconds
-                            for action in record["actions"]
-                        ):
-                            errors.append("timer duration differs")
+                        errors += validate_intent_action_evidence(record, row)
                         if (
                             result["response"]["speech"]["plain"]["speech"]
                             != record["reply"]

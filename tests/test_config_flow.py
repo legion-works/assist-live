@@ -408,6 +408,18 @@ async def test_event_cursors_are_debounced_and_resume_after_restart(
         {"turns": [{"satellite": "satellite-a"}], "cursors": {}},
         {"turns": [{"satellite": "satellite-a", "turn_id": "bad"}], "cursors": {}},
         {"version": 999, "turns": [], "cursors": {}},
+        pytest.param(
+            {
+                "turns": [
+                    {
+                        "satellite": "satellite-z",
+                        "turn_id": "01900000-0000-7000-8000-000000000001",
+                    }
+                ],
+                "cursors": {},
+            },
+            id="foreign_satellite",
+        ),
     ],
 )
 async def test_corrupt_store_does_not_block_setup(

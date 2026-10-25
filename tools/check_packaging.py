@@ -1,11 +1,32 @@
 """Check local package fields, not Marketplace or HACS-default acceptance."""
 
 import json
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from packaging.version import InvalidVersion, Version
+
+if TYPE_CHECKING or __package__:
+    from .check_public_tree import git
+else:
+    from check_public_tree import git
+
+PACKAGE_FILES = {
+    "__init__.py",
+    "config_flow.py",
+    "const.py",
+    "ledger.py",
+    "manifest.json",
+    "repairs.py",
+    "strings.json",
+    "stt.py",
+    "translations/en.json",
+    "tts.py",
+}
 
 
 def valid_client_requirement(root: Path, requirements: object) -> bool:
@@ -24,6 +45,32 @@ def check_packaging(root: str | Path) -> list[str]:
     failures = []
     package = root / "custom_components/assist_live"
     try:
+        if (root / ".git").exists():
+            paths = [
+                Path(os.fsdecode(name)).relative_to("custom_components/assist_live")
+                for name in git(
+                    root,
+                    "ls-files",
+                    "-co",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                    "custom_components/assist_live",
+                ).split(b"\0")
+                if name
+            ]
+        else:
+            paths = [
+                path.relative_to(package)
+                for path in package.rglob("*")
+                if path.is_file()
+            ]
+        for path in sorted(paths):
+            name = path.as_posix()
+            if "assist_live_test_agent" in name.casefold():
+                failures.append(f"test agent package path {name}")
+            if name not in PACKAGE_FILES:
+                failures.append(f"unexpected package file {name}")
         manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
         hacs = json.loads((root / "hacs.json").read_text(encoding="utf-8"))
         for field, expected in {
@@ -83,6 +130,8 @@ def check_packaging(root: str | Path) -> list[str]:
         )
         if strings != english or not strings["config"]["step"]["user"]:
             failures.append("config flow strings")
+    except subprocess.CalledProcessError:
+        failures.append("package file inventory")
     except OSError, ValueError, KeyError, TypeError, AttributeError:
         failures.append("package metadata input")
     return failures

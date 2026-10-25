@@ -271,7 +271,11 @@ def test_packaging_rejects_bad_metadata(tmp_path):
 
     from tools.check_packaging import check_packaging
 
-    shutil.copytree(ROOT / "custom_components", tmp_path / "custom_components")
+    shutil.copytree(
+        ROOT / "custom_components",
+        tmp_path / "custom_components",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     shutil.copy(ROOT / "hacs.json", tmp_path / "hacs.json")
     shutil.copy(ROOT / "uv.lock", tmp_path / "uv.lock")
     assert check_packaging(tmp_path) == []
@@ -294,6 +298,129 @@ def test_packaging_reports_invalid_inputs(tmp_path):
     assert check_packaging(tmp_path)
 
 
+def test_package_file_set_is_explicit():
+    from tools.check_packaging import PACKAGE_FILES
+
+    assert PACKAGE_FILES == {
+        "__init__.py",
+        "config_flow.py",
+        "const.py",
+        "ledger.py",
+        "manifest.json",
+        "repairs.py",
+        "strings.json",
+        "stt.py",
+        "translations/en.json",
+        "tts.py",
+    }
+
+
+@pytest.fixture
+def packaged_root(tmp_path):
+    import shutil
+
+    shutil.copytree(
+        ROOT / "custom_components",
+        tmp_path / "custom_components",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    for name in ("hacs.json", "uv.lock", ".gitignore"):
+        shutil.copy(ROOT / name, tmp_path / name)
+    return tmp_path
+
+
+@pytest.mark.parametrize("git_tree", [False, True], ids=["archive", "git"])
+@pytest.mark.parametrize(
+    "extra",
+    ["notes.txt", "nested/conversation.py", "test_agent", "assist_live_test_agent"],
+)
+def test_package_rejects_unexpected_files_and_fixture_paths(
+    packaged_root, extra, git_tree
+):
+    import shutil
+    import subprocess
+
+    from tools.check_packaging import check_packaging
+
+    if git_tree:
+        subprocess.run(
+            ["git", "-C", str(packaged_root), "init", "-b", "main"],
+            check=True,
+            capture_output=True,
+        )
+    assert check_packaging(packaged_root) == []
+    destination = packaged_root / "custom_components/assist_live" / extra
+    if extra == "test_agent":
+        shutil.copytree(
+            ROOT / "tests/fixtures/custom_components/assist_live_test_agent",
+            destination,
+        )
+    elif extra == "assist_live_test_agent":
+        destination.mkdir()
+        (destination / "__init__.py").write_text("")
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("test-only")
+    failures = check_packaging(packaged_root)
+    if extra == "assist_live_test_agent":
+        assert f"test agent package path {extra}/__init__.py" in failures
+    else:
+        assert any(
+            failure.startswith("unexpected package file ") for failure in failures
+        )
+
+
+@pytest.mark.parametrize("git_tree", [False, True], ids=["archive", "git"])
+def test_package_bytecode_is_excluded_only_by_git(packaged_root, git_tree):
+    import subprocess
+
+    from tools.check_packaging import check_packaging
+
+    if git_tree:
+        subprocess.run(
+            ["git", "-C", str(packaged_root), "init", "-b", "main"],
+            check=True,
+            capture_output=True,
+        )
+    package = packaged_root / "custom_components/assist_live"
+    for name in ("__pycache__/stt.cpython-314.pyc", "stt.pyc"):
+        path = package / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-only")
+        if git_tree:
+            subprocess.run(
+                ["git", "-C", str(packaged_root), "check-ignore", str(path)],
+                check=True,
+                capture_output=True,
+            )
+    failures = check_packaging(packaged_root)
+    if git_tree:
+        assert failures == []
+    else:
+        assert "unexpected package file __pycache__/stt.cpython-314.pyc" in failures
+        assert "unexpected package file stt.pyc" in failures
+
+
+def test_package_refuses_tracked_ignored_bytecode(packaged_root):
+    import subprocess
+
+    from tools.check_packaging import check_packaging
+
+    subprocess.run(
+        ["git", "-C", str(packaged_root), "init", "-b", "main"],
+        check=True,
+        capture_output=True,
+    )
+    path = packaged_root / "custom_components/assist_live/stt.pyc"
+    path.write_bytes(b"test-only")
+    subprocess.run(
+        ["git", "-C", str(packaged_root), "add", "-f", str(path)],
+        check=True,
+        capture_output=True,
+    )
+    assert "unexpected package file stt.pyc" in check_packaging(packaged_root)
+
+
 @pytest.mark.parametrize(
     "requirements",
     [
@@ -312,7 +439,11 @@ def test_package_requires_locked_client(tmp_path, requirements):
 
     from tools.check_packaging import check_packaging
 
-    shutil.copytree(ROOT / "custom_components", tmp_path / "custom_components")
+    shutil.copytree(
+        ROOT / "custom_components",
+        tmp_path / "custom_components",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     for name in ("hacs.json", "uv.lock"):
         shutil.copy(ROOT / name, tmp_path / name)
     path = tmp_path / "custom_components/assist_live/manifest.json"
