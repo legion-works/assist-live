@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
 from datetime import timedelta
 from typing import TypedDict
 
 from assist_live_client import AssistLiveClient
+from assist_live_client.models import TimingEvent
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import assist_pipeline
 from homeassistant.config_entries import ConfigEntry
@@ -22,13 +24,14 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
 from .ledger import TurnLedger
-from .repairs import event_stream_issue, update_issues
+from .repairs import event_stream_issue, stored_state_issue, update_issues
 
 PLATFORMS = [Platform.STT, Platform.TTS]
 _LOGGER = logging.getLogger(__name__)
 
 
 class SavedState(TypedDict):
+    version: int
     turns: list[dict[str, str]]
     cursors: dict[str, int]
 
@@ -53,7 +56,7 @@ class Runtime:
         self.failures: dict[str, int] = {}
         self.clock = hass.loop.time
         self._sleep = asyncio.sleep
-        self._last_saved: SavedState | None = {"turns": [], "cursors": {}}
+        self._last_saved: SavedState | None = {"version": 1, "turns": [], "cursors": {}}
         self._last_write = 0.0
         self._save_lock = asyncio.Lock()
         self._health_due = 0.0
@@ -67,7 +70,11 @@ class Runtime:
             cursors = dict(self.cursors)
             if cursor is not None:
                 cursors[cursor[0]] = cursor[1]
-            data: SavedState = {"turns": self.ledger.snapshot(), "cursors": cursors}
+            data: SavedState = {
+                "version": 1,
+                "turns": self.ledger.snapshot(),
+                "cursors": cursors,
+            }
             if data == self._last_saved:
                 return
             if (
@@ -87,17 +94,7 @@ class Runtime:
 
     async def start(self) -> None:
         saved = await self.store.async_load()
-        if isinstance(saved, list):
-            await self.ledger.restore(saved)
-            self._last_saved = None
-        elif saved is not None:
-            await self.ledger.restore(saved["turns"])
-            self.cursors = {
-                key: cursor
-                for key, cursor in saved["cursors"].items()
-                if key in self.entry.data["satellites"].values()
-            }
-            self._last_saved = saved
+        await self._restore_saved(saved)
         for satellite in self.entry.data["satellites"].values():
             self.tasks.append(
                 self.hass.async_create_background_task(
@@ -130,6 +127,63 @@ class Runtime:
                 self.hass, self._maintenance, timedelta(seconds=1)
             )
         )
+
+    async def _restore_saved(self, saved: object) -> None:
+        if saved is None:
+            return
+        invalid = False
+        rows: object = []
+        cursors: object = {}
+        if isinstance(saved, list):
+            rows = saved
+        elif (
+            isinstance(saved, dict)
+            and type(saved.get("version", 0)) is int
+            and saved.get("version", 0) in (0, 1)
+        ):
+            rows, cursors = saved.get("turns"), saved.get("cursors")
+        else:
+            invalid = True
+        if not isinstance(rows, list):
+            rows = []
+            invalid = True
+        valid_rows: list[dict[str, str]] = []
+        satellites = set(self.entry.data["satellites"].values())
+        for row in rows:
+            try:
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("turn_id"), str)
+                    or row.get("satellite") not in satellites
+                ):
+                    raise ValueError("invalid stored turn")
+                TimingEvent(
+                    row["turn_id"],
+                    row["satellite"],
+                    "integration",
+                    "turn_superseded",
+                    time.time_ns(),
+                    "measured",
+                    None,
+                )
+                valid_rows.append(
+                    {"turn_id": row["turn_id"], "satellite": row["satellite"]}
+                )
+            except KeyError, TypeError, ValueError:
+                invalid = True
+        if not isinstance(cursors, dict):
+            cursors = {}
+            invalid = True
+        for key, value in cursors.items():
+            if key in satellites and type(value) is int and value >= 0:
+                self.cursors[key] = value
+            else:
+                invalid = True
+        await self.ledger.restore(valid_rows)
+        self._last_saved = None
+        if invalid:
+            _LOGGER.warning("Dropped invalid stored turn data")
+        stored_state_issue(self.hass, self.entry.entry_id, invalid)
 
     async def _events(self, satellite: str) -> None:
         while True:

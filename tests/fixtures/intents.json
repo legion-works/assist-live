@@ -1,0 +1,5 @@
+{
+  "HassStartTimer": {"entities": ["assist_live_virtual"], "operation": "timer"},
+  "HassTurnOn": {"entities": ["light.virtual_light", "fan.virtual_fan"], "operation": "service"},
+  "HassTurnOff": {"entities": ["light.virtual_light", "fan.virtual_fan"], "operation": "service"}
+}

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_public_tree import denylist, repository  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_RUN_EXEMPTIONS = {
@@ -16,6 +17,65 @@ CI_RUN_EXEMPTIONS = {
         "result",
     },
 }
+
+
+@pytest.mark.parametrize("mode", ["unset", "valid", "missing", "hit"])
+def test_task_privacy_branch_keeps_other_checks(repository, denylist, tmp_path, mode):  # noqa: F811
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    tool = repository / "tools/check_public_tree.py"
+    tool.parent.mkdir()
+    shutil.copy(ROOT / "tools/check_public_tree.py", tool)
+    commands = yaml.safe_load((ROOT / "Taskfile.yml").read_text())["tasks"]["check"][
+        "cmds"
+    ]
+    branch = commands[-1]
+    assert isinstance(branch, str)
+    assert all(
+        command in commands
+        for command in (
+            {"task": "lint"},
+            {"task": "typecheck"},
+            {"task": "unit"},
+            "uv run --locked python tools/check_bootstrap.py",
+            "uv run --locked python tools/check_ci.py",
+            "gitleaks dir . --redact --exit-code 1",
+            "gitleaks git . --redact --exit-code 1",
+        )
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\nimport os,sys\n"
+        "assert sys.argv[1:4] == ['run', '--locked', 'python']\n"
+        "os.execv(sys.executable, [sys.executable, *sys.argv[4:]])\n"
+    )
+    uv.chmod(0o755)
+    env = {key: value for key, value in os.environ.items() if key != "PRIVATE_DENYLIST"}
+    env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+    if mode != "unset":
+        env["PRIVATE_DENYLIST"] = str(
+            denylist if mode != "missing" else tmp_path / "absent"
+        )
+    if mode == "hit":
+        (repository / "example.txt").write_text("restricted-fixture-marker")
+    result = subprocess.run(
+        ["bash", "-e", "-c", branch],
+        cwd=repository,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is (mode in ("unset", "valid")), result.stdout
+    assert ("NOT CHECKED private denylist" in result.stdout) is (mode == "unset")
+    if mode in ("unset", "valid"):
+        assert "PASS history secrets" in result.stdout
+        assert "PASS public data matches=0" in result.stdout
 
 
 def test_ci_has_required_jobs():

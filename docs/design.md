@@ -23,8 +23,15 @@ Each satellite must keep these functions:
 All device control uses the HA agent and HA exposure rules.
 The integration must not patch private HA classes.
 The only non-public interface in the design is `tts.helper.get_engine_instance`.
-A subsequent contract test must examine that function on each selected HA version.
+A contract test examines that function on each selected HA version.
 P4 proposes a public replacement.
+
+HA developer documentation also gives two public entity-interface types that their component modules do not export through `__all__`:
+
+- [`SpeechAudioProcessing`](https://developers.home-assistant.io/docs/core/entity/stt/#audio-processing) from `homeassistant.components.stt.models`.
+- [`TTSAudioRequest`](https://developers.home-assistant.io/docs/core/entity/tts/#stream-audio) from `homeassistant.components.tts.entity`.
+
+Contract tests pin their import paths and the fields that assist-live uses on each HA version in CI.
 
 ## Repositories and release boundary
 

@@ -21,10 +21,12 @@ uvx ruff check .
 task check
 ```
 
-`task check` does not check the private denylist when `PRIVATE_DENYLIST` is not set. It prints `NOT CHECKED private denylist`. Set `PRIVATE_DENYLIST` to an external denylist to include this check.
+Without `PRIVATE_DENYLIST`, `task check` prints `NOT CHECKED private denylist` and runs all other checks.
+Set `PRIVATE_DENYLIST` to an external file to include the private-denylist check.
+An unavailable file or a denylist hit stops the check with a failure.
 
-CI must add HA runtime tests, integrated type checks, hassfest, and HACS validation.
-See `docs/verification.md` for the current standalone check results.
+CI runs HA runtime tests, integrated type checks, hassfest, and HACS validation.
+See `docs/verification.md` for local check results.
 
 To run the private-denylist check, set `PRIVATE_DENYLIST` to an external file:
 

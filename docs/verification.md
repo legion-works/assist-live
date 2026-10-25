@@ -1893,3 +1893,91 @@ PASS packaging (local check, not Marketplace or HACS-default acceptance)
 
 Hassfest gave `Invalid integrations: 0`.
 `actionlint` gave exit code 0 with no output.
+
+## Virtual conversation and operation records
+
+Date: 2026-10-25.
+
+The initial harness test used this command:
+
+```sh
+uv run --locked pytest tests/test_test_environment.py -q
+```
+
+It gave this failure before the tool was available:
+
+```text
+E ModuleNotFoundError: No module named 'tools.test_environment'
+1 failed
+```
+
+The harness gave `14 passed in 0.52s` with the same command.
+The tests use the stock HA conversation path for timers, service calls, exposure rules, areas, and commands with time intervals.
+They check the actual long-response delta stream and make sure that short responses give no deltas.
+
+With `ASSIST_LIVE_TEST_TOKEN_FILE` set to an external test credential file, this command ran on the isolated HA test container:
+
+```sh
+uv run python tools/test_environment.py --labels tests/data/labels.jsonl --split held_out --install-virtual --check-evidence
+```
+
+```text
+PASS virtual intent coverage
+PASS short and long groups
+PASS transcript intent action evidence
+```
+
+The run used 200 held-out commands, with 100 commands in each reply group and 400 records across the two phase runs.
+These are text-path checks, not audio replay or latency measurements.
+The public config-entry API also gave satisfactory single-entry, removal, and installation checks.
+See [Virtual intent tests](testing/virtual-intents.md) for the record contract and limits.
+
+## Stored state and contributor checks
+
+Date: 2026-10-25.
+
+Stored turn data has payload version 1.
+The reader accepts the prior dictionary and list shapes.
+Tests show that invalid keys, row fields, cursor types, and timing values do not stop setup.
+Correct rows and cursors stay available.
+A generic log line and an HA repair report invalid stored entries without their content.
+
+The private-denylist tests check unset, correct, missing-file, and denied inputs through the Taskfile command.
+An unset `PRIVATE_DENYLIST` prints `NOT CHECKED private denylist` and keeps all other checks.
+A set `PRIVATE_DENYLIST` keeps failure behavior for unavailable input and denied content.
+Fifteen mutation tests found weakened record, response-group, stream, stored-state, fixture-source, and private-denylist guards.
+
+## Client source and HA checks
+
+Date: 2026-10-25.
+
+The development client source is `961cacb31a013fceee612b245ea9c3cb5d745106`.
+The lockfile, Taskfile, and CI use this source.
+The release manifest requirement stays at `assist-live-client==0.0.0`.
+
+```sh
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+env -u PRIVATE_DENYLIST task check
+task ha-minimum
+task package-check
+task hassfest
+```
+
+The current and minimum HA suites each gave `475 passed`.
+The current suite uses HA 2026.10.3. The minimum suite uses HA 2026.10.1 and Python 3.14.2.
+The current code checks gave these lines:
+
+```text
+54 files already formatted
+All checks passed!
+Success: no issues found in 16 source files
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=21
+PASS public data matches=0
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+```
+
+The check without the private denylist also printed `NOT CHECKED private denylist`.
+Hassfest gave `Integrations: 1` and `Invalid integrations: 0`.

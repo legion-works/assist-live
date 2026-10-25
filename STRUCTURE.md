@@ -18,6 +18,10 @@
 | `tools/check_public_tree.py` | Worktree and reachable-history checks |
 | `tools/corpus.py`, `tests/test_corpus.py` | Corpus source pins, records, fetch limits, and checks |
 | `tools/annotate_corpus.py`, `tests/test_annotate_corpus.py` | Local boundary marks, checked import, and calibration statistics |
+| `tools/test_environment.py`, `tests/test_test_environment.py` | Virtual intent coverage, reply groups, and operation records |
+| `tests/fixtures/custom_components/assist_live_test_agent/` | Test-only HA conversation agent and native timer receiver |
+| `tests/fixtures/ha-virtual.yaml`, `tests/fixtures/intents.json` | Isolated virtual entities and intent inventory |
+| `docs/testing/virtual-intents.md` | Virtual test installation, records, and limits |
 | `docs/testing/corpus.md`, `docs/testing/recording-kit.md` | Corpus contract, boundary procedure, and volunteer recording kit |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Python metadata and test dependencies |
 | Root Markdown files | Project status, architecture, contribution rules, and vulnerability reports |

@@ -1,0 +1,10 @@
+{
+  "domain": "assist_live_test_agent",
+  "name": "Assist Live Test Agent",
+  "version": "0.0.0",
+  "config_flow": true,
+  "dependencies": ["conversation", "intent"],
+  "codeowners": [],
+  "documentation": "https://github.com/legion-works/assist-live",
+  "iot_class": "local_push"
+}

@@ -379,6 +379,7 @@ async def test_event_cursors_are_debounced_and_resume_after_restart(
                 await runtime._maintenance(None)
             assert save.await_count == 1
             assert save.call_args.args[0] == {
+                "version": 1,
                 "turns": [],
                 "cursors": {"satellite-a": 11, "satellite-b": 22},
             }
@@ -395,6 +396,82 @@ async def test_event_cursors_are_debounced_and_resume_after_restart(
         assert subscriptions[-2:] == [("satellite-a", 11), ("satellite-b", 22)]
     finally:
         await restarted.stop()
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"turns": [], "cursors": 5},
+        {"cursors": 5},
+        {"turns": []},
+        {"turns": [{"turn_id": "bad"}], "cursors": {}},
+        {"turns": [{"satellite": "satellite-a"}], "cursors": {}},
+        {"turns": [{"satellite": "satellite-a", "turn_id": "bad"}], "cursors": {}},
+        {"version": 999, "turns": [], "cursors": {}},
+    ],
+)
+async def test_corrupt_store_does_not_block_setup(
+    hass, client, runtime_entry, broken, caplog
+):
+    import asyncio
+
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.assist_live import Runtime
+
+    async def events(*args, **kwargs):
+        await asyncio.Event().wait()
+        yield
+
+    client.events = events
+    runtime = Runtime(hass, runtime_entry, client)
+    with patch.object(runtime.store, "async_load", return_value=broken):
+        await runtime.start()
+    try:
+        assert runtime.cursors == {}
+        assert client.event.await_count == 0
+        assert "Dropped invalid stored turn data" in caplog.text
+        assert ir.async_get(hass).async_get_issue(
+            "assist_live", f"{runtime_entry.entry_id}_invalid_stored_state"
+        )
+        assert "bad" not in caplog.text
+    finally:
+        await runtime.stop()
+
+
+async def test_corrupt_store_keeps_valid_entries(hass, client, runtime_entry):
+    import asyncio
+    from uuid import uuid7
+
+    from custom_components.assist_live import Runtime
+
+    async def events(*args, **kwargs):
+        await asyncio.Event().wait()
+        yield
+
+    client.events = events
+    turn_id = str(uuid7())
+    runtime = Runtime(hass, runtime_entry, client)
+    saved = {
+        "turns": [
+            {"satellite": "satellite-a", "turn_id": turn_id},
+            {"satellite": "satellite-b"},
+        ],
+        "cursors": {"satellite-a": 7, "satellite-b": -1, "unknown": 9},
+    }
+    with patch.object(runtime.store, "async_load", return_value=saved):
+        await runtime.start()
+    try:
+        assert runtime.cursors == {"satellite-a": 7}
+        assert client.event.call_args.args[0].turn_id == turn_id
+        await runtime._save()
+        assert await runtime.store.async_load() == {
+            "version": 1,
+            "turns": [],
+            "cursors": {"satellite-a": 7},
+        }
+    finally:
+        await runtime.stop()
 
 
 async def test_old_turn_list_store_keeps_restart_markers(hass, client, runtime_entry):
@@ -658,7 +735,7 @@ def test_real_store_file_failure_is_detected_and_raises_repair(tmp_path):
             assert type(runtime.store) is Store
             now = [100.0]
             runtime.clock = lambda: now[0]
-            initial = {"turns": [], "cursors": {}}
+            initial = {"version": 1, "turns": [], "cursors": {}}
             await runtime.store.async_save(initial)
             assert await runtime.store.async_load() == initial
             path = Path(runtime.store.path)

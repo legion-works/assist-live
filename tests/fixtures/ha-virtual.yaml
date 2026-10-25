@@ -1,0 +1,26 @@
+assist_live_test_agent:
+template:
+  - light:
+      - name: Virtual light
+        unique_id: assist_live_virtual_light
+        state: "{{ is_state('input_boolean.test_light', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.test_light
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.test_light
+  - fan:
+      - name: Virtual fan
+        unique_id: assist_live_virtual_fan
+        state: "{{ is_state('input_boolean.test_fan', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.test_fan
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.test_fan

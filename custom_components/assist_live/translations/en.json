@@ -36,6 +36,10 @@
     }
   },
   "issues": {
+    "invalid_stored_state": {
+      "title": "Invalid stored turn data",
+      "description": "The integration dropped invalid stored entries. Valid entries stay available. Check HA storage and restart the integration after the storage check. No transcript or token is in this issue."
+    },
     "event_stream_unavailable": {
       "title": "Satellite event subscription cannot continue",
       "description": "The event subscription for {satellite} has repeated failures. Check the server event stream and HA storage. The integration retries with a maximum 30 s interval. It does not skip a refused event."
