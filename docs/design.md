@@ -56,6 +56,7 @@ Each satellite selects a pipeline with its own entities.
 HA does not give these entities a run identifier or satellite identifier.
 The entity-to-satellite mapping supplies that context without private HA interfaces.
 A repair issue reports two satellites that select the same assist-live pipeline.
+
 HA 2026.10.3 exports `async_create_default_pipeline` and `async_update_pipeline` in `assist_pipeline`.
 The integration uses them to make and update the pipeline of each satellite, with the TTS voice.
 If HA refuses the creation, the config flow gives manual instructions.
@@ -142,6 +143,7 @@ The provider keeps request metadata for 90 days.
 ElevenLabs `eleven_flash_v2_5` is the planned cloud TTS default.
 Its WebSocket path uses a minimum 50-character chunk schedule and an end-of-reply flush.
 The default 120-character schedule adds buffering after HA's 60-character threshold.
+
 Piper 1.8.0 with the `en_US-lessac-medium` voice is the planned local TTS default.
 A measurement on the development host selected it from five engine configurations.
 The `assist-live-server` record `docs/research/q7t-local-tts.md` gives the results.
