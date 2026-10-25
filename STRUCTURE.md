@@ -11,6 +11,9 @@
 | `tests/test_public_tree.py` | Bootstrap and privacy checker tests |
 | `tools/check_bootstrap.py` | Package and document checks |
 | `tools/check_public_tree.py` | Worktree and reachable-history checks |
+| `tools/corpus.py`, `tests/test_corpus.py` | Corpus source pins, records, fetch limits, and checks |
+| `tools/annotate_corpus.py`, `tests/test_annotate_corpus.py` | Local boundary marks, checked import, and calibration statistics |
+| `docs/testing/corpus.md`, `docs/testing/recording-kit.md` | Corpus contract, boundary procedure, and volunteer recording kit |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Python metadata and test dependencies |
 | Root Markdown files | Project status, architecture, contribution rules, and vulnerability reports |
 | `LICENSE` | Full Apache-2.0 license |

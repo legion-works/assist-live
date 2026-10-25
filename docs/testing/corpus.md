@@ -30,6 +30,15 @@ The CLI also checks files, records, and the freeze.
 | `audio_sha256` | Lowercase SHA-256 of the complete WAV file |
 | `sample_rate` | Integer rate in Hz, equal to the mono WAV rate of 16000 |
 | `last_voice_sample` | Zero-based index of the last voice sample, less than the WAV frame count |
+| `last_voice_annotation` | Necessary `automatic` or `manual` declaration |
+| `last_voice_method` | Non-empty primary method name for `automatic`. Archive rows must use `rms-10ms-max-0.005-0.08peak`. |
+| `last_voice_crosscheck_method` | Non-empty cross-check method name for `automatic`. Archive rows must use `torchaudio-2.7.1-MMS_FA-CTC-with-known-transcript`. |
+| `last_voice_parameters` | Non-empty parameter object for `automatic`. Archive rows must contain only `absolute_threshold: 0.005`, `relative_threshold: 0.08`, and `window_ms: 10`, with numeric values, not booleans. |
+| `last_voice_parameter_sha256` | Lowercase 64-digit hexadecimal SHA-256 pin of the parameter record, necessary for `automatic` and archive rows |
+| `alignment_model_sha256` | Archive rows must contain a lowercase 64-digit hexadecimal SHA-256 pin of the aligner model bytes. |
+| `alignment_frame_samples` | Archive rows must contain a finite, positive number of waveform samples for each aligner frame, not a boolean. |
+| `alignment_transcript` | Archive rows must contain a non-empty array of normalized known-transcript word strings. Each word uses lowercase ASCII letters with optional internal apostrophes. |
+| `last_voice_annotator_note` | Manual note object with an anonymous `annotator` code, `transcript_differs`, and `transcript_note` |
 | `transcript` | Correct, non-empty transcript |
 | `intent` | Object with an HA intent `name` from the pinned name set and a `slots` object |
 | `executable_prefix` | Boolean, `true` only for a pause command with an executable prefix |
@@ -91,6 +100,12 @@ Keep signed records and all audio external to Git.
 `LICENSES.json` lists the permitted license identifiers in its `licenses` array.
 Each row must use an identifier from that list.
 
+The `sources` array contains archive records with the source, license, credit, consent URL, and consent quotation.
+Each archive record pins `archive_url`, `archive_sha256`, `archive_md5`, and positive `archive_size` in bytes.
+It also pins `license_member`, `license_text`, and `license_sha256`.
+The checker checks these fields and rejects missing archive records, duplicate pins, and inconsistent license text.
+When `fetch` opens an archive, it checks the license member bytes against `license_sha256` before it writes audio.
+
 The consent index must contain each volunteer consent identifier with the same license.
 Public dataset rows pin the HTTPS audio URL, source revision, hash, and necessary credit.
 An HTTPS source URL must supply the correct WAV bytes, not a dataset landing page.
@@ -115,6 +130,7 @@ https://zenodo.org/api/records/4662102/files/timers-and-such-real.zip/content
 | SHA-256 | `c92772c830109a6d685b2106fa3f28fc7b1184bc74722045282ed7efb0cf135a` |
 | Publisher MD5 | `0aba31a0d0f884a0200b0659490ce0c8` |
 | Internal license member | `LICENSE` |
+| License SHA-256 | `36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673` |
 | License heading | `CC0 1.0 Universal` |
 
 `tests/data/LICENSES.json` contains the full internal license text and a source credit line.
@@ -285,6 +301,13 @@ The cache must be external to all Git repositories, also through symlinks.
 It checks cached archive bytes before use, reads only the named member, and checks its SHA-256 before writing audio.
 It does not write archive paths into the filesystem.
 
+The download size limit is `268435456` bytes (256 MiB), above the pinned archive size of `211480934` bytes.
+The archive and HTTPS WAV downloads use this limit.
+`--max-download-bytes` sets a different positive limit.
+The tool stops the stream if the next byte is more than the limit.
+It does not keep an archive or audio file that is not complete.
+`fetch --licenses` selects the license records. Its default is `tests/data/LICENSES.json` relative to the tool repository.
+
 It checks files that are available without replacement.
 It does not play audio.
 
@@ -347,3 +370,75 @@ At 300 samples, 9 cuts satisfy the two limits.
 The executable-prefix subset must have 0 cuts with `profile=safe`.
 The tests calculate the confidence limits and the 100-sample acceptance set.
 Set the sample count at 300 before the experiment, not after a failure.
+
+## Manual boundary procedure
+
+Use `tools/annotate_corpus.py` to mark voice boundaries locally.
+No network access, browser extension, or aligner is necessary.
+The output is one HTML file with embedded WAV data, waveform peaks, and automatic markers.
+Keep this file and exported JSON external to Git. The HTML file contains the source audio.
+
+Reserve about 30 minutes for the 50 tuning rows. This is an estimate, not a measured time.
+Start with the tuning rows before calibration:
+
+```sh
+uv run --locked python tools/annotate_corpus.py build --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split tuning --output "$ANNOTATION_DIR"
+```
+
+`--ids ID1,ID2` selects named rows. `--flagged` selects rows with `boundary_review_required=true`.
+These filters can also limit a partition selection.
+The tool rejects an output directory in a Git repository, also through a symlink.
+
+1. Open `$ANNOTATION_DIR/index.html` in a browser.
+2. Record an anonymous annotator code, such as `annotator-01`.
+3. Play each recording and read its transcript.
+4. Click the waveform at the last voice sample that you can hear, with the quiet last consonant.
+5. Use the second waveform to examine the boundary in a 500 ms interval on each side.
+6. Click a waveform and push Left or Right for a 10 ms change.
+7. Hold Shift with Left or Right for a 1 ms change.
+8. Use **Loop last 500 ms** to hear the interval that ends at the selected sample.
+9. Use **Accept marker** if the automatic marker is correct.
+10. If the transcript is different, select its checkbox and record the difference in the text field.
+11. Use **Skip** if the boundary is unclear.
+12. Export JSON before a break and after the last row.
+
+The page saves work in browser storage with a key for that page content.
+File-URL storage can be unavailable with some browser settings. A warning shows a storage failure.
+Keep the same file location and browser settings. Keep exported JSON backups if storage works or not.
+
+Unmarked and skipped rows do not change the records.
+Do not record a name or other personal data in an annotator code or note.
+
+Back up the records before import. Then import the export and compare the automatic methods:
+
+```sh
+uv run --locked python tools/annotate_corpus.py import --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split tuning --input "$ANNOTATION_JSON"
+uv run --locked python tools/annotate_corpus.py compare --labels tests/data/labels.jsonl --split tuning
+```
+
+Import checks the export version, unique known IDs, partition, audio hash, recording length, sample limits, and record digest.
+Unknown fields and a transcript-difference checkbox without a note cause failure.
+All rows must give satisfactory results before a write. A second import makes no change.
+Import changes only `last_voice_sample`, `last_voice_annotation`, and `last_voice_annotator_note`.
+It does not change transcripts, intent slots, partitions, flags, automatic method records, or source pins.
+
+Use a different checked correction for a transcript difference, not this importer.
+
+The record digest does not include those three manual fields so that re-import stays idempotent.
+It finds stale or damaged metadata. It is not a signature or proof of a human decision.
+A person with edit access can select a different correct sample. Check the annotator record before freeze.
+
+For these replay rows, `aligned_end_sample + energy_minus_aligned_samples` keeps the initial energy marker.
+If the aligner result is unavailable, the annotator note keeps `automatic_energy_sample` before the manual sample changes.
+Manual samples do not replace that automatic cross-check or change its flags.
+
+The `compare` command reports median, p90, and maximum absolute error in milliseconds for each available automatic marker.
+Percentiles use linear interpolation. It also reports closest-row counts, with equal results included.
+The summary selects the lowest median, then p90, only when methods use the same rows.
+
+Examine row coverage before a method decision. A missing automatic marker does not count as 0 error.
+
+`compare` defaults to `tuning` and does not write parameters.
+Use held-out rows only for the last analysis, not method selection or parameter changes.
+Do not tune a method parameter on held-out rows.
+See [Volunteer recording kit](recording-kit.md) for the missing pause and executable-prefix recordings.

@@ -1566,3 +1566,115 @@ The two Python 3.14.2 HA matrix commands from the earlier record gave:
 HA 2026.10.1: 255 passed in 9.12s
 HA 2026.10.3: 255 passed in 8.97s
 ```
+
+## Local corpus boundaries and source checks
+
+Date: 2026-10-25.
+
+The local boundary tool builds one self-contained HTML file, imports manual samples, and compares automatic markers with manual samples.
+The recording kit supplies consent text and 40 pause prompts for 400 recordings across two partitions.
+No manual voice decision, volunteer recording, parameter change, or corpus freeze is complete.
+The 30-minute estimate for 50 tuning rows is a planning estimate, not a measured result.
+
+The first test command was:
+
+```sh
+uv run --locked pytest tests/test_corpus.py tests/test_annotate_corpus.py -q
+```
+
+The initial code did not have the declaration, source-record, download-limit, or manual-boundary guards:
+
+```text
+FAILED tests/test_corpus.py::test_missing_fields_are_rejected[last_voice_annotation]
+AssertionError: assert []
+32 failed, 127 passed in 5.97s
+```
+
+The archive provenance tests also ran before their implementation:
+
+```sh
+uv run --locked pytest tests/test_corpus.py -q -k archive_provenance
+```
+
+```text
+14 failed, 145 deselected in 0.53s
+```
+
+The same corpus test command after implementation gave:
+
+```text
+179 passed in 8.85s
+```
+
+Nineteen numbered mutation tests stopped at their intended assertions.
+These tests remove the declaration, automatic method, archive provenance, source-record, license-byte, download-limit, and manual-flag guards.
+They also remove import checks for the annotator, duplicates, sample types and limits, hashes, lengths, fields, partition, notes, and version.
+One test checks the skip no-op.
+The held-out parameter-writer mutation is not applicable because `compare` has no parameter writer.
+Unknown IDs also cause failure at the necessary record lookup, independently of the explicit guard.
+
+The browser check used a synthetic tone, not human audio.
+Headless Chromium checked waveform clicks, 10 ms and 1 ms keys, the 500 ms loop, JSON export, and storage after reload.
+The browser check is external to CI and does not add a test dependency.
+The 50-row tuning page built with:
+
+```sh
+uv run --locked python tools/annotate_corpus.py build --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split tuning --output "$ANNOTATION_DIR"
+```
+
+```text
+PASS annotation page rows=50
+```
+
+The output path stays external to the repository because the HTML file includes audio.
+The cached fetch used the license digest and the archive pin:
+
+```sh
+uv run --locked python tools/corpus.py fetch --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --cache "$CORPUS_CACHE"
+uv run --locked python tools/corpus.py check --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --synthetic tests/data/synthetic.jsonl --licenses tests/data/LICENSES.json --consent tests/data/consent-index.json
+```
+
+```text
+PASS fetched locators (hashes checked)
+PASS held_out replay count 200 speakers 30
+PASS tuning replay count 50 speakers 33
+FAIL held_out pause count 0 < 300
+FAIL held_out pause speakers 0 < 10
+FAIL held_out prefix count 0 < 30
+FAIL tuning pause count 0 < 100
+FAIL tuning prefix count 0 < 30
+```
+
+The corpus check exits 1 for those five collection shortages. It does not write a freeze.
+
+The repository command was `PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check`:
+
+```text
+35 files already formatted
+All checks passed!
+Success: no issues found in 10 source files
+313 passed in 12.74s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=15
+PASS public data matches=0
+```
+
+The floor-Python HA commands agree with the shipped CI dependencies:
+
+```sh
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.1 --with pytest-homeassistant-custom-component==0.13.372 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.3 --with pytest-homeassistant-custom-component==0.13.374 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+```
+
+```text
+HA 2026.10.1: 313 passed in 13.48s
+HA 2026.10.3: 313 passed in 12.18s
+```
+
+The ASD-STE100 checker gave 0 findings for the changed Markdown files.
+The public-tree check gave `PASS public data matches=0`.
+The fixed-string self-scan found no denylist terms, private IPv4 addresses, or audio files.
+Its one literal home-path result is the unchanged public URL test vector.
+No new external test tool or project dependency is necessary.

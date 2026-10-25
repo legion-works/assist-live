@@ -31,6 +31,7 @@ def row(number=0, split="held_out", group="pause"):
         "audio_sha256": f"{number:064x}",
         "sample_rate": 16000,
         "last_voice_sample": 14000,
+        "last_voice_annotation": "manual",
         "transcript": "turn off the test light in five minutes",
         "intent": {
             "name": "HassTurnOff",
@@ -426,6 +427,7 @@ def archive_bundle(tmp_path, monkeypatch):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("test-real/clip.wav", data)
+        bundle.writestr("LICENSE", b"Test CC0 license\n")
     payload = archive.getvalue()
     item = row(group="replay")
     item.update(
@@ -434,6 +436,17 @@ def archive_bundle(tmp_path, monkeypatch):
         consent_id=None,
         audio_sha256=hashlib.sha256(data).hexdigest(),
         audio_path=f"sha256/{hashlib.sha256(data).hexdigest()}.wav",
+        last_voice_method="rms-10ms-max-0.005-0.08peak",
+        last_voice_parameters={
+            "absolute_threshold": 0.005,
+            "relative_threshold": 0.08,
+            "window_ms": 10,
+        },
+        last_voice_parameter_sha256="0" * 64,
+        last_voice_crosscheck_method="torchaudio-2.7.1-MMS_FA-CTC-with-known-transcript",
+        alignment_model_sha256="1" * 64,
+        alignment_frame_samples=320.0,
+        alignment_transcript=["synthetic", "test"],
     )
 
     class Response(io.BytesIO):
@@ -441,6 +454,33 @@ def archive_bundle(tmp_path, monkeypatch):
             return "https://zenodo.org/api/records/4662102/files/timers-and-such-real.zip/content"
 
     monkeypatch.setattr(corpus, "urlopen", lambda url, timeout: Response(payload))
+    records = tmp_path / "LICENSES.json"
+    records.write_text(
+        json.dumps(
+            {
+                "licenses": ["CC0-1.0", "CC-BY-4.0"],
+                "sources": [
+                    {
+                        "source": "Synthetic test archive",
+                        "license": "CC-BY-4.0",
+                        "archive_url": Response().geturl(),
+                        "archive_sha256": item["source_revision"],
+                        "archive_md5": hashlib.md5(payload).hexdigest(),
+                        "archive_size": len(payload),
+                        "license_member": "LICENSE",
+                        "license_text": "Test CC0 license\n",
+                        "license_sha256": hashlib.sha256(
+                            b"Test CC0 license\n"
+                        ).hexdigest(),
+                        "credit": "Synthetic test credit",
+                        "consent_source": "https://data.example/consent",
+                        "consent_quote": "Synthetic test permission",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(corpus, "DEFAULT_LICENSES", records, raising=False)
     return item, payload, data
 
 
@@ -577,6 +617,7 @@ def test_archive_rejects_invalid_or_unsafe_members(tmp_path, archive_bundle, kin
     else:
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
             bundle.writestr("test-real/clip.wav", data)
+            bundle.writestr("LICENSE", b"Test CC0 license\n")
             if kind == "duplicate":
                 with pytest.warns(UserWarning, match="Duplicate name"):
                     bundle.writestr("test-real/clip.wav", data)
@@ -586,6 +627,10 @@ def test_archive_rejects_invalid_or_unsafe_members(tmp_path, archive_bundle, kin
                     "zenodo:4662102/timers-and-such-real.zip#test-real/large.wav"
                 )
     item["source_revision"] = hashlib.sha256(payload.getvalue()).hexdigest()
+    records = json.loads((tmp_path / "LICENSES.json").read_text())
+    records["sources"][0]["archive_sha256"] = item["source_revision"]
+    records["sources"][0]["archive_size"] = len(payload.getvalue())
+    (tmp_path / "LICENSES.json").write_text(json.dumps(records))
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / f"{item['source_revision']}.zip").write_bytes(payload.getvalue())
@@ -679,3 +724,163 @@ def test_imported_ctc_flags_cannot_hide_review_conditions(change):
     else:
         item["transcript_alignment_status"] = "mismatch"
     assert any("boundary review" in failure for failure in label_errors(item))
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["missing", "unknown", "method", "crosscheck", "parameters", "parameter_hash"],
+)
+def test_annotation_provenance_required(change):
+    from tools.corpus import label_errors
+
+    item = row(group="replay")
+    item.update(
+        last_voice_annotation="automatic",
+        last_voice_method="energy",
+        last_voice_crosscheck_method="aligned",
+        last_voice_parameters={"window_ms": 10},
+        last_voice_parameter_sha256="0" * 64,
+    )
+    if change == "missing":
+        del item["last_voice_annotation"]
+    elif change == "unknown":
+        item["last_voice_annotation"] = "guessed"
+    else:
+        field = {
+            "method": "last_voice_method",
+            "crosscheck": "last_voice_crosscheck_method",
+            "parameters": "last_voice_parameters",
+            "parameter_hash": "last_voice_parameter_sha256",
+        }[change]
+        del item[field]
+    assert any(
+        "annotation" in error or "automatic" in error for error in label_errors(item)
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "shape",
+        "credit",
+        "license_hash",
+        "archive_hash",
+        "member",
+        "size",
+        "license_text",
+    ],
+)
+def test_source_records_are_validated(tmp_path, archive_bundle, change):
+    from tools.corpus import check_records
+
+    records = json.loads((tmp_path / "LICENSES.json").read_text())
+    if change == "shape":
+        records["sources"] = "invalid"
+    else:
+        key = {
+            "credit": "credit",
+            "license_hash": "license_sha256",
+            "archive_hash": "archive_sha256",
+            "member": "license_member",
+            "size": "archive_size",
+            "license_text": "license_text",
+        }[change]
+        records["sources"][0][key] = ""
+    assert any("source record" in error for error in check_records([], records, []))
+
+
+def test_fetch_checks_license_bytes_before_audio_write(tmp_path, archive_bundle):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    records = json.loads((tmp_path / "LICENSES.json").read_text())
+    records["sources"][0]["license_text"] = "Different license"
+    records["sources"][0]["license_sha256"] = hashlib.sha256(
+        b"Different license"
+    ).hexdigest()
+    (tmp_path / "LICENSES.json").write_text(json.dumps(records))
+    failures = corpus.fetch([item], tmp_path / "audio", cache=tmp_path / "cache")
+    assert any("license member hash mismatch" in error for error in failures)
+    assert not (tmp_path / "audio").exists()
+
+
+@pytest.mark.parametrize("archive", [False, True])
+def test_fetch_download_cap_stops_before_write(
+    tmp_path, monkeypatch, archive_bundle, archive
+):
+    from tools import corpus
+
+    item, _, data = archive_bundle
+    if not archive:
+        item["source_uri"] = "https://data.example/clip.wav"
+
+        class Response(io.BytesIO):
+            def geturl(self):
+                return item["source_uri"]
+
+        monkeypatch.setattr(corpus, "urlopen", lambda *a, **k: Response(data))
+    failures = corpus.fetch(
+        [item], tmp_path / "audio", cache=tmp_path / "cache", max_download_bytes=32
+    )
+    assert any("download size cap" in error for error in failures)
+    assert not (tmp_path / "audio").exists()
+    assert not list((tmp_path / "cache").glob("*.zip"))
+
+
+def test_manual_boundary_keeps_automatic_review_flags():
+    from tools.corpus import label_errors
+
+    item = row(group="replay")
+    item.update(
+        last_voice_sample=10000,
+        aligned_end_sample=10000,
+        energy_minus_aligned_samples=801,
+        alignment_confidence=0.9,
+        alignment_minimum_word_confidence=0.9,
+        transcript_alignment_status="match",
+        boundary_review_required=True,
+        boundary_review_reasons=["boundary_difference"],
+    )
+    assert label_errors(item) == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("last_voice_method", "unknown"),
+        (
+            "last_voice_parameters",
+            {"absolute_threshold": True, "relative_threshold": 0.08, "window_ms": 10},
+        ),
+        (
+            "last_voice_parameters",
+            {"absolute_threshold": 0.006, "relative_threshold": 0.08, "window_ms": 10},
+        ),
+        (
+            "last_voice_parameters",
+            {"absolute_threshold": 0.005, "relative_threshold": 0.09, "window_ms": 10},
+        ),
+        (
+            "last_voice_parameters",
+            {"absolute_threshold": 0.005, "relative_threshold": 0.08, "window_ms": 20},
+        ),
+        ("last_voice_parameter_sha256", "not-a-hash"),
+        ("last_voice_crosscheck_method", "unknown"),
+        ("alignment_model_sha256", "not-a-hash"),
+        ("alignment_frame_samples", float("nan")),
+        ("alignment_transcript", [1]),
+    ],
+)
+@pytest.mark.parametrize("missing", [False, True])
+def test_archive_provenance_is_required_and_typed(
+    archive_bundle, field, value, missing
+):
+    from tools.corpus import label_errors
+
+    item, _, _ = archive_bundle
+    assert label_errors(item) == []
+    if missing:
+        del item[field]
+    else:
+        item[field] = value
+    assert any("archive provenance" in error for error in label_errors(item))

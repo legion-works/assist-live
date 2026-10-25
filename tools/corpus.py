@@ -8,13 +8,15 @@ import tempfile
 import wave
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, TypeGuard
+from typing import Any, BinaryIO, TypeGuard
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 Row = dict[str, Any]
 LICENSES = {"CC0-1.0", "CC-BY-4.0"}
+DEFAULT_LICENSES = Path(__file__).resolve().parents[1] / "tests/data/LICENSES.json"
+MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 HA_INTENTS = frozenset(
     """
     HassTurnOn HassTurnOff HassGetState HassNevermind HassRespond HassBroadcast
@@ -183,11 +185,57 @@ def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
             errors.append("archive source_revision SHA-256")
         if row.get("audio_path") != f"sha256/{digest}.wav":
             errors.append("archive audio_path content hash")
+        parameters = row.get("last_voice_parameters")
+        frame_samples = row.get("alignment_frame_samples")
+        transcript_tokens = row.get("alignment_transcript")
+        if (
+            row.get("last_voice_method") != "rms-10ms-max-0.005-0.08peak"
+            or row.get("last_voice_crosscheck_method")
+            != "torchaudio-2.7.1-MMS_FA-CTC-with-known-transcript"
+            or not isinstance(parameters, dict)
+            or set(parameters)
+            != {"absolute_threshold", "relative_threshold", "window_ms"}
+            or any(type(value) not in (int, float) for value in parameters.values())
+            or parameters
+            != {
+                "absolute_threshold": 0.005,
+                "relative_threshold": 0.08,
+                "window_ms": 10,
+            }
+            or not all(
+                isinstance(row.get(key), str)
+                and re.fullmatch(r"[0-9a-f]{64}", row[key])
+                for key in ("last_voice_parameter_sha256", "alignment_model_sha256")
+            )
+            or not isinstance(frame_samples, (int, float))
+            or isinstance(frame_samples, bool)
+            or not math.isfinite(frame_samples)
+            or frame_samples <= 0
+            or not isinstance(transcript_tokens, list)
+            or not transcript_tokens
+            or not all(
+                isinstance(token, str) and re.fullmatch(r"[a-z]+(?:'[a-z]+)*", token)
+                for token in transcript_tokens
+            )
+        ):
+            errors.append("archive provenance fields")
     rate, last = row.get("sample_rate"), row.get("last_voice_sample")
     if not integer(rate) or rate <= 0:
         errors.append("sample_rate")
     if not integer(last) or last < 0:
         errors.append("last_voice_sample")
+    annotation = row.get("last_voice_annotation")
+    if annotation not in ("automatic", "manual"):
+        errors.append("last_voice_annotation")
+    if annotation == "automatic" and (
+        not text(row.get("last_voice_method"))
+        or not text(row.get("last_voice_crosscheck_method"))
+        or not isinstance(row.get("last_voice_parameters"), dict)
+        or not row["last_voice_parameters"]
+        or not isinstance(row.get("last_voice_parameter_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", row["last_voice_parameter_sha256"])
+    ):
+        errors.append("automatic method fields")
     if "aligned_end_sample" in row:
         aligned = row["aligned_end_sample"]
         confidence = row.get("alignment_confidence")
@@ -207,7 +255,11 @@ def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
             errors.append("boundary review fields")
         else:
             reasons = boundary_review_reasons(
-                last,
+                aligned + row["energy_minus_aligned_samples"]
+                if annotation == "manual"
+                and integer(aligned)
+                and integer(row.get("energy_minus_aligned_samples"))
+                else last,
                 aligned,
                 rate,
                 alignment_confidence=confidence,
@@ -340,6 +392,51 @@ def check_records(rows: list[Row], licenses: object, consent: object) -> list[st
         available: list[str] = []
     else:
         available = licenses["licenses"]
+    sources = licenses.get("sources", []) if isinstance(licenses, dict) else []
+    if not isinstance(sources, list):
+        failures.append("source records shape")
+        sources = []
+    source_index = {}
+    for record in sources:
+        if (
+            not isinstance(record, dict)
+            or not all(
+                text(record.get(key))
+                for key in (
+                    "source",
+                    "license_member",
+                    "license_text",
+                    "credit",
+                    "consent_quote",
+                )
+            )
+            or record.get("license") not in available
+            or not public_source(record.get("archive_url"))
+            or not public_source(record.get("consent_source"))
+            or not all(
+                isinstance(record.get(key), str) and re.fullmatch(pattern, record[key])
+                for key, pattern in (
+                    ("archive_sha256", r"[0-9a-f]{64}"),
+                    ("archive_md5", r"[0-9a-f]{32}"),
+                    ("license_sha256", r"[0-9a-f]{64}"),
+                )
+            )
+            or not integer(record.get("archive_size"))
+            or record["archive_size"] <= 0
+            or PurePosixPath(record["license_member"]).is_absolute()
+            or "\\" in record["license_member"]
+            or any(
+                part in ("", ".", "..") for part in record["license_member"].split("/")
+            )
+            or hashlib.sha256(record["license_text"].encode()).hexdigest()
+            != record["license_sha256"]
+        ):
+            failures.append("source record fields")
+            continue
+        key = record["archive_url"], record["archive_sha256"]
+        if key in source_index:
+            failures.append("duplicate source record")
+        source_index[key] = record
     index = {}
     if not isinstance(consent, list):
         failures.append("consent records shape")
@@ -366,6 +463,13 @@ def check_records(rows: list[Row], licenses: object, consent: object) -> list[st
         if item.get("license") not in available:
             failures.append(f"row {number} license records missing license")
         source = item.get("source_uri")
+        archive = archive_source(source)
+        if archive is not None:
+            record = source_index.get((archive[0], item.get("source_revision")))
+            if record is None or record["license"] != item.get("license"):
+                failures.append(
+                    f"row {number} source record missing or license mismatch"
+                )
         if isinstance(source, str) and source.startswith("consent:"):
             identifier = item.get("consent_id")
             record = index.get(identifier) if isinstance(identifier, str) else None
@@ -388,10 +492,37 @@ def freeze_manifest(inputs: dict[str, Path], rows: list[Row]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def fetch(rows: list[Row], root: Path, *, cache: Path | None = None) -> list[str]:
+def copy_limited(source: BinaryIO, output: BinaryIO, limit: int) -> None:
+    total = 0
+    while chunk := source.read(min(1024 * 1024, limit - total + 1)):
+        total += len(chunk)
+        if total > limit:
+            raise ValueError("download size cap")
+        output.write(chunk)
+
+
+def fetch(
+    rows: list[Row],
+    root: Path,
+    *,
+    cache: Path | None = None,
+    max_download_bytes: int = MAX_DOWNLOAD_BYTES,
+    license_path: Path | None = None,
+) -> list[str]:
     failures = validate_rows(rows)
     if failures:
         return failures
+    if max_download_bytes <= 0:
+        return ["download size cap must be positive"]
+    try:
+        licenses = json.loads(
+            (license_path or DEFAULT_LICENSES).read_text(encoding="utf-8")
+        )
+    except OSError, ValueError:
+        return ["source records input"]
+    source_failures = check_records([], licenses, [])
+    if source_failures:
+        return source_failures
     if cache is None:
         cache = Path(
             os.environ.get(
@@ -428,8 +559,7 @@ def fetch(rows: list[Row], root: Path, *, cache: Path | None = None) -> list[str
                                 if not public_source(response.geturl()):
                                     failures.append(f"row {number} source_uri redirect")
                                     continue
-                                while chunk := response.read(1024 * 1024):
-                                    temporary.write(chunk)
+                                copy_limited(response, temporary, max_download_bytes)
                             temporary.seek(0)
                             digest = hashlib.file_digest(
                                 temporary, "sha256"
@@ -448,6 +578,34 @@ def fetch(rows: list[Row], root: Path, *, cache: Path | None = None) -> list[str
                         continue
                     verified.add(archive_path)
                 with zipfile.ZipFile(archive_path) as bundle:
+                    record = next(
+                        (
+                            record
+                            for record in licenses.get("sources", [])
+                            if record["archive_url"] == url
+                            and record["archive_sha256"] == item["source_revision"]
+                        ),
+                        None,
+                    )
+                    if record is None or record["license"] != item["license"]:
+                        failures.append(
+                            f"row {number} archive source record missing "
+                            "or hash mismatch"
+                        )
+                        continue
+                    license_members = [
+                        entry
+                        for entry in bundle.infolist()
+                        if entry.filename == record["license_member"]
+                    ]
+                    if (
+                        len(license_members) != 1
+                        or license_members[0].file_size > 1024 * 1024
+                        or hashlib.sha256(bundle.read(license_members[0])).hexdigest()
+                        != record["license_sha256"]
+                    ):
+                        failures.append(f"row {number} license member hash mismatch")
+                        continue
                     members = [
                         entry for entry in bundle.infolist() if entry.filename == member
                     ]
@@ -462,13 +620,18 @@ def fetch(rows: list[Row], root: Path, *, cache: Path | None = None) -> list[str
                     if not public_source(response.geturl()):
                         failures.append(f"row {number} source_uri redirect")
                         continue
-                    data = response.read()
+                    with tempfile.TemporaryFile() as temporary:
+                        copy_limited(response, temporary, max_download_bytes)
+                        temporary.seek(0)
+                        data = temporary.read()
             if hashlib.sha256(data).hexdigest() != item["audio_sha256"]:
                 failures.append(f"row {number} fetched audio hash mismatch")
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        except ValueError, RuntimeError:
+        except ValueError as error:
+            failures.append(f"row {number} {error}")
+        except RuntimeError:
             failures.append(f"row {number} audio_path")
         except OSError, URLError:
             failures.append(f"row {number} fetch input")
@@ -510,6 +673,10 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     fetch_parser = commands.add_parser("fetch")
     fetch_parser.add_argument("--cache", type=Path)
+    fetch_parser.add_argument(
+        "--max-download-bytes", type=int, default=MAX_DOWNLOAD_BYTES
+    )
+    fetch_parser.add_argument("--licenses", type=Path, default=DEFAULT_LICENSES)
     check_parser = commands.add_parser("check")
     for command in (fetch_parser, check_parser):
         command.add_argument("--labels", required=True, type=Path)
@@ -531,7 +698,15 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = read_rows(args.labels, "labels")
     if args.command == "fetch":
-        failures.extend(fetch(rows, args.audio_root, cache=args.cache))
+        failures.extend(
+            fetch(
+                rows,
+                args.audio_root,
+                cache=args.cache,
+                license_path=args.licenses,
+                max_download_bytes=args.max_download_bytes,
+            )
+        )
         success = ["PASS fetched locators (hashes checked)"]
     else:
         synthetic = read_rows(args.synthetic, "synthetic")
