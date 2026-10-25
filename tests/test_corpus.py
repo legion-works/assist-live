@@ -5,6 +5,7 @@ import struct
 import subprocess
 import sys
 import wave
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -411,3 +412,270 @@ def test_clopper_pearson_pause_arithmetic():
     assert clopper_pearson(50, 100)[0] == pytest.approx(0.398321, abs=0.000001)
     with pytest.raises(ValueError):
         clopper_pearson(1, 0)
+
+
+@pytest.fixture
+def archive_bundle(tmp_path, monkeypatch):
+    from tools import corpus
+
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as stream:
+        stream.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        stream.writeframes(b"\x00\x00" * 16000)
+    data = wav.getvalue()
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("test-real/clip.wav", data)
+    payload = archive.getvalue()
+    item = row(group="replay")
+    item.update(
+        source_uri="zenodo:4662102/timers-and-such-real.zip#test-real/clip.wav",
+        source_revision=hashlib.sha256(payload).hexdigest(),
+        consent_id=None,
+        audio_sha256=hashlib.sha256(data).hexdigest(),
+        audio_path=f"sha256/{hashlib.sha256(data).hexdigest()}.wav",
+    )
+
+    class Response(io.BytesIO):
+        def geturl(self):
+            return "https://zenodo.org/api/records/4662102/files/timers-and-such-real.zip/content"
+
+    monkeypatch.setattr(corpus, "urlopen", lambda url, timeout: Response(payload))
+    return item, payload, data
+
+
+def test_fetch_archive_member_and_reuse_verified_cache(
+    tmp_path, monkeypatch, archive_bundle
+):
+    from tools import corpus
+
+    item, _, data = archive_bundle
+    cache = tmp_path / "cache"
+    assert corpus.fetch([item], tmp_path / "audio", cache=cache) == []
+    assert (tmp_path / "audio" / item["audio_path"]).read_bytes() == data
+    monkeypatch.setattr(
+        corpus, "urlopen", lambda *a, **k: pytest.fail("network reused")
+    )
+    assert corpus.fetch([item], tmp_path / "second", cache=cache) == []
+    assert (tmp_path / "second" / item["audio_path"]).read_bytes() == data
+
+
+@pytest.mark.parametrize("change", ["archive", "member", "cache"])
+def test_archive_hashes_checked_before_member_write(tmp_path, archive_bundle, change):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    cache = tmp_path / "cache"
+    if change == "archive":
+        item["source_revision"] = "0" * 64
+    elif change == "member":
+        item["audio_sha256"] = "0" * 64
+        item["audio_path"] = f"sha256/{'0' * 64}.wav"
+    else:
+        cache.mkdir()
+        (cache / f"{item['source_revision']}.zip").write_bytes(b"corrupted cache")
+    failures = corpus.fetch([item], tmp_path / "audio", cache=cache)
+    assert any("hash mismatch" in failure for failure in failures)
+    assert not (tmp_path / "audio" / item["audio_path"]).exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_revision", "not-a-hash"),
+        ("source_uri", "zenodo:4662102/timers-and-such-real.zip#../clip.wav"),
+        ("source_uri", "zenodo:4662102/timers-and-such-real.zip#/clip.wav"),
+        ("source_uri", "zenodo:4662102/timers-and-such-real.zip#test-real/missing.wav"),
+        ("audio_path", "sha256/not-the-content-hash.wav"),
+    ],
+)
+def test_archive_locator_rejections(tmp_path, archive_bundle, field, value):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    item[field] = value
+    if "missing.wav" not in value:
+        assert corpus.validate_rows([item])
+    assert corpus.fetch([item], tmp_path / "audio", cache=tmp_path / "cache")
+    assert not (tmp_path / "audio").exists()
+
+
+def test_unknown_intent_name_is_rejected():
+    from tools.corpus import label_errors
+
+    item = row()
+    item["intent"] = {"name": "SetTimer", "slots": {"minutes": 5}}
+    assert "intent" in label_errors(item)
+    item["intent"]["name"] = "HassStartTimer"
+    assert "intent" not in label_errors(item)
+
+
+@pytest.mark.parametrize("channels,rate", [(2, 16000), (1, 8000)])
+def test_audio_rejects_non_mono_or_non_16khz(tmp_path, channels, rate):
+    from tools.corpus import check_audio
+
+    item = row(group="replay")
+    item["sample_rate"] = rate
+    path = tmp_path / item["audio_path"]
+    path.parent.mkdir()
+    with wave.open(str(path), "wb") as wav:
+        wav.setparams((channels, 2, rate, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\x00\x00" * 16000 * channels)
+    item["audio_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert any("16 kHz mono" in failure for failure in check_audio([item], tmp_path))
+
+
+def test_replay_only_reports_pass_counts_but_refuses_freeze(bundle):
+    root, rows = bundle
+    write_labels(root / "labels.jsonl", [r for r in rows if r["set"] == "replay"])
+    freeze = root / "no-freeze.sha256"
+    result = run_cli(root, "--freeze", str(freeze))
+    assert result.returncode == 1
+    assert "PASS held_out replay count 200 speakers 10" in result.stdout
+    assert "PASS tuning replay count 50 speakers 10" in result.stdout
+    assert "FAIL held_out pause count 0 < 300" in result.stdout
+    assert "FAIL tuning prefix count 0 < 30" in result.stdout
+    assert not freeze.exists()
+
+
+def test_archive_cache_must_stay_outside_git(tmp_path, archive_bundle):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / ".git").write_text("gitdir: fixture")
+    failures = corpus.fetch([item], tmp_path / "audio", cache=repository / "cache")
+    assert any("outside Git" in failure for failure in failures)
+    assert not (repository / "cache").exists()
+
+
+def test_archive_cache_symlink_cannot_hide_git_parent(tmp_path, archive_bundle):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / ".git").mkdir()
+    hidden = repository / "nested"
+    hidden.mkdir()
+    cache = tmp_path / "cache"
+    cache.symlink_to(hidden, target_is_directory=True)
+    failures = corpus.fetch([item], tmp_path / "audio", cache=cache)
+    assert any("outside Git" in failure for failure in failures)
+    assert list(hidden.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["invalid", "duplicate", "oversized"])
+def test_archive_rejects_invalid_or_unsafe_members(tmp_path, archive_bundle, kind):
+    from tools import corpus
+
+    item, _, data = archive_bundle
+    payload = io.BytesIO()
+    if kind == "invalid":
+        payload.write(b"not a ZIP")
+    else:
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("test-real/clip.wav", data)
+            if kind == "duplicate":
+                with pytest.warns(UserWarning, match="Duplicate name"):
+                    bundle.writestr("test-real/clip.wav", data)
+            else:
+                bundle.writestr("test-real/large.wav", b"\x00" * (64 * 1024 * 1024 + 1))
+                item["source_uri"] = (
+                    "zenodo:4662102/timers-and-such-real.zip#test-real/large.wav"
+                )
+    item["source_revision"] = hashlib.sha256(payload.getvalue()).hexdigest()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / f"{item['source_revision']}.zip").write_bytes(payload.getvalue())
+    failures = corpus.fetch([item], tmp_path / "audio", cache=cache)
+    expected = "invalid archive member" if kind == "invalid" else "missing or unsafe"
+    assert any(expected in failure for failure in failures)
+    assert not (tmp_path / "audio").exists()
+
+
+def test_archive_rejects_non_https_redirect(tmp_path, monkeypatch, archive_bundle):
+    from tools import corpus
+
+    item, payload, _ = archive_bundle
+
+    class Response(io.BytesIO):
+        def geturl(self):
+            return "http://data.example/archive.zip"
+
+    monkeypatch.setattr(corpus, "urlopen", lambda url, timeout: Response(payload))
+    failures = corpus.fetch([item], tmp_path / "audio", cache=tmp_path / "cache")
+    assert any("source_uri redirect" in failure for failure in failures)
+    assert not (tmp_path / "audio").exists()
+
+
+def test_archive_file_symlink_cannot_write_into_git(tmp_path, archive_bundle):
+    from tools import corpus
+
+    item, _, _ = archive_bundle
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / ".git").mkdir()
+    target = repository / "archive.zip"
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / f"{item['source_revision']}.zip").symlink_to(target)
+    failures = corpus.fetch([item], tmp_path / "audio", cache=cache)
+    assert any("archive cache symlink" in failure for failure in failures)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "offset,score,minimum,matched,aligned,reasons",
+    [
+        (800, 0.5, 0.1, True, 10000, []),
+        (-800, 0.9, 0.9, True, 10000, []),
+        (801, 0.9, 0.9, True, 10000, ["boundary_difference"]),
+        (-801, 0.9, 0.9, True, 10000, ["boundary_difference"]),
+        (0, 0.499, 0.9, True, 10000, ["low_alignment_confidence"]),
+        (0, 0.9, 0.099, True, 10000, ["low_alignment_confidence"]),
+        (0, float("nan"), 0.9, True, 10000, ["low_alignment_confidence"]),
+        (0, 0.9, 0.9, False, 10000, ["transcript_mismatch"]),
+        (0, 0.9, 0.9, True, None, ["alignment_failed"]),
+    ],
+)
+def test_ctc_boundary_flag_rule(offset, score, minimum, matched, aligned, reasons):
+    from tools.corpus import boundary_review_reasons
+
+    assert (
+        boundary_review_reasons(
+            10000 + offset,
+            aligned,
+            16000,
+            alignment_confidence=score,
+            minimum_word_confidence=minimum,
+            transcript_matches=matched,
+        )
+        == reasons
+    )
+
+
+@pytest.mark.parametrize("change", ["flag", "reasons", "confidence", "transcript"])
+def test_imported_ctc_flags_cannot_hide_review_conditions(change):
+    from tools.corpus import label_errors
+
+    item = row(group="replay")
+    item.update(
+        aligned_end_sample=13199,
+        alignment_confidence=0.9,
+        alignment_minimum_word_confidence=0.9,
+        transcript_alignment_status="match",
+        boundary_review_required=True,
+        boundary_review_reasons=["boundary_difference"],
+    )
+    assert label_errors(item) == []
+    if change == "flag":
+        item["boundary_review_required"] = False
+    elif change == "reasons":
+        item["boundary_review_reasons"] = []
+    elif change == "confidence":
+        item["alignment_confidence"] = 0.49
+    else:
+        item["transcript_alignment_status"] = "mismatch"
+    assert any("boundary review" in failure for failure in label_errors(item))

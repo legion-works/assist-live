@@ -1376,3 +1376,193 @@ M13 source reset: 1 passed
 ```
 
 After the change, `uv run --locked pytest tests/test_ci.py tests/test_public_tree.py -q` gave `84 passed`.
+
+## Timer replay import
+
+Date: 2026-10-25.
+
+The [corpus contract](testing/corpus.md) records the source URL, archive SHA-256, license text location, selection rule, and automatic boundary methods.
+The source is Timers and Such v1.0, Zenodo record `4662102`, with human voice only.
+The internal `LICENSE` starts with `CC0 1.0 Universal`.
+The archive SHA-256 is `c92772c830109a6d685b2106fa3f28fc7b1184bc74722045282ed7efb0cf135a`.
+
+The import kept 200 held-out replay rows and 50 tuning replay rows.
+The held-out partition has 30 nominal sessions. The tuning partition has 33 other nominal sessions.
+Recording IDs and complete audio hashes do not overlap.
+All 250 WAV headers report mono 16 kHz, 16-bit PCM.
+The source CSV supplies the transcript and the timer slots for `HassStartTimer`.
+
+The source session IDs do not prove individual speaker identity.
+The source test selection used age, gender, and fluency combinations, with truthful reports as an assumption.
+No corpus freeze or manual boundary approval is in this record.
+
+The difference between the energy method and local Whisper word timestamps is more than 50 ms for 181 recordings.
+The external review sheet contains those recordings and a random sample of 20 recordings.
+The two groups overlap in 12 recordings.
+It contains 189 PNGs and an index. Manual review is pending.
+The pause and prefix sets stay empty until volunteer collection.
+
+### Test-first and unit checks
+
+The command `uv run pytest tests/test_corpus.py -q` gave this result before the archive-source implementation:
+
+```text
+TypeError: fetch() got an unexpected keyword argument 'cache'
+13 failed, 93 passed in 4.50s
+```
+
+More tests showed that cache-directory and cache-file symlinks could go into Git repositories.
+The last corpus test command gave:
+
+```text
+113 passed in 8.33s
+```
+
+Thirteen temporary code mutations each caused a test failure.
+These checks include archive and member hashes, source paths, cache paths, HTTPS redirects, WAV format, and intent names.
+The synthetic ZIP fixtures use no network or external command.
+No CI dependency changed.
+
+### Imported audio checks
+
+The audio and archive cache stay external to Git.
+The commands use `CORPUS_AUDIO` and `CORPUS_CACHE` for those locations:
+
+```sh
+uv run python tools/corpus.py fetch --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO"
+uv run python tools/corpus.py check --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --synthetic tests/data/synthetic.jsonl --licenses tests/data/LICENSES.json --consent tests/data/consent-index.json
+```
+
+```text
+PASS fetched locators (hashes checked)
+PASS held_out replay count 200 speakers 30
+PASS tuning replay count 50 speakers 33
+FAIL held_out pause count 0 < 300
+FAIL held_out pause speakers 0 < 10
+FAIL held_out prefix count 0 < 30
+FAIL tuning pause count 0 < 100
+FAIL tuning prefix count 0 < 30
+```
+
+The check exits with status 1 because of those five collection failures.
+One more check with `--freeze` gave the same failures and wrote no output.
+The committed `corpus.sha256` stayed unchanged. It does not pin the imported rows.
+
+One more check independently compared all selected archive bytes, CSV transcripts, slot values, and WAV headers with the imported rows.
+It recalculated each RMS endpoint with scalar arithmetic and checked each ASR endpoint and review flag.
+It checked the PNG signatures and the index coverage.
+The archive-member fetch also gave `PASS` with network access disabled and a new external audio root.
+
+### Repository and HA checks
+
+The command `PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check` gave:
+
+```text
+32 files already formatted
+All checks passed!
+Success: no issues found in 9 source files
+242 passed in 9.53s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=10
+PASS public data matches=0
+```
+
+The two Python 3.14.2 HA runs used the pinned optional-component packages from the CI contract:
+
+```sh
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.1 --with pytest-homeassistant-custom-component==0.13.372 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.3 --with pytest-homeassistant-custom-component==0.13.374 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+```
+
+```text
+HA 2026.10.1: 242 passed in 8.95s
+HA 2026.10.3: 242 passed in 8.30s
+```
+
+The self-scan counts were `denylist=0 private_ip=0 audio_files=0 absolute_home=1`.
+The literal home-path result is a public URL test vector, not a local filesystem path.
+The authoritative history and public-data checks gave the three PASS lines above.
+The ASD-STE100 checker gave 0 findings for the corpus instructions.
+
+## CTC boundary checks
+
+Date: 2026-10-25.
+
+The automatic boundary cross-check uses known-transcript `MMS_FA` CTC output from `torchaudio==2.7.1+cpu` and `torch==2.7.1+cpu`.
+The aligner ran on CPU in an external Python `3.12.13` environment.
+The [corpus instructions](testing/corpus.md#automatic-voice-boundaries) give the commands, model SHA-256, parameters, and sample conversion.
+No aligner dependency or model weights are in the repository.
+
+All 250 known transcripts gave CTC results.
+The energy-minus-aligned median is `-77.53125 ms`, with p10 `-217.90625 ms`, p90 `69.15 ms`, and maximum `2128.375 ms`.
+The maximum absolute difference is also `2128.375 ms`.
+The paired median of CTC-end minus Whisper-end is `-1.78125 ms`.
+
+The 50 tuning recordings have a median energy-minus-aligned difference of `3.3125 ms`.
+This is below the `10 ms` systematic-bias threshold, so the energy parameters stay unchanged.
+The held-out median is `-87.0625 ms`. No held-out statistic selected the energy parameters.
+The English wav2vec2 CTC alternative gave 46 tuning flags, compared with 39 for `MMS_FA`.
+
+The current rule flags 190 recordings. The prior Whisper rule flagged 181 recordings.
+The causes overlap: 178 boundary differences, 64 low-confidence recordings, and 59 possible transcript differences.
+The external review sheet has 195 PNGs with aligned word boundaries, word scores, and the two endpoint markers.
+The same 20 random recordings stay in the sheet, with 15 also in the flagged group.
+
+This result does not decrease manual review work.
+A decision about the endpoint method stays necessary before acceptance.
+The corpus is not frozen.
+
+The command `uv run pytest tests/test_corpus.py -q -k 'ctc_boundary_flag or imported_ctc_flags'` first gave:
+
+```text
+ImportError: cannot import name 'boundary_review_reasons' from 'tools.corpus'
+13 failed, 113 deselected in 0.54s
+```
+
+The full command `uv run pytest tests/test_corpus.py -q` gave:
+
+```text
+126 passed in 5.08s
+```
+
+All 19 code mutations caused a test failure.
+Six mutations test the CTC difference limit, the two confidence limits, transcript mismatch, CTC failure, and flag consistency.
+A check independently recalculated all RMS endpoints and compared all CTC words, sample limits, scores, and flags with the external model output.
+It also checked all source bytes, transcripts, timer slots, PNG signatures, and review coverage.
+
+The corpus command from the instructions gave:
+
+```text
+PASS held_out replay count 200 speakers 30
+PASS tuning replay count 50 speakers 33
+FAIL held_out pause count 0 < 300
+FAIL held_out pause speakers 0 < 10
+FAIL held_out prefix count 0 < 30
+FAIL tuning pause count 0 < 100
+FAIL tuning prefix count 0 < 30
+```
+
+The command with `--freeze` refused to write a manifest. The committed digest stayed unchanged.
+
+The command `PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check` gave:
+
+```text
+32 files already formatted
+All checks passed!
+Success: no issues found in 9 source files
+255 passed in 9.46s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=10
+PASS public data matches=0
+```
+
+The two Python 3.14.2 HA matrix commands from the earlier record gave:
+
+```text
+HA 2026.10.1: 255 passed in 9.12s
+HA 2026.10.3: 255 passed in 8.97s
+```
