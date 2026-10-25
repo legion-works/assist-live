@@ -224,7 +224,8 @@ for(const row of data.rows){
         interval[1]=cursor*1000/row.rate;}],
       ...(row.prefix?[['Use marker as prefix boundary',()=>{
         const interval=state.pause_intervals_ms.at(-1);
-        if(!interval||interval[1]===null)throw Error('Mark the pause first.');
+        if(!interval||!Number.isFinite(interval[1]))
+          throw Error('Mark the pause end first.');
         state.executable_prefix_intervals_ms.push([cursor*1000/row.rate,interval[1]]);
       }]]:[])]){
       const button=document.createElement('button');button.textContent=label;

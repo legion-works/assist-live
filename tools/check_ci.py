@@ -30,7 +30,22 @@ HA_COMPONENT_REQUIREMENTS = [
     "mutagen==1.48.1",
     "pymicro-vad==1.0.1",
     "pyspeex-noise==1.0.2",
+    "assist-live-client @ git+https://github.com/legion-works/assist-live-server@"
+    "8622bf1ac781227e900e98d0a04a6ff9023ad625#subdirectory=client",
 ]
+NODE_VERSION = "22.22.0"
+NODE_SHA256 = "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37"
+
+
+def node_install() -> str:
+    artifact = f"node-v{NODE_VERSION}-linux-x64"
+    return (
+        f"curl -fsSL https://nodejs.org/dist/v{NODE_VERSION}/{artifact}.tar.xz"
+        ' -o "$RUNNER_TEMP/node.tar.xz"\n'
+        f'echo "{NODE_SHA256}  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -\n'
+        'tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"\n'
+        f'echo "$RUNNER_TEMP/node-v{NODE_VERSION}-linux-x64/bin" >> "$GITHUB_PATH"\n'
+    )
 
 
 def check_jobs(path: str | Path) -> set[str]:
@@ -55,6 +70,14 @@ def check_jobs(path: str | Path) -> set[str]:
         if any(step.get("continue-on-error") or "if" in step for step in job["steps"]):
             failures.append(f"step result {name}")
     ha = jobs.get("ha", {})
+    for name in ("unit", "ha"):
+        installs = [
+            step.get("run")
+            for step in jobs.get(name, {}).get("steps", [])
+            if step.get("name") == "Install Node"
+        ]
+        if installs != [node_install()]:
+            failures.append(f"Node install {name}")
     for name in ("lint", "typecheck", "unit", "ha"):
         job_steps = jobs.get(name, {}).get("steps", [])
         compilers = [

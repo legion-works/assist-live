@@ -278,9 +278,57 @@ def test_bootstrap_accepts_exact_release_requirement(tmp_path):
     )
     path = root / "custom_components/assist_live/manifest.json"
     manifest = json.loads(path.read_text())
-    manifest["requirements"] = ["assist-live-client==1.2.3"]
+    manifest["requirements"] = ["assist-live-client==0.0.0"]
     path.write_text(json.dumps(manifest))
     assert check_bootstrap(root) == []
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        [],
+        ["assist-live-client"],
+        ["assist-live-client>=0.0.0"],
+        ["assist-live-client==1.2.3"],
+        ["./client"],
+        ["git+https://example.com/client"],
+        ["assist-live-client==0.0.0", "extra==1.0.0"],
+    ],
+)
+def test_runtime_requires_only_exact_client(bootstrap_copy, requirements):
+    from tools.check_bootstrap import check_bootstrap
+
+    path = bootstrap_copy / "custom_components/assist_live/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["requirements"] = requirements
+    path.write_text(json.dumps(manifest))
+    assert "manifest requirements" in check_bootstrap(bootstrap_copy)
+
+
+@pytest.mark.parametrize("change", ["dependencies", "satellite", "error", "issues"])
+def test_runtime_metadata_rules(bootstrap_copy, change):
+    from tools.check_bootstrap import check_bootstrap
+
+    package = bootstrap_copy / "custom_components/assist_live"
+    if change == "dependencies":
+        path = package / "manifest.json"
+        value = json.loads(path.read_text())
+        value["dependencies"] = []
+        path.write_text(json.dumps(value))
+        expected = "runtime dependencies"
+    else:
+        for name in ("strings.json", "translations/en.json"):
+            path = package / name
+            value = json.loads(path.read_text())
+            if change == "satellite":
+                value["config"]["step"].pop("satellite")
+            elif change == "error":
+                value["config"]["error"].pop("fallback_loop")
+            else:
+                value.pop("issues")
+            path.write_text(json.dumps(value))
+        expected = "runtime flow strings"
+    assert expected in check_bootstrap(bootstrap_copy)
 
 
 @pytest.fixture
@@ -309,6 +357,7 @@ def test_shipped_hassfest_metadata_shape():
         "name",
         "codeowners",
         "config_flow",
+        "dependencies",
         "documentation",
         "integration_type",
         "iot_class",

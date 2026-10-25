@@ -1764,3 +1764,132 @@ The ASD-STE100 check gave 0 findings for the changed Markdown files.
 The privacy self-scan found 0 private terms, 0 private IPv4 addresses, and 0 audio files.
 Its one literal home-path result is the unchanged public URL test vector.
 The public-tree check gave `PASS public data matches=0`.
+
+## Per-satellite voice forwarding
+
+Date: 2026-10-25 (UTC).
+
+The offline HA tests use two anonymous satellite keys.
+They check turn separation, announcements, follow-ups, restart markers, fallback metadata, and the selected pipeline voice.
+Two input-cancellation tests check that a stopped server sender does not remove future audio or text.
+The runtime test adds the entity pair to the selected device and saves a stable pipeline ID.
+
+The first forwarding test run gave this result before the runtime modules were available:
+
+```text
+ModuleNotFoundError: No module named 'custom_components.assist_live.ledger'
+1 failed, 14 errors
+```
+
+Commands from the repository root:
+
+```sh
+uv run --locked pytest tests/test_config_flow.py tests/test_stt_forward.py tests/test_tts_forward.py tests/test_ledger.py tests/test_repairs.py tests/test_tts_lookup_contract.py -q
+PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+task package-check
+task hassfest
+actionlint
+```
+
+Results:
+
+```text
+26 passed in 0.45s
+48 files already formatted
+All checks passed!
+Success: no issues found in 15 source files
+419 passed in 11.03s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=19
+PASS public data matches=0
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+Integrations: 1
+Invalid integrations: 0
+```
+
+`actionlint` gave exit code 0 with no output.
+Hassfest accepts the unreleased client pin. This is not a client release or an installation claim.
+
+### HA version matrix
+
+Each command uses Python 3.14.2.
+The first matrix commands used client source `051bc1bb1dabf0fdaa76fee0736b97128b265ab3`.
+
+```sh
+task ha-minimum
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.3 --with pytest-homeassistant-custom-component==0.13.374 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 --with 'assist-live-client @ git+https://github.com/legion-works/assist-live-server@051bc1bb1dabf0fdaa76fee0736b97128b265ab3#subdirectory=client' pytest tests/ -q
+```
+
+The HA 2026.10.3 command gave `419 passed in 10.94s`.
+The TTS lookup signature test runs in that suite.
+
+The minimum command cannot resolve its dependencies:
+
+```text
+error: No solution found when resolving `--with` dependencies
+cause: Because homeassistant==2026.10.1 depends on aiohttp==3.14.4 and assist-live-client==0.0.0 depends on aiohttp==3.14.5, we can conclude that assist-live-client==0.0.0 and homeassistant==2026.10.1 are incompatible.
+And because only assist-live-client==0.0.0 is available, we can conclude that all versions of assist-live-client and homeassistant==2026.10.1 are incompatible.
+And because you require homeassistant==2026.10.1 and assist-live-client, we can conclude that your requirements are unsatisfiable.
+```
+
+The minimum-version suite did not run with that client source.
+The checks did not override the dependency conflict.
+
+Client source `8622bf1ac781227e900e98d0a04a6ff9023ad625` declares `aiohttp>=3.14.4,<4`.
+The four Git source pins and the lock use that commit.
+The manifest keeps `assist-live-client==0.0.0`.
+The same matrix commands, with that new client source, gave these results:
+
+```text
+HA 2026.10.1: 421 passed in 11.42s
+HA 2026.10.3: 421 passed in 12.01s
+```
+
+Each suite includes the TTS lookup signature contract.
+
+### Workflow and corpus guards
+
+The mandatory CI `secrets` task runs the public-tree history check for this repository.
+Its Gitleaks installation uses the same checked 8.30.0 archive as the test tasks.
+The two test tasks install Node 22.22.0 for the page callback test.
+The CI checker compares each installation to one version and checksum template.
+The page test gives a named assertion if Node is missing or its version does not start with 22.
+
+The corpus checker names a missing interval field as `missing`.
+The page does not accept a prefix boundary without a finite pause end.
+The copied server policy test states its sync rule.
+
+Twenty-one isolated mutations gave test failures, with no collection errors.
+They include closure on `idle`, cross-satellite closure, a consumed TTS generator, voice removal, and external VAD.
+They also include removal of the public-tree step, weak manifest pins, obsolete flow strings, and installation checksum changes.
+The production files did not change during these probes.
+
+The privacy self-scan gave 0 private terms, 0 private IPv4 addresses, and 0 audio files.
+Its one literal home-path result is the unchanged public URL test vector.
+The public-tree checker gave `PASS public data matches=0`.
+
+Device trials have not run. No test hardware is available at this time.
+Sentence-boundary continuation is not available through the current client API.
+
+### Last local checks
+
+The full forwarding command, `task check`, and `task package-check` gave these results with the compatible client source:
+
+```text
+28 passed in 0.52s
+48 files already formatted
+All checks passed!
+Success: no issues found in 15 source files
+421 passed in 12.15s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=19
+PASS public data matches=0
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+```
+
+Hassfest gave `Invalid integrations: 0`.
+`actionlint` gave exit code 0 with no output.

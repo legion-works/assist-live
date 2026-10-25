@@ -133,6 +133,9 @@ def interval_errors(row: Row, duration_ms: float | None = None) -> list[str]:
         ("pause_intervals_ms", row.get("set") == "pause"),
         ("executable_prefix_intervals_ms", row.get("executable_prefix") is True),
     ):
+        if required and field not in row:
+            errors.append(f"{field} missing")
+            continue
         intervals = row.get(field, [])
         if (
             not isinstance(intervals, list)

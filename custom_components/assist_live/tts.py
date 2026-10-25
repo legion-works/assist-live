@@ -1,0 +1,211 @@
+import asyncio
+import struct
+from collections.abc import AsyncGenerator
+from contextlib import suppress
+
+from assist_live_client import AssistLiveClient
+from assist_live_client.protocol import ProtocolError
+from homeassistant.components import tts
+from homeassistant.components.tts.entity import TTSAudioRequest
+from homeassistant.components.tts.helper import get_engine_instance
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import DOMAIN
+from .ledger import TurnLedger
+
+
+def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEntity:
+    engine = get_engine_instance(hass, entity_id)
+    if not isinstance(engine, tts.TextToSpeechEntity):
+        raise ValueError("fallback TTS unavailable")
+    return engine
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    fallback = fallback_engine(hass, entry.data["fallback_tts"])
+    entities = []
+    for device, satellite in entry.data["satellites"].items():
+        entity = AssistLiveTTS(
+            satellite, device, runtime.client, runtime.ledger, fallback
+        )
+        if registered := dr.async_get(hass).async_get(device):
+            entity._attr_device_info = dr.DeviceInfo(
+                identifiers=registered.identifiers,
+                connections=registered.connections
+                if isinstance(registered, dr.DeviceEntry)
+                else set(),
+            )
+        runtime.tts[device] = entity
+        entities.append(entity)
+    async_add_entities(entities)
+
+
+class AssistLiveTTS(tts.TextToSpeechEntity):
+    _attr_supported_options = ["voice"]
+
+    def __init__(
+        self,
+        satellite: str,
+        device: str,
+        client: AssistLiveClient,
+        ledger: TurnLedger,
+        fallback: tts.TextToSpeechEntity,
+    ) -> None:
+        self.satellite = satellite
+        self.client = client
+        self.ledger = ledger
+        self.fallback = fallback
+        self._attr_unique_id = f"{satellite}_tts"
+        self._attr_name = f"assist-live {satellite}"
+        self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
+        self._attr_supported_languages = fallback.supported_languages
+        self._attr_default_language = fallback.default_language
+
+    @callback
+    def async_get_supported_voices(self, language: str) -> list[tts.Voice] | None:
+        return self.fallback.async_get_supported_voices(language)
+
+    async def async_stream_tts_audio(
+        self, request: TTSAudioRequest
+    ) -> tts.TTSAudioResponse:
+        if request.language not in self.supported_languages:
+            raise HomeAssistantError("fallback TTS language unavailable")
+        turn = self.ledger.open_tts(self.satellite)
+        if self.ledger.save is not None:
+            await self.ledger.save()
+        healthy = await self.client.health(timeout=0.2) and await self.ledger.connect(
+            turn
+        )
+        buffer: list[str] = []
+        changed = asyncio.Condition()
+        done = False
+
+        async def collect() -> None:
+            nonlocal done
+            try:
+                async for part in request.message_gen:
+                    if not buffer:
+                        self.ledger.mark(turn.turn_id, "tts_first_text")
+                    async with changed:
+                        buffer.append(part)
+                        changed.notify_all()
+            finally:
+                async with changed:
+                    done = True
+                    changed.notify_all()
+
+        producer = asyncio.create_task(collect())
+
+        async def cleanup() -> None:
+            producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
+            await self.ledger.flush()
+
+        async def capture() -> AsyncGenerator[str]:
+            offset = 0
+
+            def available() -> bool:
+                return len(buffer) > offset or done
+
+            while True:
+                async with changed:
+                    await changed.wait_for(available)
+                    if len(buffer) == offset:
+                        return
+                    part = buffer[offset]
+                    offset += 1
+                yield part
+
+        async def fresh() -> AsyncGenerator[str]:
+            async for part in capture():
+                yield part
+
+        async def fallback() -> tts.TTSAudioResponse:
+            self.ledger.mark(turn.turn_id, "fallback_used")
+            return await self.fallback.async_stream_tts_audio(
+                TTSAudioRequest(request.language, request.options, fresh())
+            )
+
+        server = (
+            self.client.tts(
+                turn.turn_id, capture(), voice=request.options.get("voice", "")
+            )
+            if healthy
+            else None
+        )
+        first_chunk = None
+        if server is not None:
+            try:
+                first_chunk = await anext(server)
+            except ProtocolError, TimeoutError, StopAsyncIteration:
+                if isinstance(server, AsyncGenerator):
+                    await server.aclose()
+                healthy = False
+            except BaseException:
+                await cleanup()
+                raise
+
+        async def output() -> AsyncGenerator[bytes]:
+            assert server is not None and first_chunk is not None
+            try:
+                self.ledger.mark(turn.turn_id, "tts_first_byte")
+                yield struct.pack(
+                    "<4sI4s4sIHHIIHH4sI",
+                    b"RIFF",
+                    0xFFFFFFFF,
+                    b"WAVE",
+                    b"fmt ",
+                    16,
+                    1,
+                    1,
+                    16000,
+                    32000,
+                    2,
+                    16,
+                    b"data",
+                    0xFFFFFFFF,
+                )
+                yield first_chunk
+                async for chunk in server:
+                    yield chunk
+            except ProtocolError, TimeoutError:
+                self.ledger.mark(turn.turn_id, "tts_failed")
+                full = "".join([part async for part in fresh()])
+                self.hass.bus.async_fire(
+                    "assist_live_tts_failed",
+                    {"satellite": self.satellite, "text": full},
+                )
+                return
+            finally:
+                if isinstance(server, AsyncGenerator):
+                    await server.aclose()
+                await cleanup()
+
+        if not healthy:
+            try:
+                response = await fallback()
+            except BaseException:
+                await cleanup()
+                raise
+
+            async def fallback_output() -> AsyncGenerator[bytes]:
+                first = True
+                try:
+                    async for chunk in response.data_gen:
+                        if first:
+                            self.ledger.mark(turn.turn_id, "tts_first_byte")
+                            first = False
+                        yield chunk
+                finally:
+                    await cleanup()
+
+            return tts.TTSAudioResponse(response.extension, fallback_output())
+        return tts.TTSAudioResponse("wav", output())

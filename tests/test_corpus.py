@@ -20,6 +20,12 @@ def test_small_corpus_is_rejected():
     assert validate_corpus([])
 
 
+def test_missing_interval_has_missing_error():
+    from tools.corpus import interval_errors
+
+    assert "pause_intervals_ms missing" in interval_errors({"set": "pause"})
+
+
 def row(number=0, split="held_out", group="pause"):
     return {
         "id": f"clip-{number:04d}",

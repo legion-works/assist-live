@@ -9,6 +9,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "assist-live-client==0.0.0",
     "gazetteer-matcher==1.1.0",
     "ha-ffmpeg==3.2.2",
     "hassil==3.12.1",
@@ -22,6 +23,9 @@ dev = [
     "PyYAML==6.0.3",
     "types-PyYAML==6.0.12.20260906",
 ]
+
+[tool.uv.sources]
+assist-live-client = { git = "https://github.com/legion-works/assist-live-server", rev = "8622bf1ac781227e900e98d0a04a6ff9023ad625", subdirectory = "client" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -42,6 +46,14 @@ python_version = "3.14"
 strict = true
 files = ["custom_components/assist_live", "tools"]
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["assist_live_client.*", "pymicro_vad", "micro_vad_cpp"]
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pymicro_vad"]
+implicit_reexport = true
 
 [tool.pyright]
 venvPath = "."

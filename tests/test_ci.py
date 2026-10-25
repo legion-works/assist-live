@@ -8,8 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CI_RUN_EXEMPTIONS = {
     "lint": {"Install actionlint", "Check source build compilers"},
     "typecheck": {"Check source build compilers"},
-    "unit": {"Install Gitleaks", "Check source build compilers"},
-    "ha": {"Install Gitleaks", "Check source build compilers", "result"},
+    "unit": {"Install Gitleaks", "Install Node", "Check source build compilers"},
+    "ha": {
+        "Install Gitleaks",
+        "Install Node",
+        "Check source build compilers",
+        "result",
+    },
 }
 
 
@@ -103,6 +108,41 @@ def test_gitleaks_install_precedes_pytest(job_name):
     assert install < pytest_step
 
 
+@pytest.mark.parametrize("job_name", ["unit", "ha"])
+def test_node_install_precedes_ui_test(job_name):
+    from tools.check_ci import node_install
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"][job_name]["steps"]
+    install = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Install Node"
+    )
+    run = steps[install]["run"]
+    assert run == node_install()
+    assert install < next(
+        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
+    )
+
+
+def test_secrets_job_uses_checked_gitleaks_and_public_tree():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["secrets"]["steps"]
+    install = next(
+        step["run"] for step in steps if step.get("name") == "Install Gitleaks"
+    )
+    assert "v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz" in install
+    assert "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e" in install
+    assert "sha256sum -c -" in install
+    assert any(step.get("with", {}).get("fetch-depth") == 0 for step in steps)
+    public = next(
+        step["run"] for step in steps if step.get("name") == "Check public tree"
+    )
+    assert "tools/check_public_tree.py --history --root ." in public
+    assert "PRIVATE_DENYLIST" in public
+    assert "||" not in public
+    assert "continue-on-error" not in workflow["jobs"]["secrets"]
+
+
 @pytest.mark.parametrize(
     "mutation", ["condition", "needs", "skip", "matrix", "ha_requirements", "compiler"]
 )
@@ -173,6 +213,7 @@ def test_packaging_rejects_bad_metadata(tmp_path):
 
     shutil.copytree(ROOT / "custom_components", tmp_path / "custom_components")
     shutil.copy(ROOT / "hacs.json", tmp_path / "hacs.json")
+    shutil.copy(ROOT / "uv.lock", tmp_path / "uv.lock")
     assert check_packaging(tmp_path) == []
     manifest = tmp_path / "custom_components/assist_live/manifest.json"
     data = json.loads(manifest.read_text())
@@ -191,6 +232,44 @@ def test_packaging_reports_invalid_inputs(tmp_path):
     from tools.check_packaging import check_packaging
 
     assert check_packaging(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        [],
+        ["assist-live-client"],
+        ["assist-live-client>=0.0.0"],
+        ["assist-live-client==1.2.3"],
+        ["./client"],
+        ["git+https://example.com/client"],
+        ["assist-live-client==0.0.0", "extra==1.0.0"],
+    ],
+)
+def test_package_requires_locked_client(tmp_path, requirements):
+    import json
+    import shutil
+
+    from tools.check_packaging import check_packaging
+
+    shutil.copytree(ROOT / "custom_components", tmp_path / "custom_components")
+    for name in ("hacs.json", "uv.lock"):
+        shutil.copy(ROOT / name, tmp_path / name)
+    path = tmp_path / "custom_components/assist_live/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["requirements"] = requirements
+    path.write_text(json.dumps(manifest))
+    assert "manifest requirements" in check_packaging(tmp_path)
+
+
+def test_client_requirement_tracks_lock_version(tmp_path):
+    from tools.check_packaging import valid_client_requirement
+
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname="assist-live-client"\nversion="1.2.3"\n'
+    )
+    assert valid_client_requirement(tmp_path, ["assist-live-client==1.2.3"])
+    assert not valid_client_requirement(tmp_path, ["assist-live-client==0.0.0"])
 
 
 def test_ha_plugin_is_active(request):

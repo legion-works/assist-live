@@ -1,14 +1,15 @@
 """Check the experimental integration boundary without Home Assistant."""
 
 import json
-import re
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING or __package__:
+    from .check_packaging import valid_client_requirement
     from .check_public_tree import scan_data
 else:
+    from check_packaging import valid_client_requirement
     from check_public_tree import scan_data
 
 
@@ -91,24 +92,37 @@ def check_bootstrap(root: str | Path) -> list[str]:
             if type(value) is not type(expected) or value != expected:
                 failures.append(f"manifest {field}")
         requirements = manifest.get("requirements")
-        if not (
-            requirements == []
-            or (
-                isinstance(requirements, list)
-                and len(requirements) == 1
-                and isinstance(requirements[0], str)
-                and re.fullmatch(r"assist-live-client==\d+\.\d+\.\d+", requirements[0])
-            )
-        ):
+        if not valid_client_requirement(root, requirements):
             failures.append("manifest requirements")
-        if manifest.get("dependencies", []) != []:
-            failures.append("bootstrap dependencies")
+        if manifest.get("dependencies") != ["assist_pipeline", "stt", "tts"]:
+            failures.append("runtime dependencies")
         strings = json.loads((package / "strings.json").read_text(encoding="utf-8"))
         english = json.loads(
             (package / "translations/en.json").read_text(encoding="utf-8")
         )
-        if strings != english or not strings["config"]["abort"]["bootstrap_only"]:
+        if strings != english:
             failures.append("config flow strings")
+        try:
+            for value in (strings, english):
+                for step in ("user", "satellite"):
+                    for field in ("title", "description", "data"):
+                        if not value["config"]["step"][step][field]:
+                            raise ValueError("empty runtime string")
+                for error in (
+                    "fallback_loop",
+                    "cannot_connect",
+                    "invalid_satellite",
+                    "binding_used",
+                    "connection_limit",
+                ):
+                    if not value["config"]["error"][error]:
+                        raise ValueError("empty runtime error")
+                for issue in ("server_unavailable", "shared_pipeline"):
+                    for field in ("title", "description"):
+                        if not value["issues"][issue][field]:
+                            raise ValueError("empty runtime issue")
+        except KeyError, TypeError, ValueError:
+            failures.append("runtime flow strings")
         for translation in (strings, english):
             steps = translation["config"].get("step")
             user_step = steps.get("user") if isinstance(steps, dict) else None

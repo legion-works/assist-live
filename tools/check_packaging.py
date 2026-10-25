@@ -2,9 +2,21 @@
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
+
+
+def valid_client_requirement(root: Path, requirements: object) -> bool:
+    try:
+        locked = tomllib.loads((root / "uv.lock").read_text())
+        clients = [p for p in locked["package"] if p["name"] == "assist-live-client"]
+        return len(clients) == 1 and requirements == [
+            f"assist-live-client=={clients[0]['version']}"
+        ]
+    except OSError, ValueError, KeyError, TypeError:
+        return False
 
 
 def check_packaging(root: str | Path) -> list[str]:
@@ -49,11 +61,7 @@ def check_packaging(root: str | Path) -> list[str]:
         except InvalidVersion, TypeError:
             failures.append("manifest version")
         requirements = manifest.get("requirements")
-        if not isinstance(requirements, list) or any(
-            not isinstance(item, str)
-            or not re.fullmatch(r"assist-live-client==\d+\.\d+\.\d+", item)
-            for item in requirements
-        ):
+        if not valid_client_requirement(root, requirements):
             failures.append("manifest requirements")
         if hacs.get("name") != "assist-live":
             failures.append("HACS name")

@@ -3,10 +3,11 @@
   "name": "assist-live",
   "codeowners": [],
   "config_flow": true,
+  "dependencies": ["assist_pipeline", "stt", "tts"],
   "documentation": "https://github.com/legion-works/assist-live",
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/legion-works/assist-live/issues",
-  "requirements": [],
+  "requirements": ["assist-live-client==0.0.0"],
   "version": "0.0.0"
 }

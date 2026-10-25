@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import wave
@@ -108,6 +109,39 @@ def test_build_embeds_audio_without_network_and_escapes_transcript(
     assert "http://" not in page and "https://" not in page
     assert "<script> command" not in page
     assert "canvas" in page and "localStorage" in page
+
+
+@pytest.mark.parametrize("interval", [None, [100], [100, None], [100, 700]])
+def test_prefix_button_requires_finished_pause(interval):
+    from tools.annotate_corpus import PAGE
+
+    assert shutil.which("node"), "Node 22 is required for the prefix button test"
+    version = subprocess.run(
+        ["node", "--version"], capture_output=True, text=True, check=True
+    )
+    assert version.stdout.startswith("v22."), (
+        "Node 22 is required for the prefix button test"
+    )
+
+    action = PAGE.split("['Use marker as prefix boundary',()=>{", 1)[1].split(
+        "}]]:[])", 1
+    )[0]
+    program = (
+        "const state="
+        + json.dumps(
+            {
+                "pause_intervals_ms": [] if interval is None else [interval],
+                "executable_prefix_intervals_ms": [],
+            }
+        )
+        + "; const cursor=200; const row={rate:1000};\n"
+    )
+    program += "try {" + action + "} catch(e) {}\n"
+    program += "console.log(JSON.stringify(state.executable_prefix_intervals_ms));"
+    result = subprocess.run(
+        ["node", "-e", program], capture_output=True, text=True, check=True
+    )
+    assert json.loads(result.stdout) == ([[200, 700]] if interval == [100, 700] else [])
 
 
 def test_import_changes_only_manual_fields_and_is_idempotent(
@@ -455,8 +489,8 @@ def test_import_produces_synthetic_policy_rows(annotation_bundle, tmp_path, pref
 
 
 def server_policy_labels(row, duration_ms):
-    # Source: legion-works/assist-live-server tools/tune_profiles.py,
-    # commit 6f8b3b07195040d0a8d43ee4123e5f8f83b96283, speaker_kind/policy_labels.
+    # Source: assist-live-server tools/tune_profiles.py policy_labels.
+    # Keep these copied consumer rules in sync with that function.
     import math
 
     speaker = row.get("speaker_id", "")

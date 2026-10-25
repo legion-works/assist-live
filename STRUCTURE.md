@@ -3,6 +3,11 @@
 | Path | Purpose |
 |---|---|
 | `custom_components/assist_live/` | HA package, config flow, manifest, and English strings |
+| `custom_components/assist_live/stt.py`, `tts.py` | Voice forwarding and standard-engine fallback |
+| `custom_components/assist_live/ledger.py`, `repairs.py` | Per-satellite turns and repair issues |
+| `docs/setup.md` | Satellite bindings, pipelines, voices, and fallback limits |
+| `tests/test_stt_forward.py`, `test_tts_forward.py`, `test_ledger.py` | Forwarding, cancellation, playback separation, and turn rules |
+| `tests/test_config_flow.py`, `test_repairs.py`, `test_tts_lookup_contract.py` | HA runtime setup, repair issues, and TTS lookup contract |
 | `hacs.json` | HACS package metadata |
 | `docs/design.md` | Public design and phase gates |
 | `docs/research/contracts.md` | Upstream contracts and prototype limits |

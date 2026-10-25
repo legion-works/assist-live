@@ -2,12 +2,42 @@
   "config": {
     "step": {
       "user": {
-        "title": "Experimental package",
-        "description": "This package has no runtime setup. No release is available."
+        "title": "assist-live server and fallback engines",
+        "description": "The project is experimental. Select standard fallback engines. A different pipeline is necessary for each satellite.",
+        "data": {
+          "url": "Server URL",
+          "token": "Access token",
+          "fallback_stt": "Fallback STT entity",
+          "fallback_tts": "Fallback TTS entity"
+        }
+      },
+      "satellite": {
+        "title": "Satellite binding",
+        "description": "Select a provisioned anonymous key for this device. Use a different key and pipeline for each device. See the setup instructions.",
+        "data": {
+          "device": "Satellite device",
+          "satellite": "Provisioned satellite key",
+          "pipeline_select": "Satellite pipeline selector",
+          "add_another": "Add another satellite"
+        }
       }
     },
-    "abort": {
-      "bootstrap_only": "This experimental package has no runtime setup. No release is available."
+    "error": {
+      "fallback_loop": "An assist-live entity cannot be a fallback.",
+      "cannot_connect": "Cannot read provisioned bindings from the server.",
+      "invalid_satellite": "Select a provisioned key and the pipeline selector of a satellite device.",
+      "binding_used": "This device or key is already in use.",
+      "connection_limit": "Use no more than five satellites for each server token."
+    }
+  },
+  "issues": {
+    "server_unavailable": {
+      "title": "assist-live server unavailable",
+      "description": "Check the server URL, access token, and server status. Standard engines supply fallback speech while the server is unavailable."
+    },
+    "shared_pipeline": {
+      "title": "Satellites share an assist-live pipeline",
+      "description": "Select a different assist-live pipeline for each satellite. Shared pipelines cannot identify the correct satellite for each turn. See the setup instructions."
     }
   }
 }

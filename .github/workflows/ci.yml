@@ -47,6 +47,12 @@ jobs:
       - uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           version: "0.13.1"
+      - name: Install Node
+        run: |
+          curl -fsSL https://nodejs.org/dist/v22.22.0/node-v22.22.0-linux-x64.tar.xz -o "$RUNNER_TEMP/node.tar.xz"
+          echo "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/node-v22.22.0-linux-x64/bin" >> "$GITHUB_PATH"
       # The public-tree checker tests run Gitleaks.
       - name: Install Gitleaks
         run: |
@@ -82,6 +88,12 @@ jobs:
       - uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           version: "0.13.1"
+      - name: Install Node
+        run: |
+          curl -fsSL https://nodejs.org/dist/v22.22.0/node-v22.22.0-linux-x64.tar.xz -o "$RUNNER_TEMP/node.tar.xz"
+          echo "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/node-v22.22.0-linux-x64/bin" >> "$GITHUB_PATH"
       # The public-tree checker tests run Gitleaks.
       - name: Install Gitleaks
         run: |
@@ -108,6 +120,7 @@ jobs:
           --with "mutagen==1.48.1"
           --with "pymicro-vad==1.0.1"
           --with "pyspeex-noise==1.0.2"
+          --with "assist-live-client @ git+https://github.com/legion-works/assist-live-server@8622bf1ac781227e900e98d0a04a6ff9023ad625#subdirectory=client"
           pytest tests/ -q
       - id: result
         env:
@@ -136,10 +149,29 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
+        with:
+          version: "0.13.1"
+      - name: Install Gitleaks
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tgz"
+          echo "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Scan history and files
         run: |
-          docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 git . --redact --exit-code 1
-          docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9 dir . --redact --exit-code 1
+          gitleaks git . --redact --exit-code 1
+          gitleaks dir . --redact --exit-code 1
+      - name: Check public tree
+        env:
+          PRIVATE_DENYLIST: ${{ secrets.PRIVATE_DENYLIST }}
+        run: |
+          if [ -n "$PRIVATE_DENYLIST" ]; then
+            uv run --locked python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"
+          else
+            uv run --locked python tools/check_public_tree.py --history --root .
+          fi
   ci-complete:
     needs: [lint, typecheck, unit, ha, hassfest, hacs, secrets]
     if: ${{ always() }}
