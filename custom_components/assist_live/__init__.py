@@ -1,7 +1,9 @@
 import asyncio
-from collections.abc import Callable
+import logging
+from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
 from datetime import timedelta
+from typing import TypedDict
 
 from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
@@ -9,6 +11,7 @@ from homeassistant.components import assist_pipeline
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
@@ -19,9 +22,15 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
 from .ledger import TurnLedger
-from .repairs import update_issues
+from .repairs import event_stream_issue, update_issues
 
 PLATFORMS = [Platform.STT, Platform.TTS]
+_LOGGER = logging.getLogger(__name__)
+
+
+class SavedState(TypedDict):
+    turns: list[dict[str, str]]
+    cursors: dict[str, int]
 
 
 class Runtime:
@@ -36,16 +45,59 @@ class Runtime:
         self.tts: dict[str, object] = {}
         self.tasks: list[asyncio.Task[None]] = []
         self.unsub: list[Callable[[], None]] = []
-        self.store = Store[list[dict[str, str]]](
+        self.store = Store[SavedState | list[dict[str, str]]](
             hass, 1, f"{DOMAIN}.{entry.entry_id}.turns"
         )
         self.ledger.save = self._save
+        self.cursors: dict[str, int] = {}
+        self.failures: dict[str, int] = {}
+        self.clock = hass.loop.time
+        self._sleep = asyncio.sleep
+        self._last_saved: SavedState | None = {"turns": [], "cursors": {}}
+        self._last_write = 0.0
+        self._save_lock = asyncio.Lock()
+        self._health_due = 0.0
+        self._healthy = False
+        self._store_retry_due = 0.0
 
-    async def _save(self) -> None:
-        await self.store.async_save(self.ledger.snapshot())
+    async def _save(
+        self, *, cursor: tuple[str, int] | None = None, debounce: bool = False
+    ) -> None:
+        async with self._save_lock:
+            cursors = dict(self.cursors)
+            if cursor is not None:
+                cursors[cursor[0]] = cursor[1]
+            data: SavedState = {"turns": self.ledger.snapshot(), "cursors": cursors}
+            if data == self._last_saved:
+                return
+            if (
+                debounce
+                and self._last_saved is not None
+                and data["turns"] == self._last_saved["turns"]
+                and self.clock() - self._last_write < 5
+            ):
+                return
+            await self.store.async_save(data)
+            # HA Store logs some write failures without raising them.
+            if await self.store.async_load() != data:
+                raise HomeAssistantError("turn store write not confirmed")
+            self._last_saved = data
+            self._last_write = self.clock()
+            self._store_retry_due = 0.0
 
     async def start(self) -> None:
-        await self.ledger.restore(await self.store.async_load() or [])
+        saved = await self.store.async_load()
+        if isinstance(saved, list):
+            await self.ledger.restore(saved)
+            self._last_saved = None
+        elif saved is not None:
+            await self.ledger.restore(saved["turns"])
+            self.cursors = {
+                key: cursor
+                for key, cursor in saved["cursors"].items()
+                if key in self.entry.data["satellites"].values()
+            }
+            self._last_saved = saved
         for satellite in self.entry.data["satellites"].values():
             self.tasks.append(
                 self.hass.async_create_background_task(
@@ -80,30 +132,65 @@ class Runtime:
         )
 
     async def _events(self, satellite: str) -> None:
-        cursor = 0
         while True:
             try:
-                async for envelope in self.client.events(
-                    satellite, after_event_id=cursor
-                ):
-                    event = envelope["event"]
-                    if event["satellite"] != satellite:
-                        raise ProtocolError("satellite event mismatch")
-                    self.ledger.device_event(
-                        satellite, event["turn_id"], event["stage"]
-                    )
-                    cursor = envelope["event_id"]
-                    await self.store.async_save(self.ledger.snapshot())
-            except ProtocolError:
-                pass
-            await asyncio.sleep(1)
+                stream = self.client.events(
+                    satellite, after_event_id=self.cursors.get(satellite, 0)
+                )
+                try:
+                    async for envelope in stream:
+                        event = envelope["event"]
+                        if event["satellite"] != satellite:
+                            raise ProtocolError("satellite event mismatch")
+                        self.ledger.device_event(
+                            satellite, event["turn_id"], event["stage"]
+                        )
+                        await self._save(
+                            cursor=(satellite, envelope["event_id"]), debounce=True
+                        )
+                        self.cursors[satellite] = envelope["event_id"]
+                        self.failures[satellite] = 0
+                        event_stream_issue(
+                            self.hass, self.entry.entry_id, satellite, False
+                        )
+                    raise ProtocolError("event stream ended")
+                finally:
+                    if isinstance(stream, AsyncGenerator):
+                        await stream.aclose()
+            except Exception:
+                await self._sleep(self._note_failure(satellite))
+
+    def _note_failure(self, satellite: str) -> float:
+        failures = self.failures.get(satellite, 0) + 1
+        self.failures[satellite] = failures
+        delay = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)[min(failures - 1, 5)]
+        _LOGGER.debug(
+            "Event retry for %s: consecutive failures=%s; delay=%s s",
+            satellite,
+            failures,
+            delay,
+        )
+        if failures >= 3:
+            event_stream_issue(self.hass, self.entry.entry_id, satellite, True)
+        return delay
 
     async def _maintenance(self, _: object) -> None:
         for satellite in self.entry.data["satellites"].values():
             self.ledger.current(satellite)
-        await self.store.async_save(self.ledger.snapshot())
+        self.ledger.prune()
+        if self.clock() >= self._store_retry_due:
+            try:
+                await self._save(debounce=True)
+            except Exception:
+                delays = [
+                    self._note_failure(satellite)
+                    for satellite in self.entry.data["satellites"].values()
+                ]
+                self._store_retry_due = self.clock() + max(delays, default=30)
         await self.ledger.flush()
-        healthy = await self.client.health(timeout=0.2)
+        if self.clock() >= self._health_due:
+            self._healthy = await self.client.health(timeout=0.2)
+            self._health_due = self.clock() + (30 if self._healthy else 5)
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
         registry = er.async_get(self.hass)
         forwarding_names = {
@@ -123,7 +210,7 @@ class Runtime:
             if (state := self.hass.states.get(entity_id)) is not None
         ]
         update_issues(
-            self.hass, self.entry.entry_id, healthy, selected, forwarding_names
+            self.hass, self.entry.entry_id, self._healthy, selected, forwarding_names
         )
 
     async def stop(self) -> None:
@@ -134,8 +221,10 @@ class Runtime:
         for task in self.tasks:
             with suppress(asyncio.CancelledError):
                 await task
-        await self.store.async_save(self.ledger.snapshot())
-        await self.client.close()
+        try:
+            await self._save()
+        finally:
+            await self.client.close()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -153,8 +242,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     runtime = Runtime(hass, entry, client)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
-    await runtime.start()
     try:
+        await runtime.start()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         saved = dict(entry.data.get("pipelines", {}))
         pipelines = {p.id: p for p in assist_pipeline.async_get_pipelines(hass)}
@@ -186,8 +275,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     hass, pipeline, tts_voice=voice
                 )
         await runtime._maintenance(None)
-    except Exception:
-        await runtime.stop()
+    except BaseException:
+        try:
+            await runtime.stop()
+        except Exception:
+            _LOGGER.debug("Runtime setup cleanup failed")
         hass.data[DOMAIN].pop(entry.entry_id)
         raise
     return True

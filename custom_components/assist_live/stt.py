@@ -54,13 +54,14 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         self.client = client
         self.ledger = ledger
         self.fallback = fallback
+        self._languages = list(fallback.supported_languages)
         self._attr_unique_id = f"{satellite}_stt"
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
 
     @property
     def supported_languages(self) -> list[str]:
-        return self.fallback.supported_languages
+        return self._languages
 
     @property
     def supported_formats(self) -> list[stt.AudioFormats]:

@@ -45,8 +45,40 @@ class TurnLedger:
         record.closed = self.clock()
         self._active.pop(record.turn.satellite, None)
         self._previous[record.turn.satellite] = record
+        self.prune()
+
+    def prune(self) -> None:
+        # The 10 s parent window also covers the server's 5 s reorder window.
+        closed = [
+            record for record in self.records.values() if record.closed is not None
+        ]
+        remove = {
+            record.turn.turn_id
+            for record in closed
+            if record.closed is not None and self.clock() - record.closed >= 10
+        }
+        remaining = [record for record in closed if record.turn.turn_id not in remove]
+        parents = {record.turn.turn_id for record in self._previous.values()}
+        evictable = [
+            record for record in remaining if record.turn.turn_id not in parents
+        ]
+        remove.update(
+            record.turn.turn_id for record in evictable[: max(0, len(remaining) - 128)]
+        )
+        for turn_id in remove:
+            self.records.pop(turn_id)
+            self._connected.discard(turn_id)
+        self._previous = {
+            satellite: record
+            for satellite, record in self._previous.items()
+            if record.turn.turn_id in self.records
+        }
+        self._pending = [
+            event for event in self._pending if event.turn_id in self.records
+        ]
 
     def _open(self, satellite: str, kind: Literal["voice", "tts_only"]) -> TurnOpen:
+        self.prune()
         if current := self.current(satellite):
             self.mark(current.turn_id, "turn_superseded")
             self._close(self.records[current.turn_id], "incomplete")
@@ -74,7 +106,9 @@ class TurnLedger:
         return self._open(satellite, "tts_only")
 
     def mark(self, turn_id: str, stage: str) -> None:
-        record = self.records[turn_id]
+        record = self.records.get(turn_id)
+        if record is None:
+            return
         record.stages.add(stage)
         self._pending.append(
             TimingEvent(
@@ -120,6 +154,8 @@ class TurnLedger:
         try:
             async with asyncio.timeout(10):
                 await self.client.open_turn(turn)
+            if turn.turn_id not in self.records:
+                return False
             self._connected.add(turn.turn_id)
             await self.flush()
             return True

@@ -75,6 +75,37 @@ async def test_fallback_incompatible_before_input(client, ledger, field, value):
     assert not hasattr(fallback, "audio")
 
 
+@pytest.mark.parametrize(
+    "capability",
+    [
+        "supported_languages",
+        "supported_formats",
+        "supported_codecs",
+        "supported_sample_rates",
+        "supported_bit_rates",
+        "supported_channels",
+    ],
+)
+async def test_fallback_narrower_than_advertised_entity(client, ledger, capability):
+    fallback = Fallback()
+    forward = entity(client, ledger, fallback)
+    setattr(fallback, capability, [])
+    request = metadata()
+    assert forward.check_metadata(request)
+    assert not fallback.check_metadata(request)
+    consumed = []
+
+    async def source():
+        consumed.append(True)
+        yield bytes(320)
+
+    result = await forward.async_process_audio_stream(request, source())
+    assert result.result == stt.SpeechResultState.ERROR
+    assert consumed == []
+    assert not hasattr(fallback, "audio")
+    client.health.assert_not_awaited()
+
+
 async def test_local_endpoint_limits(client, ledger, monkeypatch):
     class Vad:
         def Process10ms(self, chunk):

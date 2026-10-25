@@ -11,6 +11,10 @@
           "fallback_tts": "Fallback TTS entity"
         }
       },
+      "http_warning": {
+        "title": "HTTP sends the access token without encryption",
+        "description": "Use TLS or an isolated network. Continue only if this HTTP server is on an isolated network."
+      },
       "satellite": {
         "title": "Satellite binding",
         "description": "Select a provisioned anonymous key for this device. Use a different key and pipeline for each device. See the setup instructions.",
@@ -25,12 +29,21 @@
     "error": {
       "fallback_loop": "An assist-live entity cannot be a fallback.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
+      "invalid_url": "Use an HTTP or HTTPS server URL without user information, a query, or a fragment.",
       "invalid_satellite": "Select a provisioned key and the pipeline selector of a satellite device.",
       "binding_used": "This device or key is already in use.",
       "connection_limit": "Use no more than five satellites for each server token."
     }
   },
   "issues": {
+    "event_stream_unavailable": {
+      "title": "Satellite event subscription cannot continue",
+      "description": "The event subscription for {satellite} has repeated failures. Check the server event stream and HA storage. The integration retries with a maximum 30 s interval. It does not skip a refused event."
+    },
+    "fallback_tts_unavailable": {
+      "title": "Fallback TTS entity unavailable",
+      "description": "Select an available entity-backed standard TTS engine. Legacy provider names cannot supply this fallback."
+    },
     "server_unavailable": {
       "title": "assist-live server unavailable",
       "description": "Check the server URL, access token, and server status. Standard engines supply fallback speech while the server is unavailable."

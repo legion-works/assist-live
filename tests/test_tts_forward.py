@@ -1,9 +1,11 @@
+import pytest
 from homeassistant.components.tts import (
     TextToSpeechEntity,
     TTSAudioRequest,
     TTSAudioResponse,
     Voice,
 )
+from homeassistant.exceptions import HomeAssistantError
 
 
 class Fallback(TextToSpeechEntity):
@@ -32,6 +34,83 @@ def entity(client, ledger, fallback):
     from custom_components.assist_live.tts import AssistLiveTTS
 
     return AssistLiveTTS("satellite-a", "device-a", client, ledger, fallback)
+
+
+async def test_tts_fallback_language_narrower_than_advertised(client, ledger):
+    fallback = Fallback()
+    forward = entity(client, ledger, fallback)
+    fallback.supported_languages = ["zz"]
+    assert "en" in forward.supported_languages
+    assert "en" not in fallback.supported_languages
+    with pytest.raises(HomeAssistantError, match="language unavailable"):
+        await forward.async_stream_tts_audio(
+            TTSAudioRequest("en", {"voice": "voice-2"}, text())
+        )
+    assert not hasattr(fallback, "text")
+    client.health.assert_not_awaited()
+    assert ledger.records == {}
+
+
+async def test_unusable_tts_fallback_is_a_named_ha_error_and_repair(hass):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from homeassistant.helpers import issue_registry as ir
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.tts import async_setup_entry
+
+    entry = MockConfigEntry(
+        domain="assist_live", data={"fallback_tts": "tts.standard", "satellites": {}}
+    )
+    hass.data["assist_live"] = {entry.entry_id: SimpleNamespace()}
+    with patch(
+        "custom_components.assist_live.tts.get_engine_instance", return_value=object()
+    ):
+        with pytest.raises(HomeAssistantError, match="fallback TTS unavailable"):
+            await async_setup_entry(hass, entry, lambda entities: None)
+    issue_id = f"{entry.entry_id}_fallback_tts_unavailable"
+    assert ir.async_get(hass).async_get_issue("assist_live", issue_id)
+    with patch(
+        "custom_components.assist_live.tts.get_engine_instance", return_value=Fallback()
+    ):
+        await async_setup_entry(hass, entry, lambda entities: None)
+    assert ir.async_get(hass).async_get_issue("assist_live", issue_id) is None
+
+
+@pytest.mark.parametrize("part,count", [("a", 16384), ("é", 8192)])
+async def test_tts_text_limit_is_utf8_bytes(client, ledger, part, count):
+    async def source():
+        yield part * count
+        yield "x"
+
+    with pytest.raises(HomeAssistantError, match="text limit"):
+        await entity(client, ledger, Fallback()).async_stream_tts_audio(
+            TTSAudioRequest("en", {"voice": "voice-2"}, source())
+        )
+    turn = ledger.current("satellite-a")
+    assert "tts_failed" in ledger.records[turn.turn_id].stages
+
+
+async def test_empty_tts_parts_do_not_fill_the_replay_buffer(client, ledger):
+    client.health.return_value = True
+    seen = []
+
+    async def source():
+        for _ in range(20000):
+            yield ""
+        yield "text"
+
+    async def synth(turn_id, parts, *, voice):
+        seen.extend([part async for part in parts])
+        yield b"\x00\x00"
+
+    client.tts = synth
+    response = await entity(client, ledger, Fallback()).async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, source())
+    )
+    assert b"".join([chunk async for chunk in response.data_gen])
+    assert seen == ["text"]
 
 
 async def test_fallback_gets_new_unconsumed_generator(client, ledger):

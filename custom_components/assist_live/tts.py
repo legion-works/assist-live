@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -21,7 +22,7 @@ from .ledger import TurnLedger
 def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEntity:
     engine = get_engine_instance(hass, entity_id)
     if not isinstance(engine, tts.TextToSpeechEntity):
-        raise ValueError("fallback TTS unavailable")
+        raise HomeAssistantError("fallback TTS unavailable")
     return engine
 
 
@@ -29,7 +30,20 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     runtime = hass.data[DOMAIN][entry.entry_id]
-    fallback = fallback_engine(hass, entry.data["fallback_tts"])
+    issue_id = f"{entry.entry_id}_fallback_tts_unavailable"
+    try:
+        fallback = fallback_engine(hass, entry.data["fallback_tts"])
+    except HomeAssistantError:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="fallback_tts_unavailable",
+        )
+        raise
+    ir.async_delete_issue(hass, DOMAIN, issue_id)
     entities = []
     for device, satellite in entry.data["satellites"].items():
         entity = AssistLiveTTS(
@@ -75,7 +89,10 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
     async def async_stream_tts_audio(
         self, request: TTSAudioRequest
     ) -> tts.TTSAudioResponse:
-        if request.language not in self.supported_languages:
+        if (
+            request.language not in self.supported_languages
+            or request.language not in self.fallback.supported_languages
+        ):
             raise HomeAssistantError("fallback TTS language unavailable")
         turn = self.ledger.open_tts(self.satellite)
         if self.ledger.save is not None:
@@ -86,11 +103,22 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         buffer: list[str] = []
         changed = asyncio.Condition()
         done = False
+        failure: HomeAssistantError | None = None
 
         async def collect() -> None:
-            nonlocal done
+            nonlocal done, failure
+            size = 0
             try:
                 async for part in request.message_gen:
+                    if not part:
+                        continue
+                    if len(part) > 16384 or size + len(part.encode("utf-8")) > 16384:
+                        failure = HomeAssistantError(
+                            "TTS text limit is 16384 UTF-8 bytes"
+                        )
+                        self.ledger.mark(turn.turn_id, "tts_failed")
+                        return
+                    size += len(part.encode("utf-8"))
                     if not buffer:
                         self.ledger.mark(turn.turn_id, "tts_first_text")
                     async with changed:
@@ -118,6 +146,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             while True:
                 async with changed:
                     await changed.wait_for(available)
+                    if failure is not None:
+                        raise failure
                     if len(buffer) == offset:
                         return
                     part = buffer[offset]

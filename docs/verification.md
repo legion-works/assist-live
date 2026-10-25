@@ -1785,7 +1785,7 @@ Commands from the repository root:
 
 ```sh
 uv run --locked pytest tests/test_config_flow.py tests/test_stt_forward.py tests/test_tts_forward.py tests/test_ledger.py tests/test_repairs.py tests/test_tts_lookup_contract.py -q
-PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
 task package-check
 task hassfest
 actionlint

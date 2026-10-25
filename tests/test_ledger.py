@@ -76,3 +76,56 @@ async def test_connection_deadline(ledger, client, monkeypatch):
     client.open_turn.side_effect = blocked
     assert not await ledger.connect(ledger.open_voice("satellite-a"))
     assert deadlines == [10]
+
+
+async def test_ten_thousand_turn_cache_is_bounded(client):
+    import asyncio
+
+    from custom_components.assist_live.ledger import TurnLedger
+
+    now = [0.0]
+    ledger = TurnLedger(client, clock=lambda: now[0])
+    for index in range(10000):
+        if index % 50 == 0:
+            await asyncio.sleep(0)
+        turn = ledger.open_voice("satellite-a")
+        assert await ledger.connect(turn)
+        ledger.device_event("satellite-a", turn.turn_id, "playback_end")
+        now[0] += 0.0001
+    ledger.prune()
+    assert len(ledger.records) <= 128
+    assert len(ledger._connected) <= 128
+    assert ledger._connected <= ledger.records.keys()
+    now[0] += 10
+    ledger.prune()
+    assert ledger.records == {}
+    assert not ledger._connected
+    assert not ledger._previous
+    ledger.mark(turn.turn_id, "tts_first_byte")
+    assert not ledger._pending
+
+
+def test_closed_record_retention_covers_parent_window(client):
+    from custom_components.assist_live.ledger import TurnLedger
+
+    now = [0.0]
+    ledger = TurnLedger(client, clock=lambda: now[0])
+    first = ledger.open_voice("satellite-a")
+    ledger.device_event("satellite-a", first.turn_id, "playback_end")
+    now[0] = 9.999
+    ledger.prune()
+    assert first.turn_id in ledger.records
+    assert ledger.open_voice("satellite-a").parent_turn_id == first.turn_id
+    now[0] = 10
+    ledger.prune()
+    assert first.turn_id not in ledger.records
+
+
+def test_cache_pressure_preserves_other_satellite_parent(ledger):
+    first = ledger.open_voice("satellite-b")
+    ledger.device_event("satellite-b", first.turn_id, "playback_end")
+    for _ in range(1000):
+        turn = ledger.open_voice("satellite-a")
+        ledger.device_event("satellite-a", turn.turn_id, "playback_end")
+    assert len(ledger.records) <= 128
+    assert ledger.open_voice("satellite-b").parent_turn_id == first.turn_id

@@ -490,6 +490,7 @@ def test_import_produces_synthetic_policy_rows(annotation_bundle, tmp_path, pref
 
 def server_policy_labels(row, duration_ms):
     # Source: assist-live-server tools/tune_profiles.py policy_labels.
+    # Copied from commit 6f8b3b07195040d0a8d43ee4123e5f8f83b96283.
     # Keep these copied consumer rules in sync with that function.
     import math
 

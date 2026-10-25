@@ -1,4 +1,5 @@
 from typing import Any
+from urllib.parse import urlsplit
 
 import probatio as vol
 from assist_live_client import AssistLiveClient
@@ -38,6 +39,7 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         self.bindings: set[str] = set()
         self.satellites: dict[str, str] = {}
         self.selects: dict[str, str] = {}
+        self._http_confirmed: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -52,14 +54,25 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
             else:
                 client = None
                 try:
-                    client = AssistLiveClient(user_input["url"], user_input["token"])
-                    self.bindings = {
-                        row["satellite"] for row in await client.bindings()
-                    }
-                    if not self.bindings:
-                        raise ValueError("no bindings")
-                    self.settings = user_input
-                    return await self.async_step_satellite()
+                    try:
+                        client = AssistLiveClient(
+                            user_input["url"], user_input["token"]
+                        )
+                    except ValueError:
+                        errors["base"] = "invalid_url"
+                    else:
+                        self.settings = user_input
+                        if (
+                            urlsplit(user_input["url"]).scheme == "http"
+                            and self._http_confirmed != user_input["url"]
+                        ):
+                            return await self.async_step_http_warning()
+                        self.bindings = {
+                            row["satellite"] for row in await client.bindings()
+                        }
+                        if not self.bindings:
+                            raise ValueError("no bindings")
+                        return await self.async_step_satellite()
                 except ProtocolError, ValueError:
                     errors["base"] = "cannot_connect"
                 finally:
@@ -85,6 +98,14 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                 }
             ),
         )
+
+    async def async_step_http_warning(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        if user_input is not None:
+            self._http_confirmed = self.settings["url"]
+            return await self.async_step_user(self.settings)
+        return self.async_show_form(step_id="http_warning", data_schema=vol.Schema({}))
 
     async def async_step_satellite(
         self, user_input: dict[str, Any] | None = None

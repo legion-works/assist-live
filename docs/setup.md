@@ -12,6 +12,11 @@ Do not use it for safety-critical controls.
 5. Select the standard fallback engines. An assist-live engine cannot be a fallback.
 6. For each device, select its provisioned key and its pipeline selector.
 
+Use TLS or an isolated network for the server access token.
+HTTP sends the token without encryption. The config flow shows a warning before an HTTP connection.
+The warning lets you continue for an isolated network. It does not refuse HTTP.
+An invalid URL has a different error from a connection failure.
+
 Use each device and key only one time in an entry.
 Use no more than five satellites with one token.
 The server has 16 audio and event connection slots for each token.
@@ -73,6 +78,10 @@ This also works when a sender stops after it reads part of the text.
 Standard engines without streaming input receive the full text through the HA adapter.
 Server PCM has a streaming WAV header for mono, 16-bit samples at 16 kHz.
 
+The text buffer has a 16,384-byte UTF-8 limit. Empty parts do not increase the buffer.
+If the text is more than that limit, the request stops with `tts_failed` and an HA error.
+The integration does not silently cut the text or retry it.
+
 The current client does not supply sentence boundaries to the integration.
 If server audio stops after playback data starts, the integration stops that response.
 It does not say the same words again or run the conversation again.
@@ -90,6 +99,13 @@ Unavailable conversation IDs stay null.
 
 The integration starts one event subscription for each key before the forwarding entities become available.
 The subscription starts again with its last event cursor after a connection failure.
+
+The HA store keeps one cursor for each satellite key, with the open turn IDs.
+Cursor-only writes occur at most one time in 5 s. Turn changes save immediately before audio forwarding.
+When HA removes the entry from service, it saves pending cursor changes.
+A sudden process failure can replay the pending cursor batch.
+The next 1 s maintenance tick writes the batch after the 5 s interval.
+
 The protocol has no subscription-ready acknowledgement.
 Stored event replay supplies events during connection setup.
 
@@ -108,5 +124,19 @@ An unavailable server shows a repair issue.
 Check its URL, token, provisioned keys, and process status.
 STT endpoint settings do not change with server health.
 Offline fallback observations stay local when the record server is unavailable.
+
+The ledger deadline tick runs at 1 s intervals, but unchanged state does not cause a store write.
+Server health checks run at 30 s intervals when healthy and 5 s intervals after an unsatisfactory health result.
+Each request has its 200 ms health check.
+
+After three event or store failures with no good event between them, a repair issue identifies the satellite key.
+Each retry has a debug log without tokens, reply text, or the error message.
+Retry intervals are 1, 2, 4, 8, 16, then 30 s. A good event clears the failure count and repair.
+A refused event does not increase the cursor. Repair the stream or storage to remove the cause.
+
+Closed local records stay for at most 10 s, with a maximum of 128 closed records for each entry.
+The 10 s interval includes the parent-turn window and the server's 5 s reorder window.
+The integration also removes the connected IDs and pending markers of those records.
+The server, not the local cache, keeps the historical records.
 
 Device trials have not run. No test hardware is available at this time.
