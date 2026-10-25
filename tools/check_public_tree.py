@@ -217,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--private-denylist", type=Path, required=True)
+    parser.add_argument("--private-denylist", type=Path)
     parser.add_argument("--licensed-audio", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -227,13 +227,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print("PASS own Git root")
     try:
-        denylist = read_list(args.private_denylist)
+        denylist = read_list(args.private_denylist) if args.private_denylist else set()
         licensed_audio = (
             read_list(args.licensed_audio, hashes=True)
             if args.licensed_audio
             else set()
         )
-        if args.private_denylist.resolve().is_relative_to(root):
+        if args.private_denylist and args.private_denylist.resolve().is_relative_to(
+            root
+        ):
             raise ValueError("Private denylist must be external")
         shallow = git(root, "rev-parse", "--is-shallow-repository").strip()
         if args.history and shallow != b"false":
@@ -278,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"FAIL public data {kind} object={identifier} {detail}")
         print(f"FAIL public data objects={len(findings)} matches={sum(total.values())}")
         return 1
+    if not args.private_denylist:
+        print("NOT CHECKED private denylist")
     print("PASS public data matches=0")
     return 0
 

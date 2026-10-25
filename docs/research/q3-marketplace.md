@@ -99,6 +99,7 @@ Do not use a beta, release candidate, `hacs/action`, or a `dev` checkout as the 
 
 2. Re-read `homeassistant/components/marketplace/repositories/integration.py` at that release tag.
    Use `https://github.com/home-assistant/core/blob/<release-tag>/homeassistant/components/marketplace/repositories/integration.py`.
+   Resolve the tag to a commit with `gh api repos/home-assistant/core/git/ref/tags/<tag>`. If `object.type` is `tag`, read `gh api repos/home-assistant/core/git/tags/<object.sha>` and use its `object.sha` commit. Record the tag and resolved commit.
    Re-read the official rule and validation documentation above.
    Record the tag, commit, access date, and the complete app-refusal condition.
    Set `validator.tag` to the stable release version and use that tag in `validator.source_url`.

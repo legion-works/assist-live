@@ -10,11 +10,19 @@ tasks:
       - task: unit
       - uv run --locked python tools/check_bootstrap.py
       - uv run --locked python tools/check_ci.py
-      - uv run --locked python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"
+      - gitleaks dir . --redact --exit-code 1
+      - gitleaks git . --redact --exit-code 1
+      - |
+        if [ -n "$PRIVATE_DENYLIST" ]; then
+          uv run --locked python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"
+        else
+          uv run --locked python tools/check_public_tree.py --history --root .
+        fi
   lint:
     cmds:
       - uv run --locked ruff format --check .
       - uv run --locked ruff check .
+      - actionlint
   typecheck:
     cmds:
       - uv run --locked mypy

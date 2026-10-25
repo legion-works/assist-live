@@ -861,7 +861,7 @@ Date: 2026-10-24.
 From `$WORKSPACE/assist-live`, the local gate was:
 
 ```sh
-PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
 ```
 
 ```text
@@ -1026,7 +1026,7 @@ PASS Q2 pipeline contract
 The repository gate was:
 
 ```sh
-UV_LINK_MODE=copy PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+UV_LINK_MODE=copy PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
 ```
 
 ```text
@@ -1069,7 +1069,7 @@ The one host-path literal is the same public-URL test vector in the privacy chec
 The public worktree command was:
 
 ```sh
-uv run python tools/check_public_tree.py --root . --private-denylist "$WORKSPACE/.opencode/private/denylist.txt"
+uv run python tools/check_public_tree.py --root . --private-denylist "$PRIVATE_DENYLIST"
 ```
 
 ```text
@@ -1142,7 +1142,7 @@ This command gave exit 1, as necessary before a release and actual install resul
 The repository command was:
 
 ```sh
-PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
 ```
 
 ```text
@@ -1193,7 +1193,7 @@ The one host-path literal is an unchanged public-URL test vector in the privacy 
 The worktree check command was:
 
 ```sh
-uv run python tools/check_public_tree.py --root . --private-denylist "$WORKSPACE/.opencode/private/denylist.txt"
+uv run python tools/check_public_tree.py --root . --private-denylist "$PRIVATE_DENYLIST"
 ```
 
 ```text
@@ -1255,7 +1255,7 @@ uv run pytest tests/test_marketplace.py -q -k 'pending_report_requires or stale_
 The repository gate was:
 
 ```sh
-PRIVATE_DENYLIST="$WORKSPACE/.opencode/private/denylist.txt" task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
 ```
 
 ```text
@@ -1300,3 +1300,79 @@ The editor snapshot cannot resolve this module from the nested workspace root.
 It reported 24 unresolved-import errors in the test module, with no checker-file errors or warnings.
 Markdown has no language-server diagnostic source.
 No import or configuration changes hide this difference.
+
+## CI checks without and with a private denylist
+
+Date: 2026-10-25 (UTC).
+The public-tree check runs when no private denylist is set. It prints `NOT CHECKED private denylist`.
+The check reads an external private denylist when `PRIVATE_DENYLIST` is set.
+
+```sh
+env -u PRIVATE_DENYLIST task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+```
+
+Each command gave `227 passed`, `PASS integration bootstrap`, `PASS CI`, `PASS own Git root`, and `PASS public data matches=0`.
+The first command printed `NOT CHECKED private denylist`.
+The second command printed `PASS history secrets commits=10` and did not print the unchecked status.
+
+The HA matrix commands used the workflow requirements for HA `2026.10.1` and `2026.10.3`.
+Each command gave `227 passed`.
+The CI workflow check and `actionlint` gave `PASS`.
+
+## CI parity repair checks
+
+Date: 2026-10-25 (UTC).
+The two task commands ran after the CI parity test changes:
+
+```sh
+env -u PRIVATE_DENYLIST task check
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+```
+
+Each command gave `32 files already formatted`, `All checks passed!`, `Success: no issues found in 9 source files`, `227 passed`, `PASS integration bootstrap`, `PASS CI`, `PASS own Git root`, and `PASS public data matches=0`.
+The first command printed one `NOT CHECKED private denylist` line.
+The second command printed `PASS history secrets commits=11` and no unchecked status.
+
+The HA matrix commands ran again with the CI requirements:
+
+```sh
+export HA_VERSION=2026.10.1 PLUGIN_VERSION=0.13.372
+uv run --no-project --python 3.14.2 --with "homeassistant==$HA_VERSION" --with "pytest-homeassistant-custom-component==$PLUGIN_VERSION" --with PyYAML==6.0.3 --with "gazetteer-matcher==1.1.0" --with "ha-ffmpeg==3.2.2" --with "hassil==3.12.1" --with "home-assistant-intents==2026.10.6" --with "mutagen==1.48.1" --with "pymicro-vad==1.0.1" --with "pyspeex-noise==1.0.2" pytest tests/ -q
+export HA_VERSION=2026.10.3 PLUGIN_VERSION=0.13.374
+uv run --no-project --python 3.14.2 --with "homeassistant==$HA_VERSION" --with "pytest-homeassistant-custom-component==$PLUGIN_VERSION" --with PyYAML==6.0.3 --with "gazetteer-matcher==1.1.0" --with "ha-ffmpeg==3.2.2" --with "hassil==3.12.1" --with "home-assistant-intents==2026.10.6" --with "mutagen==1.48.1" --with "pymicro-vad==1.0.1" --with "pyspeex-noise==1.0.2" pytest tests/ -q
+```
+
+Result: `227 passed in 7.22s` for HA `2026.10.1` and `227 passed in 7.42s` for HA `2026.10.3`.
+`actionlint` and the CI workflow checker gave `PASS`.
+
+## CI and private-denylist contract tests
+
+Date: 2026-10-25 (UTC).
+The baseline source with the test changes gave this result:
+
+```sh
+uv run --project "$WORKSPACE/assist-live" --locked pytest tests/test_ci.py tests/test_public_tree.py -q
+```
+
+Result: `1 failed, 83 passed in 2.86s`.
+Only `test_checker_without_private_denylist_reports_unchecked` exited with code 2. The baseline checker gave an error because no `--private-denylist` value was set.
+At baseline, the CI-to-Taskfile parity test gave `PASS`. It did not give a failure before this change.
+
+Each CI mutation ran in a scratch copy. Table rows show test output for each command change, then for the unchanged CI command:
+
+```text
+BASELINE: 1 passed
+M7: uv run --locked ruff format --check . -> uvx ruff format --check .: FAIL
+M7 source reset: 1 passed
+M8: uv run --locked mypy -> uvx mypy: FAIL
+M8 source reset: 1 passed
+M11: hassil==3.12.1 -> hassil==3.12.2: FAIL
+M11 source reset: 1 passed
+M3: pytest tests/ -q -> pytest tests -q: FAIL
+M3 source reset: 1 passed
+M13: add --no-sync to the CI HA command: FAIL
+M13 source reset: 1 passed
+```
+
+After the change, `uv run --locked pytest tests/test_ci.py tests/test_public_tree.py -q` gave `84 passed`.

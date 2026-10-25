@@ -18,12 +18,15 @@ uv run pytest tests/test_package.py tests/test_public_tree.py -q
 uv run python tools/check_bootstrap.py
 uvx ruff format --check .
 uvx ruff check .
+task check
 ```
+
+`task check` does not check the private denylist when `PRIVATE_DENYLIST` is not set. It prints `NOT CHECKED private denylist`. Set `PRIVATE_DENYLIST` to an external denylist to include this check.
 
 CI must add HA runtime tests, integrated type checks, hassfest, and HACS validation.
 See `docs/verification.md` for the current standalone check results.
 
-Before publication, use an operator-supplied denylist external to Git:
+To run the private-denylist check, set `PRIVATE_DENYLIST` to an external file:
 
 ```sh
 uv run python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"

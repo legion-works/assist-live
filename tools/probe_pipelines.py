@@ -1,3 +1,5 @@
+"""Probe Home Assistant pipeline operations against a test instance."""
+
 import argparse
 import asyncio
 import json

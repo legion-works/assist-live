@@ -1,3 +1,5 @@
+"""Check a recorded Home Assistant Marketplace status."""
+
 import argparse
 import hashlib
 import html

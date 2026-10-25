@@ -49,6 +49,7 @@ def denylist(tmp_path):
 
 
 def run_checker(root, denylist, *args, env=None):
+    denylist_args = ["--private-denylist", str(denylist)] if denylist else []
     return subprocess.run(
         [
             sys.executable,
@@ -56,8 +57,7 @@ def run_checker(root, denylist, *args, env=None):
             "--history",
             "--root",
             str(root),
-            "--private-denylist",
-            str(denylist),
+            *denylist_args,
             *args,
         ],
         capture_output=True,
@@ -65,6 +65,20 @@ def run_checker(root, denylist, *args, env=None):
         env=env,
         check=False,
     )
+
+
+def test_checker_without_private_denylist_reports_unchecked(repository):
+    result = run_checker(repository, None)
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.count("NOT CHECKED private denylist") == 1
+    assert "PASS public data" in result.stdout
+
+
+def test_checker_with_private_denylist_runs_full_scan(repository, denylist):
+    result = run_checker(repository, denylist)
+    assert result.returncode == 0, result.stdout
+    assert "NOT CHECKED private denylist" not in result.stdout
+    assert "PASS public data" in result.stdout
 
 
 def test_parent_repository_is_not_accepted(tmp_path):

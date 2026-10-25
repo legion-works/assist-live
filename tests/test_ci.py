@@ -1,9 +1,16 @@
+import shlex
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+CI_RUN_EXEMPTIONS = {
+    "lint": {"Install actionlint", "Check source build compilers"},
+    "typecheck": {"Check source build compilers"},
+    "unit": {"Install Gitleaks", "Check source build compilers"},
+    "ha": {"Install Gitleaks", "Check source build compilers", "result"},
+}
 
 
 def test_ci_has_required_jobs():
@@ -20,6 +27,80 @@ def test_ci_has_required_jobs():
         "secrets",
         "ci-complete",
     }
+
+
+def test_ci_commands_match_taskfile():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
+    task_commands = {
+        " ".join(command.split())
+        for task in taskfile["tasks"].values()
+        for command in task.get("cmds", [])
+        if isinstance(command, str)
+    }
+    task_ha = taskfile["tasks"]["ha-minimum"]["cmds"][0]
+    ha_task_args = shlex.split(task_ha)
+    for job_name, exemptions in CI_RUN_EXEMPTIONS.items():
+        substantive_commands = 0
+        for step in workflow["jobs"][job_name]["steps"]:
+            run = step.get("run")
+            if not run:
+                continue
+            step_key = step.get("name") or step.get("id")
+            if step_key in exemptions:
+                continue
+            parts = [part.strip() for part in run.split("&&") if part.strip()]
+            assert parts, f"CI {job_name} has an empty run step: {step_key}"
+            for part in parts:
+                try:
+                    command_args = shlex.split(part)
+                except ValueError as error:
+                    raise AssertionError(
+                        f"CI {job_name} command is invalid: {part} ({error})"
+                    ) from error
+                if (
+                    job_name == "ha"
+                    and step_key == "Test all contracts on the exact HA version"
+                ):
+                    ha_version = "homeassistant==$HA_VERSION"
+                    plugin_version = (
+                        "pytest-homeassistant-custom-component==$PLUGIN_VERSION"
+                    )
+                    assert (
+                        ha_version in command_args and plugin_version in command_args
+                    ), f"CI {job_name} command has no Taskfile match: {part}"
+                    command_args[command_args.index(ha_version)] = (
+                        "homeassistant==2026.10.1"
+                    )
+                    command_args[command_args.index(plugin_version)] = (
+                        "pytest-homeassistant-custom-component==0.13.372"
+                    )
+                    assert command_args == ha_task_args, (
+                        f"CI {job_name} command has no Taskfile match: {part}"
+                    )
+                else:
+                    normalized = shlex.join(command_args)
+                    assert normalized in task_commands, (
+                        f"CI {job_name} command has no Taskfile match: {part}"
+                    )
+                if command_args != ["uv", "sync", "--locked"]:
+                    substantive_commands += 1
+        assert substantive_commands > 0, (
+            f"CI {job_name} has no Taskfile commands beyond uv sync"
+        )
+
+
+@pytest.mark.parametrize("job_name", ["unit", "ha"])
+def test_gitleaks_install_precedes_pytest(job_name):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"][job_name]["steps"]
+    install = next(
+        i for i, step in enumerate(steps) if step.get("name") == "Install Gitleaks"
+    )
+    pytest_step = next(
+        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
+    )
+    assert install < pytest_step
 
 
 @pytest.mark.parametrize(
