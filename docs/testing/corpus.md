@@ -21,7 +21,7 @@ The CLI also checks files, records, and the freeze.
 |---|---|
 | `id` | Non-empty, unique recording identifier |
 | `speaker_id` | Anonymous `speaker-ID` identifier for a human, or `synthetic-ID` for synthetic audio |
-| `speaker_type` | Optional `human` or `synthetic`, in agreement with the input file |
+| `speaker_type` | Necessary on each row: `human` or `synthetic`, in agreement with the input file and speaker identifier |
 | `set` | `replay` or `pause` |
 | `split` | `tuning` or `held_out` |
 | `audio_path` | Relative WAV path below `--audio-root` |
@@ -42,14 +42,16 @@ The CLI also checks files, records, and the freeze.
 | `transcript` | Correct, non-empty transcript |
 | `intent` | Object with an HA intent `name` from the pinned name set and a `slots` object |
 | `executable_prefix` | Boolean, `true` only for a pause command with an executable prefix |
+| `pause_intervals_ms` | Non-empty list of `[start_ms, end_ms]` pairs for pause rows, missing or `[]` for replay rows |
+| `executable_prefix_intervals_ms` | Non-empty list of `[start_ms, end_ms]` pairs when `executable_prefix=true`, missing or `[]` for other rows |
 | `license` | Only `CC0-1.0` or `CC-BY-4.0` |
 | `attribution` | Credit text, non-empty for `CC-BY-4.0` |
 | `consent_id` | Consent identifier for volunteers, or `null` for a public dataset |
 
 Human identifiers use `speaker-` followed by lowercase letters, digits, or hyphen-separated groups.
 Synthetic identifiers use the same structure with the `synthetic-` prefix.
-The human input file defaults to `speaker_type=human`.
-The synthetic input file defaults to `speaker_type=synthetic`.
+The human input file must use `speaker_type=human`.
+The synthetic input file must use `speaker_type=synthetic`.
 
 Synthetic rows do not supply human counts for the two partitions.
 The tests make WAV files with no voice to test the contract.
@@ -69,6 +71,19 @@ The pause time is `(pause_end_sample - pause_start_sample) / sample_rate`.
 
 It must be 400 to 800 ms, with the two limits included.
 A person must mark the two pause boundaries and the last voice sample.
+
+Millisecond intervals use finite numbers, not booleans.
+Each interval starts at or after 0 and ends after its start, at or before the end of the WAV.
+The end is not part of the interval.
+Sort each list without overlap. Adjacent intervals are correct.
+Each pause interval must be 400 to 800 ms, with the two limits included.
+
+The sample fields give the first pause. The `import` command calculates them from its millisecond boundaries.
+
+An executable prefix is a complete command before a pause. The words after the pause change that command.
+Its interval starts at the complete-command boundary and ends when voice starts again after that pause.
+This is a window for incorrect turn endings, not the span of spoken prefix words.
+The server reads the two interval lists directly. It does not calculate them from the sample fields.
 
 Do not use an ASR guess for `pause_annotation=manual`.
 The checker checks sample limits and the manual declaration.
@@ -329,6 +344,7 @@ Do not change the files between the check and playback.
 `--verify-freeze` compares the manifest without changes to it, also on failure.
 The manifest includes all input bytes: human records, partition assignments, synthetic records, license records, and consent records.
 It also includes audio locators with hashes.
+
 It contains no absolute audio paths.
 If an input changes, make a new approved experiment freeze before use.
 
@@ -402,6 +418,22 @@ The tool rejects an output directory in a Git repository, also through a symlink
 11. Use **Skip** if the boundary is unclear.
 12. Export JSON before a break and after the last row.
 
+For a pause row, mark its intervals after recording and conversion:
+
+1. Select **Interval marker** as the waveform target. This keeps the last voice sample unchanged.
+2. Click the start of the pause, then select **Use marker as pause start**.
+3. Click the end of the pause, then select **Use marker as pause end**.
+4. Do these steps for each pause, in time order.
+5. For a prefix row, click the complete-command boundary, then select **Use marker as prefix boundary**.
+6. Do this for each executable prefix, after its pause boundaries.
+7. Check the two interval lists. Each prefix window ends at the end of the most recent pause.
+8. If necessary, correct the millisecond pairs directly in the text fields.
+9. Select **Last voice sample** to go to the voice boundary.
+
+The orange marker shows the selected interval boundary. Keyboard changes also apply to this marker.
+The text fields show all intervals. Use them to correct or remove an incorrect pair.
+An unfinished pause has a `null` end. Import rejects it until the operator marks a correct end.
+
 The page saves work in browser storage with a key for that page content.
 File-URL storage can be unavailable with some browser settings. A warning shows a storage failure.
 Keep the same file location and browser settings. Keep exported JSON backups if storage works or not.
@@ -419,12 +451,18 @@ uv run --locked python tools/annotate_corpus.py compare --labels tests/data/labe
 Import checks the export version, unique known IDs, partition, audio hash, recording length, sample limits, and record digest.
 Unknown fields and a transcript-difference checkbox without a note cause failure.
 All rows must give satisfactory results before a write. A second import makes no change.
-Import changes only `last_voice_sample`, `last_voice_annotation`, and `last_voice_annotator_note`.
+
+Import changes `last_voice_sample`, `last_voice_annotation`, and `last_voice_annotator_note`.
+For pause rows, it also writes the two interval lists, the first pause sample boundaries, and `pause_annotation=manual`.
+It also writes `last_voice_annotation=manual`.
+
+Import checks interval shape, time limits, order, overlap, and WAV length before a write.
+The first pause must end before the selected last voice sample.
 It does not change transcripts, intent slots, partitions, flags, automatic method records, or source pins.
 
 Use a different checked correction for a transcript difference, not this importer.
 
-The record digest does not include those three manual fields so that re-import stays idempotent.
+The record digest does not include these manual fields so that re-import stays idempotent.
 It finds stale or damaged metadata. It is not a signature or proof of a human decision.
 A person with edit access can select a different correct sample. Check the annotator record before freeze.
 
@@ -439,6 +477,6 @@ The summary selects the lowest median, then p90, only when methods use the same 
 Examine row coverage before a method decision. A missing automatic marker does not count as 0 error.
 
 `compare` defaults to `tuning` and does not write parameters.
-Use held-out rows only for the last analysis, not method selection or parameter changes.
+The command rejects a held-out selection. Use tuning rows only for method selection or parameter changes.
 Do not tune a method parameter on held-out rows.
 See [Volunteer recording kit](recording-kit.md) for the missing pause and executable-prefix recordings.

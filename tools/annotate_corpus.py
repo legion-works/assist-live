@@ -10,14 +10,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING or __package__:
-    from .corpus import Row, integer, load_corpus, resolve_audio, text
+    from .corpus import Row, integer, interval_errors, load_corpus, resolve_audio, text
 else:
-    from corpus import Row, integer, load_corpus, resolve_audio, text
+    from corpus import Row, integer, interval_errors, load_corpus, resolve_audio, text
 
 MANUAL_FIELDS = {
     "last_voice_sample",
     "last_voice_annotation",
     "last_voice_annotator_note",
+    "pause_intervals_ms",
+    "executable_prefix_intervals_ms",
+    "pause_start_sample",
+    "pause_end_sample",
+    "pause_annotation",
 }
 EXPORT_FIELDS = {
     "id",
@@ -28,6 +33,8 @@ EXPORT_FIELDS = {
     "transcript_differs",
     "transcript_note",
     "skip",
+    "pause_intervals_ms",
+    "executable_prefix_intervals_ms",
 }
 
 
@@ -122,7 +129,7 @@ textarea{width:90%;height:3em}button{padding:.4em}
 <h1>Corpus boundary annotation</h1>
 <p>Local audio only. Use an anonymous annotator code.
 Export a backup before you close this page.</p>
-<p>Click a waveform to set the last voice sample.
+<p>Select a marker, then click a waveform to move it.
 Left/Right: 10 ms. Shift+Left/Right: 1 ms.
 The second canvas shows the boundary ±500 ms.
 Green: manual. Red: energy. Blue: aligned.</p>
@@ -168,7 +175,9 @@ for(const row of data.rows){
   if(!restored || !Number.isInteger(restored.last_voice_sample) ||
     restored.last_voice_sample<0 || restored.last_voice_sample>=row.frames){
     progress.rows[row.id]={last_voice_sample:row.initial,
-      transcript_differs:false,transcript_note:'',skip:true};
+      transcript_differs:false,transcript_note:'',skip:true,
+      pause_intervals_ms:row.pause_intervals_ms,
+      executable_prefix_intervals_ms:row.executable_prefix_intervals_ms};
   }
   const state=progress.rows[row.id];
   const section=document.createElement('section');
@@ -179,10 +188,54 @@ for(const row of data.rows){
   const status=document.createElement('p');status.className='status';
   section.append(status);
   const canvases=[];
+  let cursor=state.last_voice_sample;
+  const target=document.createElement('select');
+  for(const label of ['Last voice sample','Interval marker']){
+    const option=document.createElement('option');option.textContent=label;
+    target.append(option);}
+  const targetLabel=document.createElement('label');
+  targetLabel.append('Waveform target ',target);section.append(targetLabel);
+  const intervalInputs={};
+  for(const field of ['pause_intervals_ms','executable_prefix_intervals_ms']){
+    if(field==='pause_intervals_ms'&&!row.pause)continue;
+    if(field==='executable_prefix_intervals_ms'&&!row.prefix)continue;
+    state[field]=state[field]||[];
+    const label=document.createElement('label');
+    label.textContent=field+' [start_ms, end_ms]';
+    const input=document.createElement('textarea');
+    input.value=JSON.stringify(state[field]);label.append(input);section.append(label);
+    intervalInputs[field]=input;
+    input.oninput=()=>{try{const intervals=JSON.parse(input.value);
+      if(!Array.isArray(intervals))throw Error('Use a list of intervals.');
+      state[field]=intervals;state.skip=false;input.setCustomValidity('');save();draw();
+    }catch(e){input.setCustomValidity('Invalid interval JSON.');}};
+  }
+  function intervalsChanged(){
+    for(const [field,input] of Object.entries(intervalInputs)){
+      input.value=JSON.stringify(state[field]);input.setCustomValidity('');}
+    state.skip=false;save();draw();}
+  if(row.pause){
+    for(const [label,action] of [
+      ['Use marker as pause start',()=>
+        state.pause_intervals_ms.push([cursor*1000/row.rate,null])],
+      ['Use marker as pause end',()=>{
+        const interval=state.pause_intervals_ms.at(-1);
+        if(!interval)throw Error('Mark the pause start first.');
+        interval[1]=cursor*1000/row.rate;}],
+      ...(row.prefix?[['Use marker as prefix boundary',()=>{
+        const interval=state.pause_intervals_ms.at(-1);
+        if(!interval||interval[1]===null)throw Error('Mark the pause first.');
+        state.executable_prefix_intervals_ms.push([cursor*1000/row.rate,interval[1]]);
+      }]]:[])]){
+      const button=document.createElement('button');button.textContent=label;
+      button.onclick=()=>{try{action();intervalsChanged();}
+        catch(e){notice.textContent=String(e);}};section.append(button);}
+  }
   function draw(){
     status.textContent=(state.skip?'Pending or skipped':'Marked')+
       ' · sample '+state.last_voice_sample+
-      ' · '+(state.last_voice_sample/row.rate).toFixed(3)+' s';
+      ' · '+(state.last_voice_sample/row.rate).toFixed(3)+' s'+
+      ' · interval marker '+(cursor*1000/row.rate).toFixed(3)+' ms';
     for(const [canvas,zoom] of canvases){
       canvas.width=Math.max(300,Math.floor(canvas.getBoundingClientRect().width));
       canvas.height=130;
@@ -198,12 +251,12 @@ for(const row of data.rows){
         let peak=0;for(let i=a;i<b;i++)peak=Math.max(peak,row.peaks[i]);
         ctx.moveTo(x,65-peak*60);ctx.lineTo(x,65+peak*60);}
       ctx.stroke();
-      const markers={...row.markers,manual:state.last_voice_sample};
+      const markers={...row.markers,manual:state.last_voice_sample,cursor};
       for(const [name,sample] of Object.entries(markers)){
         if(sample<start||sample>=end)continue;
         const x=(sample-start)/(end-start)*width;
         ctx.strokeStyle={energy:'#b22',aligned:'#25b',
-          whisper:'#a5a',manual:'#173'}[name];
+          whisper:'#a5a',manual:'#173',cursor:'#960'}[name];
         ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,130);ctx.stroke();
         ctx.fillStyle=ctx.strokeStyle;
         ctx.fillText(name,Math.min(x+3,width-55),
@@ -211,8 +264,10 @@ for(const row of data.rows){
       }
     }
   }
-  function mark(sample){state.last_voice_sample=Math.max(0,
+  function mark(sample){const selected=Math.max(0,
     Math.min(row.frames-1,Math.round(sample)));
+    if(target.selectedIndex===0)state.last_voice_sample=selected;
+    else cursor=selected;
     state.skip=false;save();draw();
     if(loopRow===row.id)play(row,true).catch(e=>notice.textContent=String(e));}
   for(const zoom of [false,true]){const canvas=document.createElement('canvas');
@@ -224,11 +279,12 @@ for(const row of data.rows){
       mark(a+(e.clientX-bounds.left)/bounds.width*(b-a));canvas.focus();};
     canvas.onkeydown=e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
       e.preventDefault();const step=Math.round(row.rate*(e.shiftKey ? .001 : .01));
-      mark(state.last_voice_sample+(e.key==='ArrowLeft'?-1:1)*step);}};
+      mark((target.selectedIndex===0?state.last_voice_sample:cursor)+
+        (e.key==='ArrowLeft'?-1:1)*step);}};
   }
   for(const [label,action] of [['Play',()=>play(row,false)],
     ['Loop last 500 ms',()=>play(row,true)],['Stop',stop],
-    ['Accept marker',()=>mark(state.last_voice_sample)],
+    ['Accept marker',()=>{state.skip=false;save();draw();}],
     ['Skip',()=>{state.skip=true;save();draw();stop();}]]){
     const button=document.createElement('button');button.textContent=label;
     button.onclick=()=>Promise.resolve().then(action)
@@ -248,6 +304,8 @@ for(const row of data.rows){
 }
 window.onresize=()=>redraw.forEach(draw=>draw());save();
 document.getElementById('export').onclick=()=>{
+  if([...document.querySelectorAll('textarea')].some(input=>!input.checkValidity())){
+    notice.textContent='Correct the interval JSON before export.';return;}
   if(!annotator.value.trim()){
     notice.textContent='Enter an anonymous annotator code.';return;}
   const rows=data.rows.map(row=>({id:row.id,audio_sha256:row.audio_sha256,
@@ -302,6 +360,12 @@ def build(rows: list[Row], root: Path, output: Path, split: str | None) -> Path:
                 "rate": row["sample_rate"],
                 "frames": frames,
                 "initial": initial,
+                "pause": row.get("set") == "pause",
+                "prefix": row.get("executable_prefix") is True,
+                "pause_intervals_ms": row.get("pause_intervals_ms", []),
+                "executable_prefix_intervals_ms": row.get(
+                    "executable_prefix_intervals_ms", []
+                ),
                 "markers": automatic_markers(row),
                 "row_sha256": row_digest(row),
                 "audio_sha256": row["audio_sha256"],
@@ -380,6 +444,16 @@ def import_annotations(
             raise ValueError("tampered export or invalid annotation")
         if entry["skip"]:
             continue
+        annotated = dict(
+            row,
+            **{
+                field: entry[field]
+                for field in ("pause_intervals_ms", "executable_prefix_intervals_ms")
+            },
+        )
+        problems = interval_errors(annotated, frames * 1000 / row["sample_rate"])
+        if problems:
+            raise ValueError("invalid annotation intervals: " + ", ".join(problems))
         updates: Row = {
             "last_voice_sample": sample,
             "last_voice_annotation": "manual",
@@ -389,6 +463,19 @@ def import_annotations(
                 "transcript_note": entry["transcript_note"],
             },
         }
+        if row.get("set") == "pause":
+            start_ms, end_ms = entry["pause_intervals_ms"][0]
+            start = round(start_ms * row["sample_rate"] / 1000)
+            end = round(end_ms * row["sample_rate"] / 1000)
+            if not 0 <= start < end < sample:
+                raise ValueError("pause interval must precede the last voice sample")
+            updates.update(
+                pause_intervals_ms=entry["pause_intervals_ms"],
+                executable_prefix_intervals_ms=entry["executable_prefix_intervals_ms"],
+                pause_start_sample=start,
+                pause_end_sample=end,
+                pause_annotation="manual",
+            )
         if not (
             integer(row.get("aligned_end_sample"))
             and integer(row.get("energy_minus_aligned_samples"))
@@ -485,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--labels", type=Path, required=True)
         command.add_argument(
             "--split",
-            choices=("tuning", "held_out"),
+            choices=("tuning",) if name == "compare" else ("tuning", "held_out"),
             default="tuning" if name == "compare" else None,
         )
         if name != "compare":

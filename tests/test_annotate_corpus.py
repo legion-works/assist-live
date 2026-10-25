@@ -77,6 +77,8 @@ def export_file(tmp_path, rows):
                 "transcript_differs": True,
                 "transcript_note": "test command",
                 "skip": False,
+                "pause_intervals_ms": [],
+                "executable_prefix_intervals_ms": [],
             }
         ],
     }
@@ -402,3 +404,155 @@ def test_compare_does_not_rank_methods_on_different_rows():
         },
     ]
     assert "closest=not-comparable (different row coverage)" in compare(rows)
+
+
+@pytest.mark.parametrize("prefix", [False, True])
+def test_import_produces_synthetic_policy_rows(annotation_bundle, tmp_path, prefix):
+    from tools.annotate_corpus import build, import_annotations
+    from tools.corpus import label_errors
+
+    labels, audio, rows = annotation_bundle
+    rows[0].update(
+        set="pause",
+        speaker_id="synthetic-01",
+        speaker_type="synthetic",
+        source_uri="https://data.example/test.wav?revision=1",
+        source_revision="fixture-1",
+        license="CC0-1.0",
+        attribution="",
+        consent_id=None,
+        executable_prefix=prefix,
+        alignment_confidence=1.0,
+        alignment_minimum_word_confidence=1.0,
+        transcript_alignment_status="match",
+        boundary_review_required=False,
+        boundary_review_reasons=[],
+    )
+    labels.write_text(json.dumps(rows[0]) + "\n")
+    page = build(rows, audio, tmp_path / "page", "tuning").read_text()
+    assert "pause_intervals_ms" in page
+    assert "Use marker as pause start" in page
+    assert "Use marker as pause end" in page
+    if prefix:
+        assert "Use marker as prefix boundary" in page
+    _, export = export_file(tmp_path, rows)
+    entry = export["rows"][0]
+    entry["pause_intervals_ms"] = [[100, 700]]
+    entry["executable_prefix_intervals_ms"] = [[100, 700]] if prefix else []
+    assert import_annotations(labels, audio, export, "tuning") == 1
+    actual = json.loads(labels.read_text())
+    assert actual["pause_intervals_ms"] == [[100, 700]]
+    assert actual["executable_prefix_intervals_ms"] == ([[100, 700]] if prefix else [])
+    assert actual["pause_start_sample"] == 1600
+    assert actual["pause_end_sample"] == 11200
+    assert actual["pause_annotation"] == "manual"
+    assert actual["last_voice_annotation"] == "manual"
+    assert label_errors(actual, synthetic=True) == []
+    assert server_policy_labels(dict(actual), 1000)["speaker_type"] == "synthetic"
+    before = labels.read_bytes()
+    assert import_annotations(labels, audio, export, "tuning") == 0
+    assert labels.read_bytes() == before
+
+
+def server_policy_labels(row, duration_ms):
+    # Source: legion-works/assist-live-server tools/tune_profiles.py,
+    # commit 6f8b3b07195040d0a8d43ee4123e5f8f83b96283, speaker_kind/policy_labels.
+    import math
+
+    speaker = row.get("speaker_id", "")
+    if not isinstance(speaker, str):
+        raise ValueError("invalid speaker identifier")
+    inferred = (
+        "human"
+        if speaker.startswith("speaker-")
+        else "synthetic"
+        if speaker.startswith("synthetic-")
+        else None
+    )
+    kind = row.get("speaker_type", inferred)
+    if kind not in ("human", "synthetic") or (
+        inferred is not None and kind != inferred
+    ):
+        raise ValueError("invalid or missing speaker kind")
+    row["speaker_type"] = str(kind)
+    if row.get("set") not in ("replay", "pause"):
+        raise ValueError("invalid or missing corpus set")
+    prefix = row.get("executable_prefix", False)
+    if type(prefix) is not bool or (prefix and row["set"] != "pause"):
+        raise ValueError("executable prefix must belong to a pause row")
+    for field, required, description in (
+        ("pause_intervals_ms", row["set"] == "pause", "pause"),
+        ("executable_prefix_intervals_ms", prefix, "prefix"),
+    ):
+        intervals = row.get(field, [])
+        if required and not intervals:
+            raise ValueError(f"{description} interval labels missing")
+        if not isinstance(intervals, list) or (not required and intervals):
+            raise ValueError(f"invalid {description} interval labels")
+        for interval in intervals:
+            if (
+                not isinstance(interval, list)
+                or len(interval) != 2
+                or any(
+                    type(v) not in (int, float) or not math.isfinite(v)
+                    for v in interval
+                )
+                or not 0 <= interval[0] < interval[1]
+                or interval[1] > duration_ms
+            ):
+                raise ValueError(f"invalid {description} interval labels")
+        row[field] = intervals
+    return row
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("pause_intervals_ms", []),
+        ("pause_intervals_ms", [[0, 399]]),
+        ("pause_intervals_ms", [[500, 1100]]),
+        ("pause_intervals_ms", [[0, 600], [500, 1000]]),
+        ("executable_prefix_intervals_ms", []),
+        ("executable_prefix_intervals_ms", [[0, 1100]]),
+    ],
+)
+def test_import_rejects_invalid_policy_intervals_without_write(
+    annotation_bundle, tmp_path, field, value
+):
+    from tools.annotate_corpus import import_annotations
+
+    labels, audio, rows = annotation_bundle
+    rows[0].update(set="pause", executable_prefix=True)
+    labels.write_text(json.dumps(rows[0]) + "\n")
+    _, export = export_file(tmp_path, rows)
+    export["rows"][0].update(
+        pause_intervals_ms=[[100, 700]], executable_prefix_intervals_ms=[[100, 700]]
+    )
+    export["rows"][0][field] = value
+    before = labels.read_bytes()
+    with pytest.raises(ValueError, match="interval"):
+        import_annotations(labels, audio, export, "tuning")
+    assert labels.read_bytes() == before
+
+
+def test_compare_rejects_held_out_rows(annotation_bundle):
+    labels, _, rows = annotation_bundle
+    rows[0].update(split="held_out", last_voice_annotation="manual")
+    labels.write_text(json.dumps(rows[0]) + "\n")
+    result = cli("compare", "--labels", labels, "--split", "held_out")
+    assert result.returncode != 0
+    assert "tuning" in result.stdout + result.stderr
+
+
+def test_import_rejects_pause_after_voice_boundary(annotation_bundle, tmp_path):
+    from tools.annotate_corpus import import_annotations
+
+    labels, audio, rows = annotation_bundle
+    rows[0].update(set="pause", executable_prefix=False)
+    labels.write_text(json.dumps(rows[0]) + "\n")
+    _, export = export_file(tmp_path, rows)
+    export["rows"][0].update(pause_intervals_ms=[[300, 900]])
+    before = labels.read_bytes()
+    with pytest.raises(ValueError, match="precede"):
+        import_annotations(labels, audio, export, "tuning")
+    assert labels.read_bytes() == before

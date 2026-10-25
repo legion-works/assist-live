@@ -127,6 +127,45 @@ def boundary_review_reasons(
     return reasons
 
 
+def interval_errors(row: Row, duration_ms: float | None = None) -> list[str]:
+    errors = []
+    for field, required in (
+        ("pause_intervals_ms", row.get("set") == "pause"),
+        ("executable_prefix_intervals_ms", row.get("executable_prefix") is True),
+    ):
+        intervals = row.get(field, [])
+        if (
+            not isinstance(intervals, list)
+            or (required and not intervals)
+            or (not required and intervals)
+        ):
+            errors.append(field)
+            continue
+        previous_end = 0
+        for interval in intervals:
+            if (
+                not isinstance(interval, list)
+                or len(interval) != 2
+                or any(
+                    type(value) not in (int, float) or not math.isfinite(value)
+                    for value in interval
+                )
+            ):
+                errors.append(f"{field} finite numeric pair")
+                continue
+            start, end = interval
+            if not 0 <= start < end:
+                errors.append(f"{field} bounds")
+            if start < previous_end:
+                errors.append(f"{field} sorted non-overlapping intervals")
+            if duration_ms is not None and end > duration_ms:
+                errors.append(f"{field} outside WAV")
+            if field == "pause_intervals_ms" and not 400 <= end - start <= 800:
+                errors.append(f"{field} length (400..800 ms)")
+            previous_end = end
+    return errors
+
+
 def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
     errors = []
     for field in ("id", "source_revision", "transcript"):
@@ -148,9 +187,7 @@ def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
             if str(speaker).startswith("synthetic-")
             else "speaker_id"
         )
-    if row.get("speaker_type", "synthetic" if synthetic else "human") != (
-        "synthetic" if synthetic else "human"
-    ):
+    if row.get("speaker_type") != ("synthetic" if synthetic else "human"):
         errors.append("synthetic speaker_type")
     if not safe_locator(row.get("audio_path")):
         errors.append("audio_path")
@@ -297,6 +334,7 @@ def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
             errors.append("manual pause_annotation")
     elif row.get("executable_prefix") is True:
         errors.append("executable_prefix requires pause set")
+    errors.extend(interval_errors(row))
     return errors
 
 
@@ -361,6 +399,13 @@ def check_audio(rows: list[Row], root: Path) -> list[str]:
             with wave.open(str(path), "rb") as wav:
                 if wav.getframerate() != 16000 or wav.getnchannels() != 1:
                     failures.append(f"row {number} WAV must be 16 kHz mono")
+                if wav.getframerate() > 0:
+                    failures.extend(
+                        f"row {number} {error}"
+                        for error in interval_errors(
+                            item, wav.getnframes() * 1000 / wav.getframerate()
+                        )
+                    )
                 if wav.getframerate() != item.get("sample_rate"):
                     failures.append(f"row {number} WAV sample_rate mismatch")
                 last = item.get("last_voice_sample")

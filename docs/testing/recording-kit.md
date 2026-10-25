@@ -94,6 +94,12 @@ ffmpeg -i input.wav -map_metadata -1 -ac 1 -ar 16000 -c:a pcm_s16le speaker-01-t
 The conversion tool is optional and external to the corpus checker.
 Keep only the last recording after conversion in the proposed bundle.
 A person must mark the internal pause boundaries and last voice sample that they can hear.
+
+After recording and conversion, use the [boundary page](corpus.md#manual-boundary-procedure) to mark these boundaries.
+Select **Interval marker** to mark each pause start and end without a change to the last voice sample.
+For an executable-prefix row, also mark the boundary where the words make a complete command.
+The page uses that boundary and the pause end for the executable-prefix window.
+
 The pause time must satisfy the 400 to 800 ms limits after conversion.
 Do not decrease a pause time to make a recording give satisfactory results.
 
@@ -167,6 +173,7 @@ Send these items through the approved private connection:
 - The last WAV files with anonymous file names.
 - A record file with the correct spoken transcripts, prompt codes, and selected partition.
 - Manual pause boundaries and last voice sample indexes after conversion.
+- The JSON export with the two interval lists and the anonymous annotator code.
 - The anonymous speaker code, consent code, selected license, and agreed public credit.
 - A bundle revision and the location of the private written consent.
 
@@ -185,11 +192,20 @@ For each record, set these fields:
 - `source_revision`: the pinned external bundle revision.
 - `license`: the volunteer's selected `CC0-1.0` or `CC-BY-4.0`.
 - `attribution`: the agreed anonymous credit, necessary for `CC-BY-4.0`.
-- `set: "pause"`, selected `split`, and anonymous `speaker_id`.
+- `set: "pause"`, selected `split`, anonymous `speaker_id`, and `speaker_type: "human"`.
 - `sample_rate: 16000`, `audio_sha256`, correct transcript, and complete HA intent slots.
 - `pause_start_sample`, end-exclusive `pause_end_sample`, and `pause_annotation: "manual"`.
 - `last_voice_sample`, `last_voice_annotation: "manual"`, and the anonymous annotator note.
 - `executable_prefix: true` only for T01 to T03 or H01 to H03 after a satisfactory inspection of the spoken words.
+
+The `import` command writes `pause_intervals_ms` and `executable_prefix_intervals_ms` as end-exclusive millisecond pairs.
+It calculates `pause_start_sample` and `pause_end_sample` from the first pause.
+It writes `pause_annotation: "manual"`, `last_voice_annotation: "manual"`, the selected `last_voice_sample`, and the annotator note.
+
+Each pause row must have a non-empty `pause_intervals_ms` list with 400 to 800 ms intervals.
+Each prefix row must also have a non-empty `executable_prefix_intervals_ms` list.
+For other pause rows, that prefix list is empty.
+Check all pauses in the page before import. Keep held-out rows external to the tuning-only `compare` command.
 
 Use unique recording IDs and audio hashes.
 Add the four-field redacted consent record to `tests/data/consent-index.json` as specified in [Recording consent](recording-consent.md).

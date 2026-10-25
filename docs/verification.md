@@ -1678,3 +1678,89 @@ The public-tree check gave `PASS public data matches=0`.
 The fixed-string self-scan found no denylist terms, private IPv4 addresses, or audio files.
 Its one literal home-path result is the unchanged public URL test vector.
 No new external test tool or project dependency is necessary.
+
+## Pause interval fields
+
+Date: 2026-10-25.
+
+The corpus schema checks `pause_intervals_ms`, `executable_prefix_intervals_ms`, and the necessary `speaker_type` field.
+The page marks pauses and executable-prefix boundaries without a change to the last voice sample.
+Import writes the manual interval lists and the first pause sample boundaries.
+The `compare` command accepts tuning rows only.
+
+The initial test command was:
+
+```sh
+uv run --locked pytest tests/test_corpus.py tests/test_annotate_corpus.py -q
+```
+
+Its result was `35 failed, 188 passed`.
+The missing-field tests reported `AssertionError: assert []` for the three necessary fields.
+The held-out `compare` test also gave an unsatisfactory result before the restriction: `AssertionError: assert 0 != 0`.
+
+The complete repository check command was:
+
+```sh
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+```
+
+```text
+35 files already formatted
+All checks passed!
+Success: no issues found in 10 source files
+365 passed in 11.89s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=17
+PASS public data matches=0
+```
+
+The two floor-Python commands were:
+
+```sh
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.1 --with pytest-homeassistant-custom-component==0.13.372 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+uv run --no-project --python 3.14.2 --with homeassistant==2026.10.3 --with pytest-homeassistant-custom-component==0.13.374 --with PyYAML==6.0.3 --with gazetteer-matcher==1.1.0 --with ha-ffmpeg==3.2.2 --with hassil==3.12.1 --with home-assistant-intents==2026.10.6 --with mutagen==1.48.1 --with pymicro-vad==1.0.1 --with pyspeex-noise==1.0.2 pytest tests/ -q
+```
+
+```text
+HA 2026.10.1: 365 passed in 11.71s
+HA 2026.10.3: 365 passed in 12.09s
+```
+
+The corpus command used the pinned archive cache and an external audio directory:
+
+```sh
+uv run --locked python tools/corpus.py fetch --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --cache "$CORPUS_CACHE"
+uv run --locked python tools/corpus.py check --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --synthetic tests/data/synthetic.jsonl --licenses tests/data/LICENSES.json --consent tests/data/consent-index.json
+```
+
+```text
+PASS fetched locators (hashes checked)
+PASS held_out replay count 200 speakers 30
+PASS tuning replay count 50 speakers 33
+FAIL held_out pause count 0 < 300
+FAIL held_out pause speakers 0 < 10
+FAIL held_out prefix count 0 < 30
+FAIL tuning pause count 0 < 100
+FAIL tuning prefix count 0 < 30
+```
+
+The five collection shortages stay unchanged. No corpus freeze is complete.
+All 250 replay rows declared `speaker_type=human` before this schema change.
+The complete `labels.jsonl` file is byte-identical, with SHA-256 `9612197a4e95598935844d8236d1732da0001388db78e2d14d40bea0c2283f6c`.
+
+Temporary synthetic WAV files supplied a pause row and a prefix row through the page and importer.
+The imported rows satisfy the server policy rules in the test fixture, with no cross-repository dependency.
+The fixture cites `assist-live-server/tools/tune_profiles.py` at commit `6f8b3b07195040d0a8d43ee4123e5f8f83b96283`.
+A script checked the page controls and JSON export. No browser trial is complete.
+No new external program or dependency is necessary for the repository tests.
+
+Seventeen numbered mutations parsed correctly and gave unsatisfactory results in their target tests.
+They include necessary fields, interval lists and pairs, numeric boundaries, time limits, order, overlap, import checks, manual declarations, and tuning-only `compare`.
+The production files stayed unchanged during these mutation tests.
+
+The ASD-STE100 check gave 0 findings for the changed Markdown files.
+The privacy self-scan found 0 private terms, 0 private IPv4 addresses, and 0 audio files.
+Its one literal home-path result is the unchanged public URL test vector.
+The public-tree check gave `PASS public data matches=0`.

@@ -24,6 +24,7 @@ def row(number=0, split="held_out", group="pause"):
     return {
         "id": f"clip-{number:04d}",
         "speaker_id": f"speaker-{number % 10:02d}",
+        "speaker_type": "human",
         "set": group,
         "audio_path": f"sha256/clip-{number:04d}.wav",
         "source_uri": "consent:consent-01",
@@ -40,6 +41,8 @@ def row(number=0, split="held_out", group="pause"):
         "pause_start_sample": 3200,
         "pause_end_sample": 12800,
         "pause_annotation": "manual",
+        "pause_intervals_ms": [[200, 800]] if group == "pause" else [],
+        "executable_prefix_intervals_ms": [[200, 800]] if group == "pause" else [],
         "executable_prefix": group == "pause",
         "license": "CC-BY-4.0",
         "consent_id": "consent-01",
@@ -143,6 +146,89 @@ def test_pause_limits_are_inclusive_and_sample_based():
         rows[200]["pause_start_sample"] = 0
         rows[200]["pause_end_sample"] = samples
         assert (validate_corpus(rows) == []) is valid
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("speaker_type", None),
+        ("speaker_type", "robot"),
+        ("pause_intervals_ms", None),
+        ("pause_intervals_ms", []),
+        ("pause_intervals_ms", "200,800"),
+        ("pause_intervals_ms", [[200]]),
+        ("pause_intervals_ms", [[200, 800, 900]]),
+        ("pause_intervals_ms", [["200", 800]]),
+        ("pause_intervals_ms", [[True, 800]]),
+        ("pause_intervals_ms", [[float("nan"), 800]]),
+        ("pause_intervals_ms", [[200, float("inf")]]),
+        ("pause_intervals_ms", [[-1, 599]]),
+        ("pause_intervals_ms", [[200, 200]]),
+        ("pause_intervals_ms", [[800, 200]]),
+        ("pause_intervals_ms", [[200, 599.99]]),
+        ("pause_intervals_ms", [[200, 1000.01]]),
+        ("pause_intervals_ms", [[800, 1200], [0, 400]]),
+        ("pause_intervals_ms", [[0, 600], [500, 1000]]),
+        ("executable_prefix_intervals_ms", []),
+        ("executable_prefix_intervals_ms", [[0, 500], [400, 600]]),
+        ("executable_prefix_intervals_ms", [[0, False]]),
+        ("executable_prefix_intervals_ms", [[-1, 200]]),
+        ("executable_prefix_intervals_ms", [[200, 200]]),
+        ("executable_prefix_intervals_ms", [[800, 200]]),
+        ("executable_prefix_intervals_ms", [[0, float("inf")]]),
+    ],
+)
+def test_policy_interval_schema_rejects_invalid_labels(field, value):
+    from tools.corpus import label_errors
+
+    item = row()
+    item[field] = value
+    assert any(field in error for error in label_errors(item))
+
+
+@pytest.mark.parametrize(
+    "field", ["pause_intervals_ms", "executable_prefix_intervals_ms"]
+)
+def test_policy_intervals_are_forbidden_when_not_required(field):
+    from tools.corpus import label_errors
+
+    item = row(group="replay")
+    item[field] = [[0, 600]]
+    assert any(field in error for error in label_errors(item))
+    item[field] = {}
+    assert any(field in error for error in label_errors(item))
+    item = row()
+    item["executable_prefix"] = False
+    item["executable_prefix_intervals_ms"] = [[200, 800]]
+    assert any(
+        "executable_prefix_intervals_ms" in error for error in label_errors(item)
+    )
+
+
+def test_policy_intervals_accept_limits_adjacent_windows_and_optional_replay_fields():
+    from tools.corpus import label_errors
+
+    item = row()
+    item["pause_intervals_ms"] = [[0, 400], [400, 1200]]
+    item["executable_prefix_intervals_ms"] = [[0, 1.5], [1.5, 1200]]
+    assert label_errors(item) == []
+    item = row(group="replay")
+    del item["pause_intervals_ms"], item["executable_prefix_intervals_ms"]
+    assert label_errors(item) == []
+
+
+@pytest.mark.parametrize(
+    "field", ["pause_intervals_ms", "executable_prefix_intervals_ms"]
+)
+def test_policy_intervals_cannot_extend_past_wav(bundle, field):
+    from tools.corpus import check_audio
+
+    root, rows = bundle
+    item = rows[200]
+    item[field] = [[500, 1000.0625]]
+    assert any(field in error for error in check_audio([item], root / "audio"))
+    item[field] = [[500, 1000]]
+    assert check_audio([item], root / "audio") == []
 
 
 def test_public_sources_require_a_pinned_https_url():
@@ -563,6 +649,23 @@ def test_audio_rejects_non_mono_or_non_16khz(tmp_path, channels, rate):
         wav.writeframes(b"\x00\x00" * 16000 * channels)
     item["audio_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     assert any("16 kHz mono" in failure for failure in check_audio([item], tmp_path))
+
+
+def test_audio_with_zero_frame_rate_fails_by_name(tmp_path):
+    from tools.corpus import check_audio
+
+    item = row(group="replay")
+    path = tmp_path / item["audio_path"]
+    path.parent.mkdir()
+    with wave.open(str(path), "wb") as wav:
+        wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\x00\x00" * 16000)
+    data = bytearray(path.read_bytes())
+    data[24:32] = bytes(8)
+    path.write_bytes(bytes(data))
+    item["audio_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    failures = check_audio([item], tmp_path)
+    assert any("16 kHz mono" in failure for failure in failures)
 
 
 def test_replay_only_reports_pass_counts_but_refuses_freeze(bundle):
