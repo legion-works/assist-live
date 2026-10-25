@@ -56,7 +56,9 @@ Each satellite selects a pipeline with its own entities.
 HA does not give these entities a run identifier or satellite identifier.
 The entity-to-satellite mapping supplies that context without private HA interfaces.
 A repair issue reports two satellites that select the same assist-live pipeline.
-If no public pipeline-management interface is available, the config flow gives manual instructions.
+HA 2026.10.3 exports `async_create_default_pipeline` and `async_update_pipeline` in `assist_pipeline`.
+The integration uses them to make and update the pipeline of each satellite, with the TTS voice.
+If HA refuses the creation, the config flow gives manual instructions.
 
 The planned config flow selects the server, token, satellites, providers, turn settings, voices, and fallback entities.
 The server uses a versioned WebSocket protocol with JSON control messages and binary audio frames.
@@ -140,12 +142,16 @@ The provider keeps request metadata for 90 days.
 ElevenLabs `eleven_flash_v2_5` is the planned cloud TTS default.
 Its WebSocket path uses a minimum 50-character chunk schedule and an end-of-reply flush.
 The default 120-character schedule adds buffering after HA's 60-character threshold.
-Kokoro-82M is the planned local TTS default and makes audio one sentence at a time.
-
-Check the licenses of its code, phonemizer, weights, and each voice before release.
+Piper 1.8.0 with the `en_US-lessac-medium` voice is the planned local TTS default.
+A measurement on the development host selected it from five engine configurations.
+The `assist-live-server` record `docs/research/q7t-local-tts.md` gives the results.
 Full-file engines are fallback only.
-The Apache-2.0 server image does not include the GPL-3.0 Piper runtime or non-commercial voices.
-Make sure that the Silero and Smart Turn model-file licenses are satisfactory also.
+
+A license does not stop the selection of a model, voice, runtime, or library.
+Each component has a record with its pinned source, SHA-256, license, and attribution.
+The project code has the Apache-2.0 license.
+Third-party components keep their own licenses, and `THIRD_PARTY_NOTICES.md` lists them.
+The Silero VAD repository owner states that the v6.2.3 model file has the MIT license.
 
 ## Timing and turn identity
 
@@ -259,9 +265,9 @@ The P3 firmware design must specify the echo-cancelled microphone path and the u
 
 ## Open checks and quality limits
 
-P0 must select device transport, find public pipeline management, and calibrate playback markers.
+P0 must select device transport and calibrate playback markers.
 It must check HA Marketplace rules on a released HA version before an acceptance claim.
-Model cost on target hardware and model-file licenses stay open.
+Model cost on target hardware stays open.
 P1 must compare streaming STT candidates with Parakeet on human recordings.
 
 CI must subsequently include lint, type checks, HA tests, hassfest, HACS validation, protocol tests, and secret checks.
