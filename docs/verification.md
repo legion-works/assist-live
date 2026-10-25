@@ -2050,3 +2050,71 @@ PASS packaging (local check, not Marketplace or HACS-default acceptance)
 Integrations: 1
 Invalid integrations: 0
 ```
+
+## Bounded STT fallback
+
+Date: 2026-10-25 (UTC).
+
+Each turn has one bounded audio buffer and one initial clock.
+The checks include 199/201 ms for health, 599/601 ms for server messages, 15 s for audio, and 20 s for fallback.
+They also include replay order, byte limits, local voice history, engine properties, circular selection, cancellation, and complete transcripts.
+The time checks use a controlled event-loop clock.
+
+The first test run used this command:
+
+```sh
+cd "$WORKSPACE/assist-live"
+uv run pytest tests/test_stt_fallback.py -q --tb=short
+```
+
+The tests gave failure results for missing fallback behavior.
+The first clock fixture could not use an active event loop.
+After that fixture correction, the result for the selected tests was:
+
+```text
+ModuleNotFoundError: No module named 'custom_components.assist_live.stt_fallback'
+AssertionError: assert False
+3 failed, 1 passed, 16 deselected, 1 error in 0.45s
+```
+
+The assertion checks that the health path ends after 201 ms.
+The completed implementation gave these results:
+
+```sh
+uv run pytest tests/test_stt_fallback.py tests/test_stt_forward.py tests/test_ledger.py -q
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+task ha-minimum
+task hassfest
+```
+
+```text
+55 passed in 2.04s
+57 files already formatted
+All checks passed!
+Success: no issues found in 17 source files
+527 passed in 23.57s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=23
+PASS public data matches=0
+527 passed in 24.09s
+Integrations: 1
+Invalid integrations: 0
+```
+
+Eight numbered changes each gave a test failure:
+
+1. The fallback deadline starts again at failover.
+2. The first live audio chunk occurs two times.
+3. The kept audio does not contain one byte.
+4. Local audio restarts the server-message timer.
+5. Fallback starts after a complete server transcript.
+6. An error result supplies command text that is not complete.
+7. The audio buffer has no byte limit.
+8. The fallback chain accepts an assist-live entity.
+
+These checks ran changed modules in memory. They did not change source files.
+The `stage` values `fallback_used`, `stt_final`, and `stt_failed` apply without a new value.
+No device or household recording was part of these tests.
+Device measurements stay open because no test device is available.

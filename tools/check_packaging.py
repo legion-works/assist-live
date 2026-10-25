@@ -24,6 +24,7 @@ PACKAGE_FILES = {
     "repairs.py",
     "strings.json",
     "stt.py",
+    "stt_fallback.py",
     "translations/en.json",
     "tts.py",
 }
