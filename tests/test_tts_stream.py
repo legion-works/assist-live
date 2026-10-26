@@ -9,10 +9,12 @@ from homeassistant.components.tts import TTSAudioRequest
 from test_tts_forward import Fallback, entity, text
 
 
-def capable(client, *, healthy=True, stt=True, tts=True):
+def capable(client, *, healthy=True, stt=True, tts=True, text_positions=True):
     client.health.return_value = healthy
     client.health_capabilities = AsyncMock(
-        return_value=SimpleNamespace(healthy=healthy, stt=stt, tts=tts)
+        return_value=SimpleNamespace(
+            healthy=healthy, stt=stt, tts=tts, text_positions=text_positions
+        )
     )
 
 
@@ -28,7 +30,7 @@ async def test_first_audio_before_input_end(client, ledger):
         read.append(2)
         yield "Second."
 
-    async def synth(turn, parts, voice):
+    async def synth(turn, parts, voice, *, text_positions=False):
         assert await anext(parts) == "First. "
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
@@ -79,7 +81,7 @@ async def test_health_budget_does_not_include_turn_connect(client, ledger):
         entered.set()
         await release.wait()
 
-    async def synth(turn, parts, voice):
+    async def synth(turn, parts, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
         yield TTSSentenceEnd(0)
@@ -117,7 +119,7 @@ async def test_absent_voice_uses_advertised_default(client, ledger):
     fallback = Fallback()
     fallback._attr_default_options = {"voice": "voice-1"}
 
-    async def synth(turn, parts, voice):
+    async def synth(turn, parts, voice, *, text_positions=False):
         assert voice == "voice-1"
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
@@ -192,9 +194,9 @@ async def test_tts_health_deadline(client, ledger, monkeypatch, delay, server):
     async def health(**kwargs):
         entered.set()
         await release.wait()
-        return SimpleNamespace(healthy=True, tts=True, stt=False)
+        return SimpleNamespace(healthy=True, tts=True, stt=False, text_positions=False)
 
-    async def synth(turn, parts, voice):
+    async def synth(turn, parts, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
         yield TTSSentenceEnd(0)

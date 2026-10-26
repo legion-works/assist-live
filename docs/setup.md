@@ -84,12 +84,17 @@ The text buffer has a 16,384-character limit. Empty parts do not increase the bu
 If the text is more than that limit, the request stops with `tts_failed` and an HA error.
 The integration does not silently cut the text or retry it.
 
-The client supplies sentence boundaries to the integration.
-If server audio stops after playback data starts, the integration stops that response.
-It does not say the same words again or run the conversation again.
-It fires `assist_live_tts_failed` with `satellite` and the full reply `text`.
+Continuation is possible only with a server that advertises `capabilities.text_positions=true` in its health response.
+The entity requests positions only when that flag is `true`.
+If server audio stops, the fallback can continue from the last `sentence_end.text_end` when the audio formats agree.
+The position counts Unicode code points. The entity removes whitespace at the start of the remaining text.
+See the [TTS fallback rules](troubleshooting/tts.md) for format checks.
+
+An older server without `text_positions` uses the failure path with the full text, not continuation.
+No marker or a last marker without `text_end` also selects that failure path.
+The integration stops the audio and fires `assist_live_tts_failed` with `satellite` and the full reply `text`.
 An HA automation can send that event text to a selected notification service.
-The integration does not continue a reply at a sentence boundary at this time.
+The integration does not run the conversation again.
 
 ## Turn records and repairs
 

@@ -50,7 +50,7 @@ async def test_fallback_gets_each_text_part_once(client, ledger):
             reads.append(part)
             yield part
 
-    async def fail(turn, source, voice):
+    async def fail(turn, source, voice, *, text_positions=False):
         assert await anext(source) == "first "
         raise ProtocolError("start failure")
         yield
@@ -65,43 +65,53 @@ async def test_fallback_gets_each_text_part_once(client, ledger):
 
 
 def interrupted(client, completed=1):
-    async def fail(turn, source, voice):
+    async def fail(turn, source, voice, *, text_positions=False):
         await anext(source)
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
         if completed:
-            yield TTSSentenceEnd(0)
+            yield TTSSentenceEnd(0, 15)
         raise ProtocolError("mid-audio failure")
 
     client.tts_stream = fail
 
 
 @pytest.mark.parametrize(
-    "parts,completed,expected",
+    "full,positions,expected",
     [
-        (["First sentence. ", "Second sentence."], 1, "Second sentence."),
-        (["First. Second! Third?"], 2, "Third?"),
-        (["Dr. Example speaks. ", "Next."], 1, "Next."),
-        (["U.S. example. Next."], 1, "Next."),
-        (["At 3.14. Next."], 1, "Next."),
-        (['First!" Next.'], 1, "Next."),
+        ("First sentence. Second sentence.", [15], "Second sentence."),
+        ("First. Second! Third?", [6, 14], "Third?"),
+        ("Dr. Example speaks. Next.", [11], "speaks. Next."),
+        ("“Ready!” \tNext.", [8], "Next."),
+        ("😀 First. Next.", [8], "Next."),
+        ("𐐀 speaks. Next.", [9], "Next."),
+        ("First. Next.", [0], "First. Next."),
     ],
 )
-async def test_matching_fallback_continues_next_sentence_without_wav_header(
-    client, ledger, hass, parts, completed, expected
+@pytest.mark.parametrize("marker_before_audio", [False, True])
+async def test_matching_fallback_uses_server_position_without_wav_header(
+    client, ledger, hass, full, positions, expected, marker_before_audio
 ):
     capable(client)
 
+    reads, requests = [], []
+
     async def source():
-        for part in parts:
+        for part in (full[:4], full[4:]):
+            reads.append(part)
             yield part
 
-    async def fail(turn, source, voice):
-        await anext(source)
+    async def fail(turn, source, voice, *, text_positions=False):
+        requests.append(text_positions)
+        assert "".join([part async for part in source]) == full
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        if marker_before_audio:
+            yield TTSSentenceEnd(0, positions[0])
         yield TTSAudio(b"\x01\x00")
-        for index in range(completed):
-            yield TTSSentenceEnd(index)
+        for index, position in enumerate(positions):
+            if index == 0 and marker_before_audio:
+                continue
+            yield TTSSentenceEnd(index, position)
         raise ProtocolError("mid-audio failure")
 
     client.tts_stream = fail
@@ -114,7 +124,143 @@ async def test_matching_fallback_continues_next_sentence_without_wav_header(
     output = b"".join([part async for part in response.data_gen])
     assert output[44:] == b"\x01\x00" + wav_audio()[44:]
     assert fallback.received_text == [expected]
+    assert reads == [full[:4], full[4:]]
+    assert requests == [True]
+    client.health_capabilities.assert_awaited_once_with(timeout=0.2)
     assert "tts_failed" not in next(iter(ledger.records.values())).stages
+
+
+@pytest.mark.parametrize("case", ["legacy", "missing", "missing_after_position"])
+async def test_missing_position_reports_full_text(client, ledger, hass, case):
+    capable(client, text_positions=case != "legacy")
+    requested = []
+
+    async def fail(turn, source, voice, *, text_positions=False):
+        requested.append(text_positions)
+        assert [part async for part in source]
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        if case == "missing_after_position":
+            yield TTSSentenceEnd(0, 15)
+            yield TTSSentenceEnd(1, None)
+        else:
+            yield TTSSentenceEnd(0, None)
+        raise ProtocolError("mid-audio failure")
+
+    client.tts_stream = fail
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
+    forward.hass = hass
+    events = []
+    hass.bus.async_listen(
+        "assist_live_tts_failed", lambda event: events.append(event.data)
+    )
+    response = await forward.async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    assert b"".join([part async for part in response.data_gen])[44:] == b"\x01\x00"
+    await hass.async_block_till_done()
+    assert requested == [case != "legacy"]
+    client.health_capabilities.assert_awaited_once_with(timeout=0.2)
+    assert fallback.received_text == []
+    assert events == [
+        {"satellite": "satellite-a", "text": "First sentence. Second sentence."}
+    ]
+    assert "tts_failed" in next(iter(ledger.records.values())).stages
+    assert ledger.late_server_failures == 0
+
+
+async def test_oversized_position_from_client_reports_full_text(client, ledger, hass):
+    import asyncio
+    from types import SimpleNamespace
+
+    from aiohttp import WSMessage, WSMsgType
+    from assist_live_client import AssistLiveClient
+    from assist_live_client.protocol import encode_audio, encode_control
+
+    capable(client)
+    sent = asyncio.Event()
+    errors, requests = [], []
+
+    class Socket:
+        def __init__(self):
+            self.index = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def send_json(self, value):
+            if value["type"] == "negotiate":
+                self.turn = value["turn_id"]
+                requests.append(value)
+            elif value["type"] == "end":
+                sent.set()
+
+        async def send_str(self, value):
+            pass
+
+        async def receive(self, **kwargs):
+            if self.index:
+                await asyncio.wait_for(sent.wait(), 1)
+            messages = [
+                encode_control("negotiated", self.turn, capabilities=["tts"]),
+                encode_control(
+                    "format",
+                    self.turn,
+                    codec="pcm_s16le",
+                    rate=16000,
+                    channels=1,
+                    width=2,
+                ),
+                encode_audio(self.turn, 0, b"\x01\x00"),
+                encode_control("sentence_end", self.turn, sentence=0, text_end=33),
+                encode_control("end", self.turn),
+            ]
+            value = messages[self.index]
+            self.index += 1
+            kind = WSMsgType.BINARY if isinstance(value, bytes) else WSMsgType.TEXT
+            return WSMessage(
+                kind, value if isinstance(value, bytes) else json.dumps(value), ""
+            )
+
+    wire = AssistLiveClient(
+        "https://server.invalid",
+        "test",
+        session=SimpleNamespace(ws_connect=lambda *args, **kwargs: Socket()),
+    )
+
+    async def stream(*args, **kwargs):
+        try:
+            async for item in wire.tts_stream(*args, **kwargs):
+                yield item
+        except ProtocolError as error:
+            errors.append(str(error))
+            raise
+
+    client.tts_stream = stream
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
+    forward.hass = hass
+    events = []
+    hass.bus.async_listen(
+        "assist_live_tts_failed", lambda event: events.append(event.data)
+    )
+    response = await forward.async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    assert b"".join([part async for part in response.data_gen])[44:] == b"\x01\x00"
+    await hass.async_block_till_done()
+    assert requests[0].get("text_positions") is True
+    assert errors == ["TTS text position out of range"]
+    assert fallback.received_text == []
+    assert events == [
+        {"satellite": "satellite-a", "text": "First sentence. Second sentence."}
+    ]
+    assert "tts_failed" in next(iter(ledger.records.values())).stages
+    assert ledger.late_server_failures == 0
 
 
 @pytest.mark.parametrize(
@@ -188,16 +334,16 @@ async def test_complete_reply_counts_only_late_server_errors(
 
     capable(client)
 
-    async def synth(turn, source, voice):
+    async def synth(turn, source, voice, *, text_positions=False):
         assert [part async for part in source] == [
             "First sentence. ",
             "Second sentence.",
         ]
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
-        yield TTSSentenceEnd(0)
+        yield TTSSentenceEnd(0, 15)
         yield TTSAudio(b"\x02\x00")
-        yield TTSSentenceEnd(1)
+        yield TTSSentenceEnd(1, 32)
         if late:
             raise ProtocolError("planted-sensitive-late-error")
 

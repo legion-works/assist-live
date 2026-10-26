@@ -1,43 +1,8 @@
-import re
 import struct
 from collections.abc import AsyncGenerator
 
 from assist_live_client.models import TTSFormat
 from homeassistant.components.tts import TTSAudioResponse
-
-_ABBREVIATIONS = frozenset(
-    "mr. mrs. ms. dr. prof. sr. jr. st. vs. etc. e.g. i.e. a.m. p.m.".split()
-)
-
-
-def remaining_text(text: str, completed: int) -> str | None:
-    """Match sentence boundaries from the pinned server provider."""
-    boundaries = []
-    boundary = 0
-    period = False
-    start = 0
-    for offset, character in enumerate(text):
-        if boundary and character.isspace():
-            token = text[start:offset].split()[-1].lstrip("\"'“‘([").lower()
-            if not period or not (
-                token in _ABBREVIATIONS or re.fullmatch(r"(?:[a-z]\.)+", token)
-            ):
-                boundaries.append(offset)
-                start = offset
-            boundary = 0
-        elif character in ".!?":
-            period = boundary != 1 and character == "."
-            boundary = 1
-        elif boundary and character in "\"'”’)]":
-            boundary = 2
-            period = False
-        else:
-            boundary = 0
-    if text[start:].strip():
-        boundaries.append(len(text))
-    if not 0 < completed <= len(boundaries):
-        return None
-    return text[boundaries[completed - 1] :].lstrip()
 
 
 async def compatible_pcm(

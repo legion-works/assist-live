@@ -30,11 +30,17 @@ A server format without audio also starts fallback.
 An engine with streaming input can supply audio before HA finishes the text.
 For other engines, the public HA adapter waits for the full text and makes the full audio file.
 
-After server audio, continuation is possible only after one or more complete sentences.
-The server's zero-based `sentence_end` markers identify complete sentences.
-The fallback gets only the text after the last complete sentence.
-Sentence boundaries agree with the pinned server's punctuation and abbreviation rules.
-The entity finishes the text input before it selects this continuation text.
+After server audio, continuation is possible only with a server that advertises `capabilities.text_positions=true` in its health response.
+The entity requests positions only when that flag is `true`.
+Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
+The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
+It does not find sentence boundaries itself.
+See the [server protocol](https://github.com/legion-works/assist-live-server/blob/main/docs/protocol.md) for position rules.
+
+An older server without `text_positions` uses the failure path with the full text, not continuation.
+The same rule applies when no marker comes or the last marker has no `text_end`.
+The client refuses a position greater than the sent text length with a protocol error.
+If no previous position is available, this error uses the failure path with the full text.
 
 Continuation is possible only with the same codec, sample rate, sample width, and `channel` count.
 The entity reads the fallback response extension and WAV header to check these values.
@@ -45,7 +51,7 @@ Other formats, invalid headers, and format differences stop the audio.
 The WAV parser skips other RIFF chunks before `data`.
 It uses only `fmt` and `data` to check the format and supply PCM.
 
-If no sentence is complete, the entity stops the audio.
+If no sentence position is available, the entity stops the audio.
 A restart could play the start of a sentence again. A skip could remove its remaining text.
 This condition uses the same failure event and optional notification as a format difference.
 The integration does not run the conversation or the device operation again.

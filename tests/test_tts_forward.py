@@ -104,7 +104,7 @@ async def test_empty_tts_parts_do_not_fill_the_replay_buffer(client, ledger):
             yield ""
         yield "text"
 
-    async def synth(turn_id, parts, voice):
+    async def synth(turn_id, parts, voice, *, text_positions=False):
         seen.extend([part async for part in parts])
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x00\x00")
@@ -127,7 +127,7 @@ async def test_fallback_gets_new_unconsumed_generator(client, ledger):
 
     from assist_live_client.models import TTSFormat
 
-    async def fail(turn_id, source, voice):
+    async def fail(turn_id, source, voice, *, text_positions=False):
         assert await anext(source) == "First sentence. "
         raise ProtocolError("test loss")
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
@@ -158,7 +158,7 @@ async def test_sender_cancellation_keeps_future_text(client, ledger):
 
     from assist_live_client.models import TTSFormat
 
-    async def fail(turn_id, parts, voice):
+    async def fail(turn_id, parts, voice, *, text_positions=False):
         async def send():
             async for _ in parts:
                 pass
@@ -187,7 +187,7 @@ async def test_non_default_pipeline_voice_reaches_client(client, ledger):
 
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         seen.append(voice)
         seen.append("".join([part async for part in source]))
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
@@ -227,7 +227,7 @@ async def test_tts_wav_header_matches_declared_format(client, ledger, rate, byte
 
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         assert voice == "voice-2"
         yield TTSFormat("pcm_s16le", rate, 1, 2)
         yield TTSAudio(b"\x01\x00")
@@ -265,7 +265,7 @@ async def test_wav_header_pack_failure_uses_fallback(client, ledger, monkeypatch
 
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 22050, 1, 2)
         yield TTSAudio(b"\x01\x00")
 
@@ -289,7 +289,7 @@ async def test_audio_before_format_uses_fallback(client, ledger):
 
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         yield TTSAudio(b"\x01\x00")
 
     client.tts_stream = synth
@@ -328,7 +328,7 @@ async def test_unexpressible_tts_stream_is_refused(client, ledger, hass, case):
         "assist_live_tts_failed", lambda event: failures.append(event.data)
     )
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         base = TTSFormat("pcm_s16le", 22050, 1, 2)
         if case == "unknown_codec":
             yield TTSFormat("unknown", 22050, 1, 2)
@@ -390,7 +390,7 @@ async def test_sentence_end_items_do_not_end_or_fail_stream(client, ledger, hass
         "assist_live_tts_failed", lambda event: failures.append(event.data)
     )
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSSentenceEnd(0)
         yield TTSAudio(b"\x01\x00")
@@ -420,7 +420,7 @@ async def test_partial_server_audio_stops_without_repeating_reply(hass, client, 
         "assist_live_tts_failed", lambda event: seen.append(event.data)
     )
 
-    async def fail(turn_id, source, voice):
+    async def fail(turn_id, source, voice, *, text_positions=False):
         await anext(source)
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
@@ -447,7 +447,7 @@ async def test_format_without_audio_uses_fallback(client, ledger):
 
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSSentenceEnd(0)
 
@@ -473,7 +473,7 @@ async def test_unexpected_tts_failure_logs_only_type(
     secret = "planted-sensitive-tts-content"
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
-    async def synth(turn_id, source, voice):
+    async def synth(turn_id, source, voice, *, text_positions=False):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         if phase == "pre_audio":
             raise ValueError(secret)

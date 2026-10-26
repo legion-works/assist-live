@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .ledger import TurnLedger
-from .tts_fallback import compatible_pcm, remaining_text
+from .tts_fallback import compatible_pcm
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -188,6 +188,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 voice=request.options["voice"]
                 if "voice" in request.options
                 else (self.fallback.default_options or {}).get("voice", ""),
+                text_positions=health.text_positions,
             )
             if healthy
             else None
@@ -195,6 +196,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         audio_format: TTSFormat | None = None
         first_audio: TTSAudio | None = None
         completed = 0
+        text_end: int | None = None
         if server is not None:
             try:
                 async for item in server:
@@ -224,6 +226,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         if item.sentence != completed:
                             raise ProtocolError("TTS sentence sequence mismatch")
                         completed += 1
+                        text_end = item.text_end
                     else:
                         raise ProtocolError("invalid TTS stream item")
             except (ProtocolError, TimeoutError) as error:
@@ -263,7 +266,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 await server.aclose()
 
         async def output() -> AsyncGenerator[bytes]:
-            nonlocal completed
+            nonlocal completed, text_end
             assert server is not None and wav_header is not None
             invalid = False
             try:
@@ -279,6 +282,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                             invalid = True
                             raise ProtocolError("TTS sentence sequence mismatch")
                         completed += 1
+                        text_end = item.text_end
                     elif isinstance(item, TTSFormat):
                         invalid = True
                         raise ProtocolError("duplicate TTS format")
@@ -288,7 +292,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             except Exception as error:
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 full = "".join([part async for part in fresh()])
-                suffix = remaining_text(full, completed)
+                suffix = full[text_end:].lstrip() if text_end is not None else None
                 if not invalid and suffix is not None and audio_format is not None:
                     if not suffix:
                         self.ledger.late_server_failures += 1

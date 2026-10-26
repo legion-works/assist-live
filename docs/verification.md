@@ -2382,3 +2382,64 @@ uv run pytest tests/test_tts_stream.py tests/test_tts_fallback.py tests/test_tts
 ```text
 48 passed in 0.64s
 ```
+
+## Server text positions for TTS continuation
+
+Date: 2026-10-26 (UTC).
+
+The client source pin is `b4a920241e4131df34df678de1faab5e9cec59b0`.
+
+The [server protocol](https://github.com/legion-works/assist-live-server/blob/b4a920241e4131df34df678de1faab5e9cec59b0/docs/protocol.md) states:
+
+"The last position lets the fallback continue from `full_text[text_end:]` when the audio formats agree."
+
+It also states: "Older peers reject unknown keys in the two directions."
+The entity uses its current health result to request `text_positions` only when the server advertises that function.
+It uses the last marker position and removes whitespace at the start of the remaining text.
+It has no local punctuation or abbreviation rules.
+
+The first test run used:
+
+```sh
+uv run pytest tests/test_tts_fallback.py -q -k 'server_position or missing_position or oversized_position'
+```
+
+```text
+E       assert [False] == [True]
+18 failed, 23 deselected in 0.69s
+```
+
+The tests use fake client streams for positions before and after the first audio.
+They check abbreviations, attached quotation marks, emoji, an astral character, `0`, and two successive markers.
+The fallback receives only the correct remaining text, one time, without a second WAV header.
+The tests also check one health read and one read of each HA text part.
+
+An older server, a missing position, and a last marker without a position use the full-text failure event.
+A fake WebSocket supplies a position greater than the sent text length to the client decoder.
+The decoder gives `ProtocolError`, and the entity sends the full-text failure event without fallback audio.
+
+The implementation check used:
+
+```sh
+uv run pytest tests/test_tts_stream.py tests/test_tts_fallback.py tests/test_tts_forward.py -q
+```
+
+```text
+88 passed in 1.08s
+```
+
+Eight temporary mutations each caused test failures:
+
+| Mutation | Result |
+| --- | --- |
+| Disable the position request | `17 failed, 1 passed` |
+| Request positions from an older server | `1 failed` |
+| Add one to the position | `2 failed, 12 passed` |
+| Subtract one from the position | `14 failed` |
+| Keep a previous position after a marker without one | `1 failed` |
+| Start with position `0` before a marker | `1 failed` |
+| Keep whitespace at the start of the remaining text | `12 failed, 2 passed` |
+| Replay the full text when a marker has no position | `3 failed` |
+
+The source has none of these mutations.
+The format checks, header removal, empty WAV refusal, cancellation, and late-error counter keep their tests.

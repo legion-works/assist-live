@@ -5,7 +5,7 @@
 | `custom_components/assist_live/` | HA package, config flow, manifest, and English strings |
 | `custom_components/assist_live/stt.py`, `tts.py` | Voice forwarding and standard-engine fallback |
 | `custom_components/assist_live/stt_fallback.py` | Bounded turn audio, replay, and local voice detection |
-| `custom_components/assist_live/tts_fallback.py` | Sentence continuation and WAV format checks |
+| `custom_components/assist_live/tts_fallback.py` | WAV format checks and PCM extraction |
 | `custom_components/assist_live/diagnostics.py` | Content-free failure counts and fallback mode |
 | `custom_components/assist_live/ledger.py`, `repairs.py` | Per-satellite turns and repair issues |
 | `docs/setup.md` | Satellite bindings, pipelines, voices, and fallback limits |
