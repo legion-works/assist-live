@@ -22,4 +22,5 @@ async def async_get_config_entry_diagnostics(
         "protocol_version": 1,
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
         "failures": dict(runtime.ledger.failures),
+        "late_server_failures": runtime.ledger.late_server_failures,
     }

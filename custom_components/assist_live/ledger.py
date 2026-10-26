@@ -31,6 +31,7 @@ class TurnLedger:
         self._pending: list[TimingEvent] = []
         self._connected: set[str] = set()
         self.failures: dict[str, int] = {}
+        self.late_server_failures = 0
         self.save: Callable[[], Awaitable[None]] | None = None
 
     def current(self, satellite: str) -> TurnOpen | None:

@@ -2339,3 +2339,46 @@ Thirteen isolated mutations each caused a test failure.
 The checks included full-text waits, an exhausted generator, duplicate parts, format differences, and a kept WAV header.
 They also included an operation run again, a missing voice, an ignored function flag, and credentials in diagnostics.
 The remaining checks included byte counts, notification settings, sentence markers, and type-only error logs.
+
+## Complete TTS replies and transport errors
+
+Date: 2026-10-26 (UTC).
+
+A server error after the last complete sentence does not mean that reply text is missing.
+The diagnostics counter `late_server_failures` counts this condition until integration setup starts again.
+The integration keeps the type-only error log.
+It does not mark `tts_failed`, fire `assist_live_tts_failed`, send a notification, or start fallback.
+The WAV parser skips other RIFF chunks before `data` and uses only `fmt` and `data`.
+
+The first test run used:
+
+```sh
+uv run pytest tests/test_tts_fallback.py::test_complete_reply_counts_only_late_server_errors -q
+```
+
+```text
+KeyError: 'late_server_failures'
+2 failed in 0.30s
+```
+
+The same command after the counter change gave:
+
+```text
+2 passed in 0.26s
+```
+
+The test checks the usual end and a server error after all sentence markers.
+It checks two requests, correct audio, the diagnostics count, and no failure event or notification.
+It also checks that logs contain only the error type.
+An isolated mutation removed the counter increment.
+The source stayed correct Python, and the tests gave `1 failed, 1 passed` with `assert 0 == 1`.
+
+The TTS contract command used:
+
+```sh
+uv run pytest tests/test_tts_stream.py tests/test_tts_fallback.py tests/test_tts_lookup_contract.py -q
+```
+
+```text
+48 passed in 0.64s
+```

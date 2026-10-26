@@ -42,6 +42,9 @@ Only PCM WAV with the same format can continue.
 The entity removes the fallback WAV header before it appends the PCM.
 Other formats, invalid headers, and format differences stop the audio.
 
+The WAV parser skips other RIFF chunks before `data`.
+It uses only `fmt` and `data` to check the format and supply PCM.
+
 If no sentence is complete, the entity stops the audio.
 A restart could play the start of a sentence again. A skip could remove its remaining text.
 This condition uses the same failure event and optional notification as a format difference.
@@ -52,6 +55,10 @@ The integration does not run the conversation or the device operation again.
 An unsuccessful continuation marks `tts_failed` and fires `assist_live_tts_failed`.
 The event data contains `satellite` and the full reply in `text`.
 The full reply is not part of diagnostics or timing records.
+
+If the server stops after all sentences are complete, the listener heard the full reply.
+The integration counts this condition in the diagnostics counter `late_server_failures`.
+It keeps the type-only error log, but it does not mark `tts_failed`, fire the failure event, or send a notification.
 
 The config flow has a `notify_tts_failure` setting, with a default of `false`.
 When this setting is on, an unsuccessful continuation calls the public `persistent_notification.create` service.
@@ -70,5 +77,6 @@ See the [HA service documentation](https://www.home-assistant.io/actions/persist
 Diagnostics give the protocol version, failure counts, and the number of TTS entities in each fallback mode.
 The modes are `streaming` and `full_file`.
 The counts start at integration setup and include `fallback_used`, `stt_failed`, and `tts_failed`.
+The `late_server_failures` counter also starts at integration setup.
 Diagnostics contain no text, transcript, token, URL, or audio.
 Failure logs contain the error type only, not its message or traceback.

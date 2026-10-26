@@ -226,7 +226,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         completed += 1
                     else:
                         raise ProtocolError("invalid TTS stream item")
-            except (ProtocolError, TimeoutError, StopAsyncIteration) as error:
+            except (ProtocolError, TimeoutError) as error:
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except Exception as error:
@@ -291,6 +291,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 suffix = remaining_text(full, completed)
                 if not invalid and suffix is not None and audio_format is not None:
                     if not suffix:
+                        self.ledger.late_server_failures += 1
                         return
 
                     async def rest() -> AsyncGenerator[str]:

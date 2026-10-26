@@ -176,6 +176,76 @@ async def test_failed_continuation_reports_full_text_without_repeating_action(
         assert fallback.received_text == []
 
 
+@pytest.mark.parametrize("late", [False, True])
+async def test_complete_reply_counts_only_late_server_errors(
+    client, ledger, hass, caplog, late
+):
+    from types import SimpleNamespace
+
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    capable(client)
+
+    async def synth(turn, source, voice):
+        assert [part async for part in source] == [
+            "First sentence. ",
+            "Second sentence.",
+        ]
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0)
+        yield TTSAudio(b"\x02\x00")
+        yield TTSSentenceEnd(1)
+        if late:
+            raise ProtocolError("planted-sensitive-late-error")
+
+    client.tts_stream = synth
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
+    forward.hass = hass
+    forward.notify_tts_failure = True
+    events, notifications = [], []
+    hass.bus.async_listen(
+        "assist_live_tts_failed", lambda event: events.append(event.data)
+    )
+
+    async def notification(call):
+        notifications.append(call.data)
+
+    hass.services.async_register("persistent_notification", "create", notification)
+    entry = SimpleNamespace(entry_id="entry")
+    hass.data["assist_live"] = {
+        "entry": SimpleNamespace(ledger=ledger, tts={"device": forward})
+    }
+    for count in (1, 2):
+        response = await forward.async_stream_tts_audio(
+            TTSAudioRequest("en", {"voice": "voice-2"}, text())
+        )
+        assert b"".join([part async for part in response.data_gen])[44:] == (
+            b"\x01\x00\x02\x00"
+        )
+        await hass.async_block_till_done()
+        result = await async_get_config_entry_diagnostics(hass, entry)
+        assert result["late_server_failures"] == (count if late else 0)
+        assert result["failures"] == {}
+        assert all(
+            "tts_failed" not in record.stages for record in ledger.records.values()
+        )
+        assert events == []
+        assert notifications == []
+        assert fallback.received_text == []
+    records = [
+        r for r in caplog.records if r.name == "custom_components.assist_live.tts"
+    ]
+    assert len(records) == (2 if late else 0)
+    for record in records:
+        assert record.getMessage() == "TTS stream failed: ProtocolError"
+        assert record.exc_info is None
+    assert "planted-sensitive-late-error" not in caplog.text
+
+
 async def test_diagnostics_has_counts_and_buffering_without_content(
     client, ledger, hass
 ):
