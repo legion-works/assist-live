@@ -76,18 +76,20 @@ The integration does not save audio to disk.
 TTS keeps each text part and supplies a new generator to the fallback engine.
 This also works when a sender stops after it reads part of the text.
 Standard engines without streaming input receive the full text through the HA adapter.
-Server PCM has a streaming WAV header for mono, 16-bit samples at 16 kHz.
+Server PCM has a streaming WAV header for mono, 16-bit samples at the declared sample rate (16000 Hz or 22050 Hz).
+The sample rate stays the same in one stream.
+If the server supplies no audio, the integration uses the fallback engine.
 
 The text buffer has a 16,384-byte UTF-8 limit. Empty parts do not increase the buffer.
 If the text is more than that limit, the request stops with `tts_failed` and an HA error.
 The integration does not silently cut the text or retry it.
 
-The current client does not supply sentence boundaries to the integration.
+The client supplies sentence boundaries to the integration.
 If server audio stops after playback data starts, the integration stops that response.
 It does not say the same words again or run the conversation again.
 It fires `assist_live_tts_failed` with `satellite` and the full reply `text`.
 An HA automation can send that event text to a selected notification service.
-Continuation at a sentence boundary is not available through this client version.
+The integration does not continue a reply at a sentence boundary at this time.
 
 ## Turn records and repairs
 

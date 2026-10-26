@@ -94,6 +94,69 @@ def test_ci_has_required_jobs():
     }
 
 
+@pytest.mark.parametrize(
+    "carrier,field",
+    [
+        ("uv.lock", "all"),
+        ("uv.lock", "resolved"),
+        ("uv.lock", "declared"),
+        ("Taskfile.yml", "all"),
+        (".github/workflows/ci.yml", "all"),
+    ],
+)
+def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeypatch):
+    import shutil
+    import tomllib
+
+    from tools.check_ci import check_jobs
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        ".github/workflows/ci.yml",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    revision = tomllib.loads((tmp_path / "pyproject.toml").read_text())["tool"]["uv"][
+        "sources"
+    ]["assist-live-client"]["rev"]
+    target = tmp_path / carrier
+    content = target.read_text()
+    if field == "resolved":
+        content = content.replace(f"#{revision}", f"#{'0' * 40}")
+    elif field == "declared":
+        content = content.replace(f'rev={revision}"', f'rev={"0" * 40}"')
+    else:
+        content = content.replace(revision, "0" * 40)
+    target.write_text(content)
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    with pytest.raises(ValueError, match=f"client pin {carrier}"):
+        check_jobs(tmp_path / ".github/workflows/ci.yml")
+
+
+def test_client_pin_uses_project_revision(tmp_path, monkeypatch):
+    import tomllib
+
+    from tools.check_ci import check_jobs
+
+    revision = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"][
+        "sources"
+    ]["assist-live-client"]["rev"]
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        ".github/workflows/ci.yml",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((ROOT / name).read_text().replace(revision, "1" * 40))
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    assert check_jobs(tmp_path / ".github/workflows/ci.yml")
+
+
 def test_ci_commands_match_taskfile():
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())

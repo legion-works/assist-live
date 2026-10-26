@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, AsyncIterable
 from contextlib import suppress
 
@@ -15,6 +16,8 @@ from pymicro_vad import MicroVad
 from .const import DOMAIN
 from .ledger import TurnLedger
 from .stt_fallback import FallbackAudio
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -113,7 +116,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 if self.ledger.save is not None:
                     await self.ledger.save()
                 try:
-                    async with asyncio.timeout_at(started + 0.2):
+                    async with asyncio.timeout(0.2):
                         healthy = await self.client.health(timeout=0.2)
                 except ProtocolError, TimeoutError, OSError:
                     healthy = False
@@ -152,7 +155,8 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 return (
                     result if result.result == stt.SpeechResultState.SUCCESS else failed
                 )
-        except Exception:
+        except Exception as error:
+            _LOGGER.warning("STT turn failed: %s", type(error).__name__)
             self.ledger.mark(turn.turn_id, "stt_failed")
             return failed
         finally:

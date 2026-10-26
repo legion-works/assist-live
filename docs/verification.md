@@ -2184,3 +2184,89 @@ The five mutations changed one behavior at a time. Each test for this work ident
 | Dropped the selected voice | The pipeline-voice test found an empty voice. |
 
 The count stays in local request state. This change does not add a sentence-end step to the ledger.
+
+## Audio failure paths and client source checks
+
+Date: 2026-10-26.
+
+The TTS entity selects fallback when the server sends a format without an audio item.
+The WAV header uses the validated format values for 16000 Hz or 22050 Hz PCM.
+The entity accepts sentence-end items before and after audio without a sentence counter.
+Continuation at a sentence boundary is not available in the integration.
+
+Unexpected STT and TTS failures give one warning with the error type, not the error message.
+Tests plant sensitive text in error messages and check that it does not show in the logs.
+The 200 ms STT health limit starts at the health call, after the turn-store save.
+The audio-input deadline test has its own time limit.
+
+The CI checker reads the client source revision from `pyproject.toml`.
+It compares that revision with the lockfile, Taskfile, and CI workflow.
+Each mismatch gives an error that names the file.
+
+Before the code changes, the command was:
+
+```sh
+uv run --locked pytest tests/test_tts_forward.py tests/test_stt_fallback.py tests/test_ci.py -q
+```
+
+```text
+13 failed, 101 passed in 2.58s
+```
+
+The first run included CI tests for an unavailable root argument.
+The tests use an isolated module path and the same checker interface.
+Before the checker changes, the CI tests gave:
+
+```sh
+uv run --locked pytest tests/test_ci.py -k client_pin -q --tb=short
+```
+
+```text
+Failed: DID NOT RAISE <class 'ValueError'>
+ValueError: HA component requirements command
+4 failed, 46 deselected in 0.49s
+```
+
+After the code changes, the same command gave:
+
+```text
+113 passed in 4.26s
+```
+
+Two more lockfile tests check the declared revision and resolved commit independently.
+The full suite includes these tests:
+
+```sh
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+task ha-minimum
+task package-check
+task hassfest
+```
+
+```text
+57 files already formatted
+All checks passed!
+Success: no issues found in 17 source files
+556 passed in 16.91s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=28
+PASS public data matches=0
+556 passed in 16.62s
+PASS packaging (local check, not Marketplace or HACS-default acceptance)
+Integrations: 1
+Invalid integrations: 0
+```
+
+Twenty isolated mutations each caused a test failure.
+These included missing warnings, error-message disclosure, an empty audio stream, unsupported rates, and incorrect WAV fields.
+They also included sentence stops, a turn-relative health limit, and missing source-pin checks.
+With a 60 s input limit, the deadline test gave `TimeoutError` in 1.544 s, with test startup.
+
+The removed counter had no reader and no effect on output.
+Its removal does not make a new behavior test necessary.
+The sentence-end tests check the output before and after audio.
+Human-readable instructions have no executable behavior test.
+The setup instructions agree with the client format and sentence-end items.
+The STT instructions state the 15 s limit from the start of the turn.

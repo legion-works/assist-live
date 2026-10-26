@@ -72,6 +72,38 @@ async def test_health_exception_selects_local_path(client, ledger, error):
     assert "fallback_used" in stages(ledger)
 
 
+async def test_slow_ledger_save_does_not_use_health_budget(client, ledger, clock):
+    saving, saved = asyncio.Event(), asyncio.Event()
+
+    async def save():
+        if saved.is_set():
+            return
+        saving.set()
+        await saved.wait()
+
+    async def health(**kwargs):
+        await clock.move(0)
+        return True
+
+    async def final(*args):
+        yield {"type": "final", "text": "server after slow save"}
+
+    ledger.save = save
+    client.health.side_effect = health
+    client.stt = final
+    task = asyncio.create_task(
+        entity(client, ledger, Fallback()).async_process_audio_stream(
+            metadata(), audio([bytes(320)])
+        )
+    )
+    await saving.wait()
+    await clock.move(0.3)
+    saved.set()
+    result = await task
+    assert result.text == "server after slow save"
+    assert "fallback_used" not in stages(ledger)
+
+
 @pytest.mark.parametrize("voiced", [False, True])
 async def test_only_server_messages_reset_receive_timer(client, ledger, clock, voiced):
     incoming = asyncio.Queue()
@@ -280,7 +312,15 @@ async def test_audio_stops_at_initial_fifteen_second_deadline(clock):
         assert await anext(reader) == b"before"
         await clock.move(0.002)
         incoming.put_nowait(b"after")
-        assert [chunk async for chunk in reader] == []
+
+        async def remaining():
+            async with asyncio.timeout(1):
+                return [chunk async for chunk in reader]
+
+        pending = asyncio.create_task(remaining())
+        await clock.move(0)
+        await clock.move(1.001)
+        assert await pending == []
         assert (
             b"".join([chunk async for chunk in turn_audio.server_audio()]) == b"before"
         )
@@ -414,7 +454,13 @@ async def test_recursive_selection_introduced_during_turn_is_refused(client, led
 
 
 @pytest.mark.parametrize("source_error", [True, False])
-async def test_unexpected_failure_is_empty_without_retry(client, ledger, source_error):
+async def test_unexpected_failure_is_empty_without_retry(
+    client, ledger, source_error, caplog
+):
+    import logging
+
+    secret = "planted-sensitive-stt-content"
+
     class Failed(Fallback):
         calls = 0
 
@@ -423,11 +469,11 @@ async def test_unexpected_failure_is_empty_without_retry(client, ledger, source_
             if source_error:
                 async for _ in stream:
                     pass
-            raise ValueError("test failure")
+            raise ValueError(secret)
 
     async def broken_source():
         yield bytes(320)
-        raise ValueError("test input failure")
+        raise ValueError(secret)
 
     fallback = Failed()
     result = await entity(client, ledger, fallback).async_process_audio_stream(
@@ -437,3 +483,13 @@ async def test_unexpected_failure_is_empty_without_retry(client, ledger, source_
     assert result.result == stt.SpeechResultState.ERROR
     assert fallback.calls == 1
     assert "stt_failed" in stages(ledger)
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "custom_components.assist_live.stt"
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert "ValueError" in records[0].getMessage()
+    assert records[0].exc_info is None
+    assert secret not in caplog.text

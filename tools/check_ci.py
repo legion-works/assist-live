@@ -3,6 +3,7 @@
 import argparse
 import json
 import shlex
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -30,8 +31,6 @@ HA_COMPONENT_REQUIREMENTS = [
     "mutagen==1.48.1",
     "pymicro-vad==1.0.1",
     "pyspeex-noise==1.0.2",
-    "assist-live-client @ git+https://github.com/legion-works/assist-live-server@"
-    "ee404d406942fbeb64d6c2380366eb380a2ca403#subdirectory=client",
 ]
 NODE_VERSION = "22.22.0"
 NODE_SHA256 = "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37"
@@ -49,6 +48,17 @@ def node_install() -> str:
 
 
 def check_jobs(path: str | Path) -> set[str]:
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    source = project["tool"]["uv"]["sources"]["assist-live-client"]
+    repository, revision, subdirectory = (
+        source["git"],
+        source["rev"],
+        source["subdirectory"],
+    )
+    client_requirement = (
+        f"assist-live-client @ git+{repository}@{revision}#subdirectory={subdirectory}"
+    )
     workflow = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     failures = []
@@ -117,11 +127,42 @@ def check_jobs(path: str | Path) -> set[str]:
         "--with",
         "PyYAML==6.0.3",
     ]
-    for requirement in HA_COMPONENT_REQUIREMENTS:
+    for requirement in [*HA_COMPONENT_REQUIREMENTS, client_requirement]:
         required.extend(["--with", requirement])
     required.extend(["pytest", "tests/", "-q"])
     if shlex.split(command) != required:
         failures.append("HA component requirements command")
+    if [
+        part for part in shlex.split(command) if part.startswith("assist-live-client")
+    ] != [client_requirement]:
+        failures.append("client pin .github/workflows/ci.yml")
+    taskfile = yaml.safe_load((root / "Taskfile.yml").read_text(encoding="utf-8"))
+    task_pins = [
+        part
+        for task in taskfile["tasks"].values()
+        for cmd in task.get("cmds", [])
+        if isinstance(cmd, str)
+        for part in shlex.split(cmd)
+        if part.startswith("assist-live-client")
+    ]
+    if task_pins != [client_requirement]:
+        failures.append("client pin Taskfile.yml")
+    locked = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    lock_url = f"{repository}?subdirectory={subdirectory}&rev={revision}"
+    resolved_pins = [
+        package["source"].get("git")
+        for package in locked["package"]
+        if package["name"] == "assist-live-client"
+    ]
+    declared_pins = [
+        dependency.get("git")
+        for package in locked["package"]
+        for group in package.get("metadata", {}).get("requires-dev", {}).values()
+        for dependency in group
+        if dependency["name"] == "assist-live-client"
+    ]
+    if resolved_pins != [f"{lock_url}#{revision}"] or declared_pins != [lock_url]:
+        failures.append("client pin uv.lock")
     if ha.get("strategy") != {"fail-fast": False, "matrix": {"include": HA_MATRIX}}:
         failures.append("HA matrix")
     if ha.get("outputs") != {

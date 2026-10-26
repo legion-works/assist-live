@@ -19,7 +19,8 @@ A complete server transcript prevents fallback, also after a connection error.
 
 The integration keeps a maximum of 480,000 bytes in memory for each turn.
 This is 15 s of mono, 16-bit PCM at 16 kHz.
-The input also has a 15 s time limit, with time without audio.
+The input limit is 15 s of audio input from the start of the turn.
+This limit also includes time without audio.
 The integration does not save this audio to disk.
 
 On fallback, the local engine gets the kept bytes and then the live bytes.
