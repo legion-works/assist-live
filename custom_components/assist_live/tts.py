@@ -187,9 +187,16 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                             item.codec != "pcm_s16le"
                             or item.width != 2
                             or item.channels != 1
-                            or item.rate <= 0
+                            or not 8000 <= item.rate <= 192000
                         ):
                             raise ProtocolError("unsupported TTS audio format")
+                        byte_rate = item.rate * item.channels * item.width
+                        block_align = item.channels * item.width
+                        if (
+                            not 0 <= byte_rate <= 0xFFFFFFFF
+                            or not 0 <= block_align <= 0xFFFF
+                        ):
+                            raise ProtocolError("TTS audio format exceeds WAV limits")
                         audio_format = item
                     elif isinstance(item, TTSAudio):
                         if audio_format is None:
@@ -206,35 +213,43 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         raise ProtocolError("invalid TTS stream item")
             except ProtocolError, TimeoutError, StopAsyncIteration:
                 healthy = False
+            except Exception:
+                healthy = False
             except BaseException:
                 await cleanup()
                 raise
             if audio_format is None:
                 healthy = False
+            wav_header: bytes | None = None
+            if healthy and audio_format is not None:
+                try:
+                    wav_header = struct.pack(
+                        "<4sI4s4sIHHIIHH4sI",
+                        b"RIFF",
+                        0xFFFFFFFF,
+                        b"WAVE",
+                        b"fmt ",
+                        16,
+                        1,
+                        audio_format.channels,
+                        audio_format.rate,
+                        audio_format.rate * audio_format.channels * audio_format.width,
+                        audio_format.channels * audio_format.width,
+                        16,
+                        b"data",
+                        0xFFFFFFFF,
+                    )
+                except Exception:
+                    healthy = False
             if not healthy and isinstance(server, AsyncGenerator):
                 await server.aclose()
 
         async def output() -> AsyncGenerator[bytes]:
-            assert server is not None and audio_format is not None
+            assert server is not None and wav_header is not None
             nonlocal sentence_end_count
             try:
                 self.ledger.mark(turn.turn_id, "tts_first_byte")
-                yield struct.pack(
-                    "<4sI4s4sIHHIIHH4sI",
-                    b"RIFF",
-                    0xFFFFFFFF,
-                    b"WAVE",
-                    b"fmt ",
-                    16,
-                    1,
-                    audio_format.channels,
-                    audio_format.rate,
-                    audio_format.rate * audio_format.channels * audio_format.width,
-                    audio_format.channels * audio_format.width,
-                    16,
-                    b"data",
-                    0xFFFFFFFF,
-                )
+                yield wav_header
                 if first_audio is not None:
                     yield first_audio.data
                 async for item in server:
@@ -242,9 +257,11 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         yield item.data
                     elif isinstance(item, TTSSentenceEnd):
                         sentence_end_count += 1
+                    elif isinstance(item, TTSFormat):
+                        raise ProtocolError("duplicate TTS format")
                     else:
                         raise ProtocolError("invalid TTS stream item")
-            except ProtocolError, TimeoutError:
+            except Exception:
                 self.ledger.mark(turn.turn_id, "tts_failed")
                 full = "".join([part async for part in fresh()])
                 self.hass.bus.async_fire(
