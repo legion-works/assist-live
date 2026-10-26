@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
-from .const import DOMAIN
+from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
 
 
 def is_forwarder(hass: HomeAssistant, entity_id: str) -> bool:
@@ -95,6 +95,7 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                     vol.Required("fallback_tts"): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain="tts")
                     ),
+                    vol.Optional(CONF_NOTIFY_TTS_FAILURE, default=False): bool,
                 }
             ),
         )

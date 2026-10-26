@@ -1,4 +1,5 @@
 import pytest
+from assist_live_client.models import HealthCapabilities
 from homeassistant.components.tts import (
     TextToSpeechEntity,
     TTSAudioRequest,
@@ -47,7 +48,7 @@ async def test_tts_fallback_language_narrower_than_advertised(client, ledger):
             TTSAudioRequest("en", {"voice": "voice-2"}, text())
         )
     assert not hasattr(fallback, "text")
-    client.health.assert_not_awaited()
+    client.health_capabilities.assert_not_awaited()
     assert ledger.records == {}
 
 
@@ -78,8 +79,8 @@ async def test_unusable_tts_fallback_is_a_named_ha_error_and_repair(hass):
     assert ir.async_get(hass).async_get_issue("assist_live", issue_id) is None
 
 
-@pytest.mark.parametrize("part,count", [("a", 16384), ("é", 8192)])
-async def test_tts_text_limit_is_utf8_bytes(client, ledger, part, count):
+@pytest.mark.parametrize("part,count", [("a", 16384), ("é", 16384)])
+async def test_tts_text_limit_is_characters(client, ledger, part, count):
     async def source():
         yield part * count
         yield "x"
@@ -95,7 +96,7 @@ async def test_tts_text_limit_is_utf8_bytes(client, ledger, part, count):
 async def test_empty_tts_parts_do_not_fill_the_replay_buffer(client, ledger):
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     seen = []
 
     async def source():
@@ -122,7 +123,7 @@ async def test_fallback_gets_new_unconsumed_generator(client, ledger):
 
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     from assist_live_client.models import TTSFormat
 
@@ -147,7 +148,7 @@ async def test_sender_cancellation_keeps_future_text(client, ledger):
     from assist_live_client.protocol import ProtocolError
 
     reading, release = asyncio.Event(), asyncio.Event()
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def source():
         yield "First. "
@@ -182,7 +183,7 @@ async def test_sender_cancellation_keeps_future_text(client, ledger):
 
 async def test_non_default_pipeline_voice_reaches_client(client, ledger):
     seen = []
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
@@ -224,7 +225,7 @@ async def test_tts_wav_header_matches_declared_format(client, ledger, rate, byte
 
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def synth(turn_id, source, voice):
         assert voice == "voice-2"
@@ -262,7 +263,7 @@ async def test_wav_header_pack_failure_uses_fallback(client, ledger, monkeypatch
 
     from custom_components.assist_live import tts as tts_module
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def synth(turn_id, source, voice):
         yield TTSFormat("pcm_s16le", 22050, 1, 2)
@@ -286,7 +287,7 @@ async def test_wav_header_pack_failure_uses_fallback(client, ledger, monkeypatch
 async def test_audio_before_format_uses_fallback(client, ledger):
     from assist_live_client.models import TTSAudio
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def synth(turn_id, source, voice):
         yield TTSAudio(b"\x01\x00")
@@ -321,7 +322,7 @@ async def test_audio_before_format_uses_fallback(client, ledger):
 async def test_unexpressible_tts_stream_is_refused(client, ledger, hass, case):
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     failures = []
     hass.bus.async_listen(
         "assist_live_tts_failed", lambda event: failures.append(event.data)
@@ -383,7 +384,7 @@ async def test_unexpressible_tts_stream_is_refused(client, ledger, hass, case):
 async def test_sentence_end_items_do_not_end_or_fail_stream(client, ledger, hass):
     from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     failures = []
     hass.bus.async_listen(
         "assist_live_tts_failed", lambda event: failures.append(event.data)
@@ -413,7 +414,7 @@ async def test_partial_server_audio_stops_without_repeating_reply(hass, client, 
     from assist_live_client.models import TTSAudio, TTSFormat
     from assist_live_client.protocol import ProtocolError
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     seen = []
     hass.bus.async_listen(
         "assist_live_tts_failed", lambda event: seen.append(event.data)
@@ -444,7 +445,7 @@ async def test_partial_server_audio_stops_without_repeating_reply(hass, client, 
 async def test_format_without_audio_uses_fallback(client, ledger):
     from assist_live_client.models import TTSFormat, TTSSentenceEnd
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def synth(turn_id, source, voice):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
@@ -470,7 +471,7 @@ async def test_unexpected_tts_failure_logs_only_type(
     from custom_components.assist_live import tts as tts_module
 
     secret = "planted-sensitive-tts-content"
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def synth(turn_id, source, voice):
         yield TTSFormat("pcm_s16le", 16000, 1, 2)

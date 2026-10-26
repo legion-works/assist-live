@@ -8,7 +8,8 @@
           "url": "Server URL",
           "token": "Access token",
           "fallback_stt": "Fallback STT entity",
-          "fallback_tts": "Fallback TTS entity"
+          "fallback_tts": "Fallback TTS entity",
+          "notify_tts_failure": "Show full reply in a persistent notification if TTS fails"
         }
       },
       "http_warning": {

@@ -19,6 +19,7 @@ PACKAGE_FILES = {
     "__init__.py",
     "config_flow.py",
     "const.py",
+    "diagnostics.py",
     "ledger.py",
     "manifest.json",
     "repairs.py",
@@ -27,6 +28,7 @@ PACKAGE_FILES = {
     "stt_fallback.py",
     "translations/en.json",
     "tts.py",
+    "tts_fallback.py",
 }
 
 

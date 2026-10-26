@@ -5,10 +5,14 @@
 | `custom_components/assist_live/` | HA package, config flow, manifest, and English strings |
 | `custom_components/assist_live/stt.py`, `tts.py` | Voice forwarding and standard-engine fallback |
 | `custom_components/assist_live/stt_fallback.py` | Bounded turn audio, replay, and local voice detection |
+| `custom_components/assist_live/tts_fallback.py` | Sentence continuation and WAV format checks |
+| `custom_components/assist_live/diagnostics.py` | Content-free failure counts and fallback mode |
 | `custom_components/assist_live/ledger.py`, `repairs.py` | Per-satellite turns and repair issues |
 | `docs/setup.md` | Satellite bindings, pipelines, voices, and fallback limits |
 | `tests/test_stt_forward.py`, `test_tts_forward.py`, `test_ledger.py` | Forwarding, cancellation, playback separation, and turn rules |
 | `tests/test_stt_fallback.py` | Server-message timers, failover, replay, and deadline checks |
+| `tests/test_tts_stream.py`, `test_tts_fallback.py` | Stream order, text replay, format agreement, and failure notifications |
+| `docs/troubleshooting/tts.md` | TTS fallback rules and notification settings |
 | `docs/troubleshooting/stt.md` | STT fallback limits and failure checks |
 | `tests/test_config_flow.py`, `test_repairs.py`, `test_tts_lookup_contract.py` | HA runtime setup, repair issues, and TTS lookup contract |
 | `hacs.json` | HACS package metadata |

@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from assist_live_client.models import HealthCapabilities
 from homeassistant.components import stt
 
 
@@ -42,7 +43,7 @@ def entity(client, ledger, fallback):
 async def test_external_vad_never_changes(client, ledger):
     forward = entity(client, ledger, Fallback())
     assert forward.audio_processing.requires_external_vad is False
-    client.health.return_value = False
+    client.health_capabilities.return_value = HealthCapabilities(False, False, False)
     result = await forward.async_process_audio_stream(metadata(), audio([bytes(320)]))
     assert result.text == "test command"
     assert forward.audio_processing.requires_external_vad is False
@@ -103,7 +104,7 @@ async def test_fallback_narrower_than_advertised_entity(client, ledger, capabili
     assert result.result == stt.SpeechResultState.ERROR
     assert consumed == []
     assert not hasattr(fallback, "audio")
-    client.health.assert_not_awaited()
+    client.health_capabilities.assert_not_awaited()
 
 
 async def test_local_endpoint_limits(client, ledger, monkeypatch):
@@ -127,7 +128,7 @@ async def test_local_endpoint_limits(client, ledger, monkeypatch):
 async def test_server_final_and_midstream_replay(client, ledger):
     from assist_live_client.protocol import ProtocolError
 
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
 
@@ -160,7 +161,7 @@ async def test_sender_cancellation_does_not_cancel_live_input(client, ledger):
     from assist_live_client.protocol import ProtocolError
 
     reading, release = asyncio.Event(), asyncio.Event()
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def source():
         yield b"\x01\x00" * 160

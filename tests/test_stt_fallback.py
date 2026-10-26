@@ -3,6 +3,7 @@ from contextlib import suppress
 from dataclasses import replace
 
 import pytest
+from assist_live_client.models import HealthCapabilities
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import stt
 from test_stt_forward import Fallback, audio, entity, metadata
@@ -40,12 +41,12 @@ async def test_health_has_its_own_deadline(client, ledger, clock, delay, expecte
     async def health(**kwargs):
         entered.set()
         await release.wait()
-        return True
+        return HealthCapabilities(True, True, False)
 
     async def final(*args):
         yield {"type": "final", "text": "server"}
 
-    client.health.side_effect = health
+    client.health_capabilities.side_effect = health
     client.stt = final
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
@@ -64,7 +65,7 @@ async def test_health_has_its_own_deadline(client, ledger, clock, delay, expecte
 
 @pytest.mark.parametrize("error", [ProtocolError, TimeoutError, OSError])
 async def test_health_exception_selects_local_path(client, ledger, error):
-    client.health.side_effect = error("unavailable")
+    client.health_capabilities.side_effect = error("unavailable")
     result = await entity(client, ledger, Fallback()).async_process_audio_stream(
         metadata(), audio([bytes(320)])
     )
@@ -83,13 +84,13 @@ async def test_slow_ledger_save_does_not_use_health_budget(client, ledger, clock
 
     async def health(**kwargs):
         await clock.move(0)
-        return True
+        return HealthCapabilities(True, True, False)
 
     async def final(*args):
         yield {"type": "final", "text": "server after slow save"}
 
     ledger.save = save
-    client.health.side_effect = health
+    client.health_capabilities.side_effect = health
     client.stt = final
     task = asyncio.create_task(
         entity(client, ledger, Fallback()).async_process_audio_stream(
@@ -108,7 +109,7 @@ async def test_slow_ledger_save_does_not_use_health_budget(client, ledger, clock
 async def test_only_server_messages_reset_receive_timer(client, ledger, clock, voiced):
     incoming = asyncio.Queue()
     sending, receiving = asyncio.Event(), asyncio.Event()
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def source():
         while True:
@@ -145,7 +146,7 @@ async def test_only_server_messages_reset_receive_timer(client, ledger, clock, v
 async def test_heartbeat_extends_receive_deadline(client, ledger, clock):
     messages = asyncio.Queue()
     entered = asyncio.Event()
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def server(*args):
         while True:
@@ -174,7 +175,7 @@ async def test_heartbeat_extends_receive_deadline(client, ledger, clock):
 async def test_final_result_prevents_fallback_even_on_close_error(
     client, ledger, error
 ):
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def final(*args):
         try:
@@ -194,7 +195,7 @@ async def test_final_result_prevents_fallback_even_on_close_error(
 
 
 async def test_partial_then_disconnect_replays_kept_and_live_once(client, ledger):
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     release = asyncio.Event()
     chunks = [bytes([i, 0]) * 160 for i in (1, 2, 3)]
 
@@ -238,7 +239,7 @@ async def test_local_vad_uses_voice_from_before_disconnect(client, ledger, monke
             return 1.0 if chunk[0] else 0.0
 
     monkeypatch.setattr("custom_components.assist_live.stt.MicroVad", Vad)
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def lost(turn_id, stream):
         await anext(stream)
@@ -256,7 +257,7 @@ async def test_local_vad_uses_voice_from_before_disconnect(client, ledger, monke
 @pytest.mark.parametrize("health", [True, False])
 async def test_fallback_deadline_is_from_turn_start(client, ledger, clock, health):
     entered = asyncio.Event()
-    client.health.return_value = health
+    client.health_capabilities.return_value = HealthCapabilities(health, health, health)
 
     async def late_failure(*args):
         yield {"type": "heartbeat"}
@@ -372,7 +373,7 @@ async def test_failed_fallback_never_returns_partial_text(client, ledger):
 )
 async def test_compatibility_checked_again_at_failover(client, ledger, capability):
     fallback = Fallback()
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def lost(*args):
         setattr(fallback, capability, [])
@@ -401,7 +402,7 @@ async def test_recursive_fallback_is_refused(client, ledger, through_wrapper):
     assert not result.text
     assert result.result == stt.SpeechResultState.ERROR
     assert not hasattr(fallback, "audio")
-    client.health.assert_not_awaited()
+    client.health_capabilities.assert_not_awaited()
 
 
 async def test_cancellation_stops_the_live_source(client, ledger):
@@ -439,7 +440,7 @@ async def test_incompatible_audio_is_refused_before_consumption(client, ledger):
 async def test_recursive_selection_introduced_during_turn_is_refused(client, ledger):
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
-    client.health.return_value = True
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
 
     async def lost(*args):
         fallback.fallback = forward

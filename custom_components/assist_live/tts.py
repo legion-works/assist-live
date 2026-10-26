@@ -17,8 +17,9 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .ledger import TurnLedger
+from .tts_fallback import compatible_pcm, remaining_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ async def async_setup_entry(
         entity = AssistLiveTTS(
             satellite, device, runtime.client, runtime.ledger, fallback
         )
+        entity.notify_tts_failure = entry.data.get(CONF_NOTIFY_TTS_FAILURE, False)
         if registered := dr.async_get(hass).async_get(device):
             entity._attr_device_info = dr.DeviceInfo(
                 identifiers=registered.identifiers,
@@ -80,6 +82,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         self.client = client
         self.ledger = ledger
         self.fallback = fallback
+        self.notify_tts_failure = False
         self._attr_unique_id = f"{satellite}_tts"
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
@@ -101,9 +104,13 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         turn = self.ledger.open_tts(self.satellite)
         if self.ledger.save is not None:
             await self.ledger.save()
-        healthy = await self.client.health(timeout=0.2) and await self.ledger.connect(
-            turn
-        )
+        try:
+            async with asyncio.timeout(0.2):
+                health = await self.client.health_capabilities(timeout=0.2)
+                healthy = health.healthy is True and health.tts is True
+        except ProtocolError, TimeoutError, OSError:
+            healthy = False
+        healthy = healthy and await self.ledger.connect(turn)
         buffer: list[str] = []
         changed = asyncio.Condition()
         done = False
@@ -116,13 +123,13 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 async for part in request.message_gen:
                     if not part:
                         continue
-                    if len(part) > 16384 or size + len(part.encode("utf-8")) > 16384:
+                    if len(part) > 16384 or size + len(part) > 16384:
                         failure = HomeAssistantError(
-                            "TTS text limit is 16384 UTF-8 bytes"
+                            "TTS text limit is 16384 characters"
                         )
                         self.ledger.mark(turn.turn_id, "tts_failed")
                         return
-                    size += len(part.encode("utf-8"))
+                    size += len(part)
                     if not buffer:
                         self.ledger.mark(turn.turn_id, "tts_first_text")
                     async with changed:
@@ -162,23 +169,32 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             async for part in capture():
                 yield part
 
-        async def fallback() -> tts.TTSAudioResponse:
+        async def fallback(
+            parts: AsyncGenerator[str] | None = None,
+        ) -> tts.TTSAudioResponse:
             self.ledger.mark(turn.turn_id, "fallback_used")
             return await self.fallback.async_stream_tts_audio(
-                TTSAudioRequest(request.language, request.options, fresh())
+                TTSAudioRequest(
+                    request.language,
+                    request.options,
+                    fresh() if parts is None else parts,
+                )
             )
 
         server = (
             self.client.tts_stream(
                 turn.turn_id,
                 capture(),
-                voice=request.options.get("voice", ""),
+                voice=request.options["voice"]
+                if "voice" in request.options
+                else (self.fallback.default_options or {}).get("voice", ""),
             )
             if healthy
             else None
         )
         audio_format: TTSFormat | None = None
         first_audio: TTSAudio | None = None
+        completed = 0
         if server is not None:
             try:
                 async for item in server:
@@ -205,9 +221,13 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                             raise ProtocolError(
                                 "TTS format required before sentence end"
                             )
+                        if item.sentence != completed:
+                            raise ProtocolError("TTS sentence sequence mismatch")
+                        completed += 1
                     else:
                         raise ProtocolError("invalid TTS stream item")
-            except ProtocolError, TimeoutError, StopAsyncIteration:
+            except (ProtocolError, TimeoutError, StopAsyncIteration) as error:
+                _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except Exception as error:
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
@@ -243,7 +263,9 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 await server.aclose()
 
         async def output() -> AsyncGenerator[bytes]:
+            nonlocal completed
             assert server is not None and wav_header is not None
+            invalid = False
             try:
                 self.ledger.mark(turn.turn_id, "tts_first_byte")
                 yield wav_header
@@ -253,19 +275,53 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     if isinstance(item, TTSAudio):
                         yield item.data
                     elif isinstance(item, TTSSentenceEnd):
-                        pass
+                        if item.sentence != completed:
+                            invalid = True
+                            raise ProtocolError("TTS sentence sequence mismatch")
+                        completed += 1
                     elif isinstance(item, TTSFormat):
+                        invalid = True
                         raise ProtocolError("duplicate TTS format")
                     else:
+                        invalid = True
                         raise ProtocolError("invalid TTS stream item")
             except Exception as error:
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
-                self.ledger.mark(turn.turn_id, "tts_failed")
                 full = "".join([part async for part in fresh()])
+                suffix = remaining_text(full, completed)
+                if not invalid and suffix is not None and audio_format is not None:
+                    if not suffix:
+                        return
+
+                    async def rest() -> AsyncGenerator[str]:
+                        yield suffix
+
+                    try:
+                        response = await fallback(rest())
+                        async for chunk in compatible_pcm(response, audio_format):
+                            yield chunk
+                        return
+                    except Exception as fallback_error:
+                        _LOGGER.warning(
+                            "TTS fallback failed: %s", type(fallback_error).__name__
+                        )
+                self.ledger.mark(turn.turn_id, "tts_failed")
                 self.hass.bus.async_fire(
                     "assist_live_tts_failed",
                     {"satellite": self.satellite, "text": full},
                 )
+                if self.notify_tts_failure:
+                    try:
+                        await self.hass.services.async_call(
+                            "persistent_notification",
+                            "create",
+                            {"title": "assist-live TTS failed", "message": full},
+                            blocking=True,
+                        )
+                    except Exception as notify_error:
+                        _LOGGER.warning(
+                            "TTS notification failed: %s", type(notify_error).__name__
+                        )
                 return
             finally:
                 if isinstance(server, AsyncGenerator):

@@ -30,6 +30,7 @@ class TurnLedger:
         self._previous: dict[str, Record] = {}
         self._pending: list[TimingEvent] = []
         self._connected: set[str] = set()
+        self.failures: dict[str, int] = {}
         self.save: Callable[[], Awaitable[None]] | None = None
 
     def current(self, satellite: str) -> TurnOpen | None:
@@ -109,6 +110,8 @@ class TurnLedger:
         record = self.records.get(turn_id)
         if record is None:
             return
+        if stage in {"stt_failed", "tts_failed", "fallback_used"}:
+            self.failures[stage] = self.failures.get(stage, 0) + 1
         record.stages.add(stage)
         self._pending.append(
             TimingEvent(

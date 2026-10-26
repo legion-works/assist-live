@@ -80,7 +80,7 @@ Server PCM has a streaming WAV header for mono, 16-bit samples at the declared s
 The sample rate stays the same in one stream.
 If the server supplies no audio, the integration uses the fallback engine.
 
-The text buffer has a 16,384-byte UTF-8 limit. Empty parts do not increase the buffer.
+The text buffer has a 16,384-character limit. Empty parts do not increase the buffer.
 If the text is more than that limit, the request stops with `tts_failed` and an HA error.
 The integration does not silently cut the text or retry it.
 

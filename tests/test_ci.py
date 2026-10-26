@@ -368,6 +368,7 @@ def test_package_file_set_is_explicit():
         "__init__.py",
         "config_flow.py",
         "const.py",
+        "diagnostics.py",
         "ledger.py",
         "manifest.json",
         "repairs.py",
@@ -376,6 +377,7 @@ def test_package_file_set_is_explicit():
         "stt_fallback.py",
         "translations/en.json",
         "tts.py",
+        "tts_fallback.py",
     }
 
 

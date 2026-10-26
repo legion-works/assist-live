@@ -117,7 +117,8 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                     await self.ledger.save()
                 try:
                     async with asyncio.timeout(0.2):
-                        healthy = await self.client.health(timeout=0.2)
+                        health = await self.client.health_capabilities(timeout=0.2)
+                        healthy = health.healthy is True and health.stt is True
                 except ProtocolError, TimeoutError, OSError:
                     healthy = False
                 if healthy and await self.ledger.connect(turn):

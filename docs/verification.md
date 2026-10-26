@@ -2270,3 +2270,72 @@ The sentence-end tests check the output before and after audio.
 Human-readable instructions have no executable behavior test.
 The setup instructions agree with the client format and sentence-end items.
 The STT instructions state the 15 s limit from the start of the turn.
+
+## Streamed TTS continuation
+
+Date: 2026-10-26 (UTC).
+
+The entity sends each text part without a full-reply wait and keeps a bounded copy for fallback.
+The copy limit is 16,384 characters. The limit does not count UTF-8 bytes.
+The health check has its own 200 ms limit and checks the selected audio function.
+An older server without function flags selects fallback.
+
+The first contract run used:
+
+```sh
+uv run pytest tests/test_tts_stream.py tests/test_tts_fallback.py -q
+```
+
+```text
+14 failed, 12 passed in 1.19s
+ModuleNotFoundError: No module named 'custom_components.assist_live.diagnostics'
+```
+
+The initial tests also found missing continuation, voice defaults, and notification settings.
+A non-ASCII test found the byte-count error before the character-count change:
+
+```sh
+uv run pytest tests/test_tts_stream.py::test_two_byte_text_at_character_limit_is_accepted -q
+```
+
+```text
+HomeAssistantError: TTS text limit is 16384 UTF-8 bytes
+1 failed in 0.28s
+```
+
+The current contract checks use:
+
+```sh
+uv run pytest tests/test_tts_stream.py tests/test_tts_fallback.py tests/test_tts_lookup_contract.py -q
+PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check
+```
+
+```text
+46 passed in 0.64s
+62 files already formatted
+All checks passed!
+Success: no issues found in 19 source files
+599 passed in 17.30s
+PASS integration bootstrap
+PASS CI
+PASS own Git root
+PASS history secrets commits=29
+PASS public data matches=0
+```
+
+Python 3.14.2 and HA 2026.10.3 supplied this local test run.
+The private TTS lookup contract stays in the minimum-HA test matrix.
+The client source pin is `8f3d60a4bb19122a760ff22ae83f7be68f1f95e6`.
+The manifest requirement stays `assist-live-client==0.0.0`.
+
+Continuation uses the last complete sentence and the same audio format.
+The fallback WAV parser removes the header and checks the PCM format before output.
+No complete sentence, an empty fallback, or a format difference stops the audio and reports the full reply through the failure event.
+The optional notification uses the public `persistent_notification.create` service with `message` and `title`.
+It does not run the conversation or the device operation again.
+Diagnostics contain failure counts and fallback modes, without reply text or credentials.
+
+Thirteen isolated mutations each caused a test failure.
+The checks included full-text waits, an exhausted generator, duplicate parts, format differences, and a kept WAV header.
+They also included an operation run again, a missing voice, an ignored function flag, and credentials in diagnostics.
+The remaining checks included byte counts, notification settings, sentence markers, and type-only error logs.
