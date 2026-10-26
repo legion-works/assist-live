@@ -93,6 +93,8 @@ async def test_tts_text_limit_is_utf8_bytes(client, ledger, part, count):
 
 
 async def test_empty_tts_parts_do_not_fill_the_replay_buffer(client, ledger):
+    from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+
     client.health.return_value = True
     seen = []
 
@@ -101,11 +103,13 @@ async def test_empty_tts_parts_do_not_fill_the_replay_buffer(client, ledger):
             yield ""
         yield "text"
 
-    async def synth(turn_id, parts, *, voice):
+    async def synth(turn_id, parts, voice):
         seen.extend([part async for part in parts])
-        yield b"\x00\x00"
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x00\x00")
+        yield TTSSentenceEnd(0)
 
-    client.tts = synth
+    client.tts_stream = synth
     response = await entity(client, ledger, Fallback()).async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, source())
     )
@@ -120,12 +124,14 @@ async def test_fallback_gets_new_unconsumed_generator(client, ledger):
     forward = entity(client, ledger, fallback)
     client.health.return_value = True
 
+    from assist_live_client.models import TTSFormat
+
     async def fail(turn_id, source, voice):
         assert await anext(source) == "First sentence. "
         raise ProtocolError("test loss")
-        yield b""
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
 
-    client.tts = fail
+    client.tts_stream = fail
     response = await forward.async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
     )
@@ -149,7 +155,9 @@ async def test_sender_cancellation_keeps_future_text(client, ledger):
         await release.wait()
         yield "Second."
 
-    async def fail(turn_id, parts, *, voice):
+    from assist_live_client.models import TTSFormat
+
+    async def fail(turn_id, parts, voice):
         async def send():
             async for _ in parts:
                 pass
@@ -161,9 +169,9 @@ async def test_sender_cancellation_keeps_future_text(client, ledger):
             await sender
         release.set()
         raise ProtocolError("test sender loss")
-        yield
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
 
-    client.tts = fail
+    client.tts_stream = fail
     fallback = Fallback()
     response = await entity(client, ledger, fallback).async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, source())
@@ -176,12 +184,16 @@ async def test_non_default_pipeline_voice_reaches_client(client, ledger):
     seen = []
     client.health.return_value = True
 
-    async def synth(turn_id, source, *, voice):
+    from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+
+    async def synth(turn_id, source, voice):
         seen.append(voice)
         seen.append("".join([part async for part in source]))
-        yield b"\x01\x00"
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0)
 
-    client.tts = synth
+    client.tts_stream = synth
     forward = entity(client, ledger, Fallback())
     assert "voice" in forward.supported_options
     assert forward.async_get_supported_voices("en")[1].voice_id == "voice-2"
@@ -203,7 +215,139 @@ async def test_non_default_pipeline_voice_reaches_client(client, ledger):
     assert {"tts_first_text", "tts_first_byte"} <= ledger.records[turn.turn_id].stages
 
 
+@pytest.mark.parametrize("rate,byte_rate", [(22050, 44100), (16000, 32000)])
+async def test_tts_wav_header_matches_declared_format(client, ledger, rate, byte_rate):
+    import struct
+
+    from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+
+    client.health.return_value = True
+
+    async def synth(turn_id, source, voice):
+        assert voice == "voice-2"
+        yield TTSFormat("pcm_s16le", rate, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0)
+
+    client.tts_stream = synth
+    response = await entity(client, ledger, Fallback()).async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    result = b"".join([chunk async for chunk in response.data_gen])
+    expected = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        0xFFFFFFFF,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        rate,
+        byte_rate,
+        2,
+        16,
+        b"data",
+        0xFFFFFFFF,
+    )
+    assert result[:44] == expected
+    assert result[44:] == b"\x01\x00"
+
+
+async def test_audio_before_format_uses_fallback(client, ledger):
+    from assist_live_client.models import TTSAudio
+
+    client.health.return_value = True
+
+    async def synth(turn_id, source, voice):
+        yield TTSAudio(b"\x01\x00")
+
+    client.tts_stream = synth
+    fallback = Fallback()
+    response = await entity(client, ledger, fallback).async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    assert b"".join([chunk async for chunk in response.data_gen]) == b"fallback"
+    assert fallback.text == "First sentence. Second sentence."
+
+
+async def test_unsupported_tts_format_uses_fallback(client, ledger):
+    from assist_live_client.models import TTSAudio, TTSFormat
+
+    client.health.return_value = True
+
+    async def synth(turn_id, source, voice):
+        yield TTSFormat("unknown", 22050, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+
+    client.tts_stream = synth
+    fallback = Fallback()
+    response = await entity(client, ledger, fallback).async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    assert b"".join([chunk async for chunk in response.data_gen]) == b"fallback"
+    assert fallback.text == "First sentence. Second sentence."
+
+
+async def test_sentence_end_items_are_counted(client, ledger):
+    from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+
+    client.health.return_value = True
+
+    async def synth(turn_id, source, voice):
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0)
+        yield TTSAudio(b"\x02\x00")
+        yield TTSSentenceEnd(1)
+
+    client.tts_stream = synth
+    forward = entity(client, ledger, Fallback())
+    response = await forward.async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, text())
+    )
+    assert (
+        b"".join([chunk async for chunk in response.data_gen])[-4:]
+        == b"\x01\x00\x02\x00"
+    )
+
+
+async def test_sentence_count_state_does_not_accumulate(client, ledger):
+    from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+    from assist_live_client.protocol import ProtocolError
+
+    client.health.return_value = True
+    calls = 0
+
+    async def synth(turn_id, source, voice):
+        nonlocal calls
+        calls += 1
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        if calls % 2 == 0:
+            raise ProtocolError("test pre-audio failure")
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0)
+
+    client.tts_stream = synth
+    forward = entity(client, ledger, Fallback())
+    initial_dicts = {
+        key: value.copy()
+        for key, value in vars(forward).items()
+        if isinstance(value, dict)
+    }
+    for index in range(100):
+        response = await forward.async_stream_tts_audio(
+            TTSAudioRequest("en", {"voice": "voice-2"}, text())
+        )
+        result = b"".join([chunk async for chunk in response.data_gen])
+        assert (result == b"fallback") is (index % 2 == 1)
+    assert {
+        key: value for key, value in vars(forward).items() if isinstance(value, dict)
+    } == initial_dicts
+
+
 async def test_partial_server_audio_stops_without_repeating_reply(hass, client, ledger):
+    from assist_live_client.models import TTSAudio, TTSFormat
     from assist_live_client.protocol import ProtocolError
 
     client.health.return_value = True
@@ -212,12 +356,13 @@ async def test_partial_server_audio_stops_without_repeating_reply(hass, client, 
         "assist_live_tts_failed", lambda event: seen.append(event.data)
     )
 
-    async def fail(turn_id, source, *, voice):
+    async def fail(turn_id, source, voice):
         await anext(source)
-        yield b"\x01\x00"
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
         raise ProtocolError("test loss")
 
-    client.tts = fail
+    client.tts_stream = fail
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
     forward.hass = hass

@@ -31,7 +31,7 @@ HA_COMPONENT_REQUIREMENTS = [
     "pymicro-vad==1.0.1",
     "pyspeex-noise==1.0.2",
     "assist-live-client @ git+https://github.com/legion-works/assist-live-server@"
-    "961cacb31a013fceee612b245ea9c3cb5d745106#subdirectory=client",
+    "ee404d406942fbeb64d6c2380366eb380a2ca403#subdirectory=client",
 ]
 NODE_VERSION = "22.22.0"
 NODE_SHA256 = "9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37"

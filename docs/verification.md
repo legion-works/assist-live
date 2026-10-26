@@ -2118,3 +2118,69 @@ These checks ran changed modules in memory. They did not change source files.
 The `stage` values `fallback_used`, `stt_final`, and `stt_failed` apply without a new value.
 No device or household recording was part of these tests.
 Device measurements stay open because no test device is available.
+
+## Native TTS format
+
+Date: 2026-10-25.
+
+The client source pin is `ee404d406942fbeb64d6c2380366eb380a2ca403` in the project metadata, lockfile, Taskfile, and CI workflow.
+
+The manifest has the requirement `assist-live-client==0.0.0`.
+
+The TTS entity reads the declared PCM format before it writes audio. It calculates the WAV byte rate and the number of bytes for each sample frame from that format.
+
+The entity counts sentence-end items in request-local state. The current ledger step names cannot store this count. Resume after the last complete sentence is not part of this change.
+
+If server audio has a failure after the first audio item, the entity stops the stream and reports `assist_live_tts_failed`. It does not continue at the next sentence.
+
+The first typed-stream test run, before the client pin changed, gave:
+
+```text
+6 failed, 8 passed
+```
+
+After the client pin changed and before the entity used `tts_stream()`, the TTS test run gave:
+
+```text
+6 failed, 8 passed
+```
+
+The TTS command after the implementation was:
+
+```sh
+uv run --locked pytest tests/test_tts_forward.py -q
+```
+
+```text
+15 passed in 0.70s
+```
+
+The live probe used the pinned server source and the read-only Piper voice files.
+
+The scratch source copy had the same 112 files as the pinned revision.
+
+The integration TTS entity sent a short text to the server. The reply began with a 44-byte WAV header. Its sample rate was 22050 Hz. Its byte rate was 44100. Its sample frame size was 2 bytes.
+
+The reply had 73216 audio bytes. At 44100 bytes for each second, this is 1.660 seconds of audio.
+
+The header bytes agree with the values from `struct.pack`.
+
+An inert `backend=object()` value was the probe sentinel.
+
+The health route reports unhealthy when only `tts_provider` is set.
+
+The TTS audio route accepts the provider. The probe sent TTS to Piper. The next server writer must repair the health route.
+
+The live probe used the integration project configuration and a temporary test. The test used only local socket connections.
+
+The five mutations changed one behavior at a time. Each test for this work identified the incorrect result:
+
+| Mutation | Test result |
+|---|---|
+| Set the 22050 Hz rate to 16000 Hz | The 22050 Hz header test reported byte 24 as incorrect. |
+| Set the byte rate to 32000 | The 22050 Hz header test reported byte 28 as incorrect. |
+| Accepted audio before the format item | The audio-before-format test got an assertion error, not fallback. |
+| Played an unsupported codec | The unsupported-format test received server audio, not fallback. |
+| Dropped the selected voice | The pipeline-voice test found an empty voice. |
+
+The count stays in local request state. This change does not add a sentence-end step to the ledger.

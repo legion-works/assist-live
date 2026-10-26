@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import suppress
 
 from assist_live_client import AssistLiveClient
+from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import tts
 from homeassistant.components.tts.entity import TTSAudioRequest
@@ -165,26 +166,57 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             )
 
         server = (
-            self.client.tts(
-                turn.turn_id, capture(), voice=request.options.get("voice", "")
+            self.client.tts_stream(
+                turn.turn_id,
+                capture(),
+                voice=request.options.get("voice", ""),
             )
             if healthy
             else None
         )
-        first_chunk = None
+        audio_format: TTSFormat | None = None
+        first_audio: TTSAudio | None = None
+        sentence_end_count = 0
         if server is not None:
             try:
-                first_chunk = await anext(server)
+                async for item in server:
+                    if isinstance(item, TTSFormat):
+                        if audio_format is not None:
+                            raise ProtocolError("duplicate TTS format")
+                        if (
+                            item.codec != "pcm_s16le"
+                            or item.width != 2
+                            or item.channels != 1
+                            or item.rate <= 0
+                        ):
+                            raise ProtocolError("unsupported TTS audio format")
+                        audio_format = item
+                    elif isinstance(item, TTSAudio):
+                        if audio_format is None:
+                            raise ProtocolError("TTS format required before audio")
+                        first_audio = item
+                        break
+                    elif isinstance(item, TTSSentenceEnd):
+                        if audio_format is None:
+                            raise ProtocolError(
+                                "TTS format required before sentence end"
+                            )
+                        sentence_end_count += 1
+                    else:
+                        raise ProtocolError("invalid TTS stream item")
             except ProtocolError, TimeoutError, StopAsyncIteration:
-                if isinstance(server, AsyncGenerator):
-                    await server.aclose()
                 healthy = False
             except BaseException:
                 await cleanup()
                 raise
+            if audio_format is None:
+                healthy = False
+            if not healthy and isinstance(server, AsyncGenerator):
+                await server.aclose()
 
         async def output() -> AsyncGenerator[bytes]:
-            assert server is not None and first_chunk is not None
+            assert server is not None and audio_format is not None
+            nonlocal sentence_end_count
             try:
                 self.ledger.mark(turn.turn_id, "tts_first_byte")
                 yield struct.pack(
@@ -195,17 +227,23 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     b"fmt ",
                     16,
                     1,
-                    1,
-                    16000,
-                    32000,
-                    2,
+                    audio_format.channels,
+                    audio_format.rate,
+                    audio_format.rate * audio_format.channels * audio_format.width,
+                    audio_format.channels * audio_format.width,
                     16,
                     b"data",
                     0xFFFFFFFF,
                 )
-                yield first_chunk
-                async for chunk in server:
-                    yield chunk
+                if first_audio is not None:
+                    yield first_audio.data
+                async for item in server:
+                    if isinstance(item, TTSAudio):
+                        yield item.data
+                    elif isinstance(item, TTSSentenceEnd):
+                        sentence_end_count += 1
+                    else:
+                        raise ProtocolError("invalid TTS stream item")
             except ProtocolError, TimeoutError:
                 self.ledger.mark(turn.turn_id, "tts_failed")
                 full = "".join([part async for part in fresh()])
