@@ -167,6 +167,9 @@ async def test_heartbeat_extends_receive_deadline(client, ledger, clock):
     await clock.move(0.599)
     assert "fallback_used" not in stages(ledger)
     messages.put_nowait({"type": "final", "text": "complete"})
+    messages.put_nowait(
+        {"type": "speaker_result", "name": "", "distance": 0.0, "destination": "local"}
+    )
     assert (await task).text == "complete"
     assert not hasattr(fallback, "audio")
 
@@ -228,6 +231,7 @@ async def test_partial_then_disconnect_replays_kept_and_live_once(client, ledger
     events = [call.args[0] for call in client.event.call_args_list]
     assert [event.stage for event in events] == [
         "fallback_used",
+        "end_decision",
         "stt_final",
     ]
     assert all(event.source == "integration" for event in events)

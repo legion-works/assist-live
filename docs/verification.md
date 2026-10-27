@@ -2443,3 +2443,63 @@ Eight temporary mutations each caused test failures:
 
 The source has none of these mutations.
 The format checks, header removal, empty WAV refusal, cancellation, and late-error counter keep their tests.
+
+## HA modes, destinations, and last-turn latency
+
+Date: 2026-10-27 (UTC).
+
+The client source pin is `b4a920241e4131df34df678de1faab5e9cec59b0`, with package version `0.0.0`.
+HA local-only checks include HA fallbacks and speaker events, not server provider selection.
+The server has its own local-only setting. The pinned health response does not show that setting.
+
+Diagnostics show server destinations only after a turn uses them.
+These checks are not a firewall. The conversation agent is external to the guarantee.
+
+The first test run gave `14 failed in 0.41s` for missing configuration behavior.
+A late speaker result also caused `TimeoutError` at the transcript-return bound.
+HA gives the transcript at `final` and reads speaker metadata with a different, bounded read.
+
+The checks use these commands from the repository root:
+
+| Command | Result |
+| --- | --- |
+| `uv run --locked ruff check --no-cache .` | `All checks passed!` |
+| `PRIVATE_DENYLIST=$WORKSPACE/.opencode/private/denylist.txt uv run pytest tests/test_modes.py tests/test_diagnostics.py tests/test_sensor.py tests/test_config_flow.py tests/test_repairs.py -q` | `63 passed` |
+| `PRIVATE_DENYLIST=$WORKSPACE/.opencode/private/denylist.txt task check` | `649 passed`, clean format and lint checks, mypy found no issues in 21 source files |
+| `task package-check` | `PASS packaging (local check, not Marketplace or HACS-default acceptance)` |
+| `task ha-minimum` | `649 passed` on Python 3.14.2 with HA 2026.10.1 |
+| `task hassfest` | `Invalid integrations: 0` |
+| ASD-STE100 checker on `STRUCTURE.md`, `docs/configuration.md`, `docs/privacy.md`, and this file | No findings |
+
+The full check also gave `PASS integration bootstrap`, `PASS CI`, and `PASS public data matches=0`.
+The worktree and Git history secret checks found no leaks. The history privacy check gave exit 0.
+
+Ten temporary mutations each caused one test failure:
+
+| Mutation | Result |
+| --- | --- |
+| Use a local destination for a missing `iot_class` | `1 failed` |
+| Let a cloud fallback use an override | `1 failed` |
+| Let a refused TTS fallback run at use time | `1 failed` |
+| Turn transcript storage on by default | `1 failed` |
+| Remove the PyPI publication requirement | `1 failed` |
+| Use unchecked audio-format fields in diagnostics | `1 failed` |
+| Identify proxy latency as measured | `1 failed` |
+| Remove per-turn destination records | `1 failed` |
+| Remove the speaker result | `1 failed` |
+| Replace the fallback end-decision source | `1 failed` |
+
+The mutation runner writes the initial source bytes in `finally` and checks their equality.
+The source has none of these mutations.
+
+The checks have these differences from a full server trial:
+
+- Transcript storage tests use the pinned client, a fake server, and SQLite export. They do not test the server store implementation.
+- The server `profile` stays `unknown` because the pinned health contract does not supply it.
+- Piper replaces the earlier Kokoro example. The local voice is `en_US-lessac-medium` at 22050 Hz.
+- The packaging file list and its explicit test include the new `sensor.py` module.
+- STT fixtures include speaker metadata and the fallback `end_decision` event. A configuration fixture supplies empty options.
+- The fallback end-decision source is `ha_audio_end`, with proxy quality. It is not a server-detector measurement.
+- Test event listeners use `homeassistant.core.callback`. HA runs a listener without that mark in a different worker, so a test could read the event list before the listener added the event. For this cause, one full run gave `assert 0 == 1` in `test_unexpressible_tts_stream_is_refused[second_format_after_audio]`. A check for no event was also not reliable when the event came late.
+
+No hardware trial, cloud request, commit, or publication is part of these checks.

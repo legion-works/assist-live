@@ -9,7 +9,11 @@
           "token": "Access token",
           "fallback_stt": "Fallback STT entity",
           "fallback_tts": "Fallback TTS entity",
-          "notify_tts_failure": "Show full reply in a persistent notification if TTS fails"
+        "notify_tts_failure": "Show full reply in a persistent notification if TTS fails",
+        "local_only": "Check local fallback destinations",
+        "record_transcripts": "Permit transcript storage on the server",
+        "fallback_stt_local": "Record an unknown fallback STT destination as local",
+        "fallback_tts_local": "Record an unknown fallback TTS destination as local"
         }
       },
       "http_warning": {
@@ -29,6 +33,8 @@
     },
     "error": {
       "fallback_loop": "An assist-live entity cannot be a fallback.",
+      "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
+      "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
       "invalid_url": "Use an HTTP or HTTPS server URL without user information, a query, or a fragment.",
       "invalid_satellite": "Select a provisioned key and the pipeline selector of a satellite device.",
@@ -36,7 +42,29 @@
       "connection_limit": "Use no more than five satellites for each server token."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Destination checks and transcript storage",
+        "description": "HA checks its fallback destinations and speaker events. Set local_only on the server to check server providers. HA cannot read that server setting. Diagnostics show server destinations only after a turn uses them. The conversation agent is outside these checks.",
+        "data": {
+          "local_only": "Check local fallback destinations",
+          "record_transcripts": "Permit transcript storage on the server",
+          "fallback_stt_local": "Record an unknown fallback STT destination as local",
+          "fallback_tts_local": "Record an unknown fallback TTS destination as local"
+        }
+      }
+    },
+    "error": {
+      "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
+      "cloud_destination": "A cloud fallback cannot use the local-only option."
+    }
+  },
   "issues": {
+    "speaker_destination": {
+      "title": "The server reported a cloud speaker destination",
+      "description": "HA received a cloud speaker result with the local-only option on. Check the server local_only setting. HA cannot stop the server request. The transcript did not change."
+    },
     "invalid_stored_state": {
       "title": "Invalid stored turn data",
       "description": "The integration dropped invalid stored entries. Valid entries stay available. Check HA storage and restart the integration after the storage check. No transcript or token is in this issue."

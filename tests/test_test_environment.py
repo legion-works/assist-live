@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 
 import pytest
+from homeassistant.core import callback
 from test_pipeline_contract import pipeline_hass as configured_hass  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -245,7 +246,7 @@ async def test_real_ha_agent_records_timer_and_streams(configured_hass, monkeypa
     register_timer(hass)
     records = []
     hass.bus.async_listen(
-        "assist_live_test_record", lambda event: records.append(event.data)
+        "assist_live_test_record", callback(lambda event: records.append(event.data))
     )
     for group in ("short", "long"):
         agent = TestAgent(group)

@@ -23,6 +23,7 @@ PACKAGE_FILES = {
     "ledger.py",
     "manifest.json",
     "repairs.py",
+    "sensor.py",
     "strings.json",
     "stt.py",
     "stt_fallback.py",

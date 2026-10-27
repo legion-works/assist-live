@@ -7,6 +7,10 @@
 | `custom_components/assist_live/stt_fallback.py` | Bounded turn audio, replay, and local voice detection |
 | `custom_components/assist_live/tts_fallback.py` | WAV format checks and PCM extraction |
 | `custom_components/assist_live/diagnostics.py` | Content-free failure counts and fallback mode |
+| `custom_components/assist_live/sensor.py` | Last-turn latency, quality, source, and uncertainty for each satellite |
+| `docs/configuration.md`, `docs/privacy.md` | Modes, local-only limits, transcript policy, and diagnostics |
+| `tests/test_modes.py`, `test_diagnostics.py`, `test_sensor.py` | Destination policy, metadata, redaction, and timing tests |
+| `tools/check_release_pin.py`, `tests/test_release_pin.py` | Client version and PyPI publication check |
 | `custom_components/assist_live/ledger.py`, `repairs.py` | Per-satellite turns and repair issues |
 | `docs/setup.md` | Satellite bindings, pipelines, voices, and fallback limits |
 | `tests/test_stt_forward.py`, `test_tts_forward.py`, `test_ledger.py` | Forwarding, cancellation, playback separation, and turn rules |

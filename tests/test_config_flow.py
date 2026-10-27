@@ -265,6 +265,34 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
     assert pipeline.stt_engine == stt_id
     assert pipeline.tts_engine == tts_id
     assert pipeline.tts_voice == "voice-two"
+    from assist_live_client.models import HealthCapabilities, TTSAudio, TTSFormat
+    from homeassistant.components.tts import TTSAudioRequest
+
+    selected_voices = []
+
+    async def synth(turn_id, parts, voice, **kwargs):
+        selected_voices.append(voice)
+        assert [part async for part in parts] == ["synthetic reply"]
+        yield TTSFormat("pcm_s16le", 22050, 1, 2)
+        yield TTSAudio(bytes(2))
+
+    async def reply():
+        yield "synthetic reply"
+
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+    client.tts_stream = synth
+    response = await runtime.tts[device.id].async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": pipeline.tts_voice}, reply())
+    )
+    assert b"".join([chunk async for chunk in response.data_gen])
+    assert selected_voices == ["voice-two"]
+    sensors = [
+        state
+        for state in hass.states.async_all("sensor")
+        if "last_turn_latency" in state.entity_id
+    ]
+    assert len(sensors) == 1
+    assert sensors[0].attributes["quality"] == "missing"
     assert await hass.config_entries.async_unload(entry.entry_id)
     before = {p.id for p in assist_pipeline.async_get_pipelines(hass)}
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
@@ -740,7 +768,7 @@ def test_real_store_file_failure_is_detected_and_raises_repair(tmp_path):
         async def main():
             hass = HomeAssistant(sys.argv[1])
             await ir.async_get(hass).async_load()
-            entry = SimpleNamespace(entry_id="disk-test", data={
+            entry = SimpleNamespace(entry_id="disk-test", options={}, data={
                 "satellites": {"device-a": "satellite-a"}, "pipeline_selects": {},
             })
             runtime = Runtime(hass, entry, Client())

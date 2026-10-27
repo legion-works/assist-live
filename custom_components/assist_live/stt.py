@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from contextlib import suppress
+from typing import Any
 
 from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
@@ -61,6 +62,36 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         self._attr_unique_id = f"{satellite}_stt"
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
+        self._speaker_tasks: set[asyncio.Task[None]] = set()
+
+    async def async_will_remove_from_hass(self) -> None:
+        tasks = list(self._speaker_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _speaker_metadata(
+        self, messages: AsyncIterator[dict[str, Any]], turn_id: str
+    ) -> None:
+        received = False
+        try:
+            async with asyncio.timeout(0.6):
+                async for message in messages:
+                    if message["type"] == "speaker_result":
+                        if not 0 <= message["distance"] <= 2:
+                            break
+                        self.ledger.speaker_result(turn_id, message)
+                        received = True
+                        break
+        except Exception:
+            pass
+        finally:
+            if not received:
+                self.ledger.speaker_missing += 1
+            if isinstance(messages, AsyncGenerator):
+                with suppress(Exception):
+                    await messages.aclose()
+            self.ledger.speaker_reads.pop(turn_id, None)
 
     @property
     def supported_languages(self) -> list[str]:
@@ -118,10 +149,12 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 try:
                     async with asyncio.timeout(0.2):
                         health = await self.client.health_capabilities(timeout=0.2)
-                        healthy = health.healthy is True and health.stt is True
+                        healthy = self.ledger.server_selected(health, "stt")
                 except ProtocolError, TimeoutError, OSError:
                     healthy = False
                 if healthy and await self.ledger.connect(turn):
+                    self.ledger.used(turn.turn_id, "stt", "server", "unknown")
+                    background = False
                     try:
                         messages = self.client.stt(turn.turn_id, audio.server_audio())
                         try:
@@ -130,11 +163,26 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                     message = await anext(messages)
                                 if message["type"] == "final":
                                     self.ledger.mark(turn.turn_id, "stt_final")
+                                    task = asyncio.create_task(
+                                        self._speaker_metadata(messages, turn.turn_id)
+                                    )
+                                    self.ledger.speaker_reads[turn.turn_id] = task
+                                    self._speaker_tasks.add(task)
+                                    task.add_done_callback(self._speaker_tasks.discard)
+                                    background = True
                                     return stt.SpeechResult(
                                         message["text"], stt.SpeechResultState.SUCCESS
                                     )
+                                elif message["type"] == "end_decision":
+                                    self.ledger.mark(
+                                        turn.turn_id,
+                                        "end_decision",
+                                        decision_source="server_detector",
+                                    )
+                                elif message["type"] == "speaker_result":
+                                    self.ledger.speaker_result(turn.turn_id, message)
                         finally:
-                            if isinstance(messages, AsyncGenerator):
+                            if not background and isinstance(messages, AsyncGenerator):
                                 # A close error cannot invalidate a complete transcript.
                                 with suppress(ProtocolError, TimeoutError, OSError):
                                     await messages.aclose()
@@ -143,9 +191,22 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 if not self._fallback_compatible(metadata):
                     self.ledger.mark(turn.turn_id, "stt_failed")
                     return failed
+                await self.ledger.use_fallback(
+                    turn.turn_id,
+                    "stt_fallback",
+                    getattr(self.fallback, "entity_id", "unknown"),
+                )
                 self.ledger.mark(turn.turn_id, "fallback_used")
+
+                async def local_audio() -> AsyncGenerator[bytes]:
+                    async for chunk in audio.local_audio(MicroVad()):
+                        yield chunk
+                    self.ledger.mark(
+                        turn.turn_id, "end_decision", decision_source="ha_audio_end"
+                    )
+
                 result = await self.fallback.async_process_audio_stream(
-                    metadata, audio.local_audio(MicroVad())
+                    metadata, local_audio()
                 )
                 self.ledger.mark(
                     turn.turn_id,

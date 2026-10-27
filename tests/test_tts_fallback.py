@@ -11,6 +11,7 @@ from homeassistant.components.tts import (
     TTSAudioRequest,
     TTSAudioResponse,
 )
+from homeassistant.core import callback
 from test_tts_forward import Fallback, entity, text
 from test_tts_stream import capable
 
@@ -153,7 +154,7 @@ async def test_missing_position_reports_full_text(client, ledger, hass, case):
     forward.hass = hass
     events = []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: events.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: events.append(event.data))
     )
     response = await forward.async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
@@ -246,7 +247,7 @@ async def test_oversized_position_from_client_reports_full_text(client, ledger, 
     forward.hass = hass
     events = []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: events.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: events.append(event.data))
     )
     response = await forward.async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
@@ -291,7 +292,7 @@ async def test_failed_continuation_reports_full_text_without_repeating_action(
     forward.notify_tts_failure = notify
     events, notifications, actions = [], [], []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: events.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: events.append(event.data))
     )
 
     async def notification(call):
@@ -354,7 +355,7 @@ async def test_complete_reply_counts_only_late_server_errors(
     forward.notify_tts_failure = True
     events, notifications = [], []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: events.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: events.append(event.data))
     )
 
     async def notification(call):

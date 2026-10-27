@@ -6,6 +6,7 @@ from homeassistant.components.tts import (
     TTSAudioResponse,
     Voice,
 )
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
 
@@ -325,7 +326,7 @@ async def test_unexpressible_tts_stream_is_refused(client, ledger, hass, case):
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     failures = []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: failures.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: failures.append(event.data))
     )
 
     async def synth(turn_id, source, voice, *, text_positions=False):
@@ -387,7 +388,7 @@ async def test_sentence_end_items_do_not_end_or_fail_stream(client, ledger, hass
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     failures = []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: failures.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: failures.append(event.data))
     )
 
     async def synth(turn_id, source, voice, *, text_positions=False):
@@ -417,7 +418,7 @@ async def test_partial_server_audio_stops_without_repeating_reply(hass, client, 
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     seen = []
     hass.bus.async_listen(
-        "assist_live_tts_failed", lambda event: seen.append(event.data)
+        "assist_live_tts_failed", callback(lambda event: seen.append(event.data))
     )
 
     async def fail(turn_id, source, voice, *, text_positions=False):

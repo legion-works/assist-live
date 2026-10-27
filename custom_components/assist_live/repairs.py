@@ -5,6 +5,18 @@ from .const import DOMAIN
 
 
 @callback
+def speaker_destination_issue(hass: HomeAssistant, entry_id: str) -> None:
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"{entry_id}_speaker_destination",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="speaker_destination",
+    )
+
+
+@callback
 def stored_state_issue(hass: HomeAssistant, entry_id: str, active: bool) -> None:
     issue_id = f"{entry_id}_invalid_stored_state"
     if active:

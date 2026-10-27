@@ -102,12 +102,15 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         ):
             raise HomeAssistantError("fallback TTS language unavailable")
         turn = self.ledger.open_tts(self.satellite)
+        self.ledger.records[turn.turn_id].voice = request.options.get(
+            "voice", (self.fallback.default_options or {}).get("voice", "")
+        )
         if self.ledger.save is not None:
             await self.ledger.save()
         try:
             async with asyncio.timeout(0.2):
                 health = await self.client.health_capabilities(timeout=0.2)
-                healthy = health.healthy is True and health.tts is True
+                healthy = self.ledger.server_selected(health, "tts")
         except ProtocolError, TimeoutError, OSError:
             healthy = False
         healthy = healthy and await self.ledger.connect(turn)
@@ -172,6 +175,11 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         async def fallback(
             parts: AsyncGenerator[str] | None = None,
         ) -> tts.TTSAudioResponse:
+            await self.ledger.use_fallback(
+                turn.turn_id,
+                "tts_fallback",
+                getattr(self.fallback, "entity_id", "unknown"),
+            )
             self.ledger.mark(turn.turn_id, "fallback_used")
             return await self.fallback.async_stream_tts_audio(
                 TTSAudioRequest(
@@ -181,6 +189,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 )
             )
 
+        if healthy:
+            self.ledger.used(turn.turn_id, "tts", "server", "unknown")
         server = (
             self.client.tts_stream(
                 turn.turn_id,
@@ -213,6 +223,12 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         byte_rate = item.rate * item.channels * item.width
                         block_align = item.channels * item.width
                         audio_format = item
+                        self.ledger.records[turn.turn_id].audio_format = {
+                            "codec": item.codec,
+                            "rate": item.rate,
+                            "channels": item.channels,
+                            "width": item.width,
+                        }
                     elif isinstance(item, TTSAudio):
                         if audio_format is None:
                             raise ProtocolError("TTS format required before audio")
@@ -336,6 +352,27 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         if not healthy:
             try:
                 response = await fallback()
+            except HomeAssistantError:
+                full = "".join([part async for part in fresh()])
+                self.ledger.mark(turn.turn_id, "tts_failed")
+                self.hass.bus.async_fire(
+                    "assist_live_tts_failed",
+                    {"satellite": self.satellite, "text": full},
+                )
+                if self.notify_tts_failure:
+                    try:
+                        await self.hass.services.async_call(
+                            "persistent_notification",
+                            "create",
+                            {"title": "assist-live TTS failed", "message": full},
+                            blocking=True,
+                        )
+                    except Exception as notify_error:
+                        _LOGGER.warning(
+                            "TTS notification failed: %s", type(notify_error).__name__
+                        )
+                await cleanup()
+                raise
             except BaseException:
                 await cleanup()
                 raise

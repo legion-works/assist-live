@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -5,11 +6,71 @@ import probatio as vol
 from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
+from homeassistant.loader import async_get_integration
 
 from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
+
+
+def destination(iot_class: str | None) -> str:
+    if iot_class and iot_class.startswith("local"):
+        return "local"
+    if iot_class and iot_class.startswith("cloud"):
+        return "cloud"
+    return "unknown"
+
+
+async def entity_iot_class(hass: HomeAssistant, entity_id: str) -> str | None:
+    registered = er.async_get(hass).async_get(entity_id)
+    if registered is None:
+        return None
+    try:
+        integration = await async_get_integration(hass, registered.platform)
+    except HomeAssistantError:
+        return None
+    value = integration.manifest.get("iot_class")
+    return value if isinstance(value, str) else None
+
+
+async def mode_errors(hass: HomeAssistant, settings: dict[str, Any]) -> dict[str, str]:
+    errors = {}
+    decisions = dict(settings.get("local_decisions", {}))
+    for field in ("fallback_stt", "fallback_tts"):
+        entity_id = settings[field]
+        mode = destination(await entity_iot_class(hass, entity_id))
+        choice = settings.get(f"{field}_local", False)
+        if choice and mode == "unknown":
+            decisions[entity_id] = decisions.get(entity_id) or {
+                "destination": "local",
+                "recorded_at": datetime.now(UTC).isoformat(),
+            }
+        else:
+            decisions.pop(entity_id, None)
+        if settings.get("local_only", False):
+            if mode == "cloud":
+                errors[field] = "cloud_destination"
+            elif mode == "unknown" and entity_id not in decisions:
+                errors[field] = "unknown_destination"
+    settings["local_decisions"] = decisions
+    return errors
+
+
+def mode_schema(settings: dict[str, Any]) -> dict[Any, Any]:
+    return {
+        vol.Optional("local_only", default=settings.get("local_only", False)): bool,
+        vol.Optional(
+            "record_transcripts", default=settings.get("record_transcripts", False)
+        ): bool,
+        vol.Optional(
+            "fallback_stt_local", default=settings.get("fallback_stt_local", False)
+        ): bool,
+        vol.Optional(
+            "fallback_tts_local", default=settings.get("fallback_tts_local", False)
+        ): bool,
+    }
 
 
 def is_forwarder(hass: HomeAssistant, entity_id: str) -> bool:
@@ -34,6 +95,13 @@ def valid_satellite(hass: HomeAssistant, device: str, pipeline_select: str) -> b
 class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        return AssistLiveOptionsFlow(config_entry)
+
     def __init__(self) -> None:
         self.settings: dict[str, Any] = {}
         self.bindings: set[str] = set()
@@ -51,6 +119,8 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                 for field in ("fallback_stt", "fallback_tts")
             ):
                 errors["base"] = "fallback_loop"
+            elif errors := await mode_errors(self.hass, user_input):
+                pass
             else:
                 client = None
                 try:
@@ -96,6 +166,7 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                         selector.EntitySelectorConfig(domain="tts")
                     ),
                     vol.Optional(CONF_NOTIFY_TTS_FAILURE, default=False): bool,
+                    **mode_schema({}),
                 }
             ),
         )
@@ -160,4 +231,38 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                     vol.Optional("add_another", default=False): bool,
                 }
             ),
+        )
+
+
+class AssistLiveOptionsFlow(config_entries.OptionsFlow):
+    def __init__(self, entry: config_entries.ConfigEntry) -> None:
+        self.entry = entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        settings = {**self.entry.data, **self.entry.options}
+        errors = {}
+        if user_input is not None:
+            settings.update(user_input)
+            errors = {
+                f"{field}_local": error
+                for field, error in (await mode_errors(self.hass, settings)).items()
+            }
+            if not errors:
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        key: settings.get(key, False)
+                        for key in (
+                            "local_only",
+                            "record_transcripts",
+                            "fallback_stt_local",
+                            "fallback_tts_local",
+                        )
+                    }
+                    | {"local_decisions": settings["local_decisions"]},
+                )
+        return self.async_show_form(
+            step_id="init", errors=errors, data_schema=vol.Schema(mode_schema(settings))
         )

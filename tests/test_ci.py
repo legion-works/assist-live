@@ -372,6 +372,7 @@ def test_package_file_set_is_explicit():
         "ledger.py",
         "manifest.json",
         "repairs.py",
+        "sensor.py",
         "strings.json",
         "stt.py",
         "stt_fallback.py",

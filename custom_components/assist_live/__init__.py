@@ -24,9 +24,14 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
 from .ledger import TurnLedger
-from .repairs import event_stream_issue, stored_state_issue, update_issues
+from .repairs import (
+    event_stream_issue,
+    speaker_destination_issue,
+    stored_state_issue,
+    update_issues,
+)
 
-PLATFORMS = [Platform.STT, Platform.TTS]
+PLATFORMS = [Platform.STT, Platform.TTS, Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -44,6 +49,12 @@ class Runtime:
         self.entry = entry
         self.client = client
         self.ledger = TurnLedger(client)
+        self.ledger.record_transcripts = entry.options.get(
+            "record_transcripts", entry.data.get("record_transcripts", False)
+        )
+        self.ledger.fallback_policy = self.fallback_destination
+        self.ledger.speaker_event = self.speaker_metadata
+        self.speaker_policy_violations = 0
         self.stt: dict[str, object] = {}
         self.tts: dict[str, object] = {}
         self.tasks: list[asyncio.Task[None]] = []
@@ -62,6 +73,31 @@ class Runtime:
         self._health_due = 0.0
         self._healthy = False
         self._store_retry_due = 0.0
+
+    async def fallback_destination(self, entity_id: str) -> str:
+        from .config_flow import destination, entity_iot_class
+
+        mode = destination(await entity_iot_class(self.hass, entity_id))
+        settings = {**self.entry.data, **self.entry.options}
+        if (
+            mode == "unknown"
+            and settings.get("local_decisions", {})
+            .get(entity_id, {})
+            .get("destination")
+            == "local"
+        ):
+            mode = "local"
+        if settings.get("local_only", False) and mode != "local":
+            raise HomeAssistantError("fallback destination refused")
+        return mode
+
+    @callback
+    def speaker_metadata(self, data: dict[str, object]) -> None:
+        settings = {**self.entry.data, **self.entry.options}
+        if settings.get("local_only", False) and data["destination"] != "local":
+            self.speaker_policy_violations += 1
+            speaker_destination_issue(self.hass, self.entry.entry_id)
+        self.hass.bus.async_fire("assist_live_speaker", data)
 
     async def _save(
         self, *, cursor: tuple[str, int] | None = None, debounce: bool = False
@@ -196,9 +232,7 @@ class Runtime:
                         event = envelope["event"]
                         if event["satellite"] != satellite:
                             raise ProtocolError("satellite event mismatch")
-                        self.ledger.device_event(
-                            satellite, event["turn_id"], event["stage"]
-                        )
+                        self.ledger.observe(event)
                         await self._save(
                             cursor=(satellite, envelope["event_id"]), debounce=True
                         )
@@ -268,6 +302,7 @@ class Runtime:
         )
 
     async def stop(self) -> None:
+        await self.ledger.stop_speaker_reads()
         for unsub in self.unsub:
             unsub()
         for task in self.tasks:
@@ -298,6 +333,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     try:
         await runtime.start()
+
+        async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
+            runtime.ledger.record_transcripts = updated.options.get(
+                "record_transcripts", updated.data.get("record_transcripts", False)
+            )
+
+        entry.async_on_unload(entry.add_update_listener(options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         saved = dict(entry.data.get("pipelines", {}))
         pipelines = {p.id: p for p in assist_pipeline.async_get_pipelines(hass)}

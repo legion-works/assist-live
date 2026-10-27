@@ -1,4 +1,31 @@
+from homeassistant.core import callback
 from homeassistant.helpers import issue_registry as ir
+
+
+async def test_cloud_speaker_is_audited_without_changing_its_event(hass, client):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live import Runtime
+
+    entry = MockConfigEntry(
+        domain="assist_live", data={"satellites": {}, "local_only": True}
+    )
+    runtime = Runtime(hass, entry, client)
+    received = []
+    hass.bus.async_listen(
+        "assist_live_speaker", callback(lambda event: received.append(event.data))
+    )
+    turn = runtime.ledger.open_voice("satellite-a")
+    runtime.ledger.speaker_result(
+        turn.turn_id,
+        {"name": "synthetic-speaker", "distance": 1.25, "destination": "cloud"},
+    )
+    await hass.async_block_till_done()
+    assert received[0]["destination"] == "cloud"
+    assert runtime.speaker_policy_violations == 1
+    assert ir.async_get(hass).async_get_issue(
+        "assist_live", f"{entry.entry_id}_speaker_destination"
+    )
 
 
 def test_shared_pipeline_and_unavailable_server(hass):
