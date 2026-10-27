@@ -2464,8 +2464,8 @@ The checks use these commands from the repository root:
 | Command | Result |
 | --- | --- |
 | `uv run --locked ruff check --no-cache .` | `All checks passed!` |
-| `PRIVATE_DENYLIST=$WORKSPACE/.opencode/private/denylist.txt uv run pytest tests/test_modes.py tests/test_diagnostics.py tests/test_sensor.py tests/test_config_flow.py tests/test_repairs.py -q` | `63 passed` |
-| `PRIVATE_DENYLIST=$WORKSPACE/.opencode/private/denylist.txt task check` | `649 passed`, clean format and lint checks, mypy found no issues in 21 source files |
+| `PRIVATE_DENYLIST="$PRIVATE_DENYLIST" uv run pytest tests/test_modes.py tests/test_diagnostics.py tests/test_sensor.py tests/test_config_flow.py tests/test_repairs.py -q` | `63 passed` |
+| `PRIVATE_DENYLIST="$PRIVATE_DENYLIST" task check` | `649 passed`, clean format and lint checks, mypy found no issues in 21 source files |
 | `task package-check` | `PASS packaging (local check, not Marketplace or HACS-default acceptance)` |
 | `task ha-minimum` | `649 passed` on Python 3.14.2 with HA 2026.10.1 |
 | `task hassfest` | `Invalid integrations: 0` |
