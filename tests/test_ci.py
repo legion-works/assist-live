@@ -553,3 +553,46 @@ def test_release_workflows_fail_closed(name):
                 check=False,
             )
             assert (result.returncode == 0) is (value == "true")
+
+
+def test_release_archive_checks_published_client_before_build(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    steps = yaml.safe_load(
+        (ROOT / ".github/workflows/release-artifacts.yml").read_text()
+    )["jobs"]["archive"]["steps"]
+    checks = [
+        (i, step)
+        for i, step in enumerate(steps)
+        if "tools/check_release_pin.py" in step.get("run", "")
+    ]
+    assert len(checks) == 1
+    index, step = checks[0]
+    assert index < next(
+        i for i, s in enumerate(steps) if "git archive" in s.get("run", "")
+    )
+    assert not any("upload-artifact" in s.get("uses", "") for s in steps)
+    assert "--require-published" in shlex.split(step["run"])
+    uv = tmp_path / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "assert sys.argv[1:4] == ['run', '--locked', 'python']\n"
+        "assert '--require-published' in sys.argv\n"
+        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.0.0'\n"
+        "raise SystemExit(19)\n"
+    )
+    uv.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={
+            **os.environ,
+            **step.get("env", {}),
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 19, result.stderr

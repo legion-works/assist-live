@@ -2503,3 +2503,32 @@ The checks have these differences from a full server trial:
 - Test event listeners use `homeassistant.core.callback`. HA runs a listener without that mark in a different worker, so a test could read the event list before the listener added the event. For this cause, one full run gave `assert 0 == 1` in `test_unexpressible_tts_stream_is_refused[second_format_after_audio]`. A check for no event was also not reliable when the event came late.
 
 No hardware trial, cloud request, commit, or publication is part of these checks.
+
+## Server selection with local only
+
+The client source pin is `f6ac2d61da342dc962db446d9e9d5fab8f80ee95`.
+The health decoder supplies the server `local_only` state and the configured destination map.
+With HA local only on, server `local_only=true` and destination `local` are necessary for each STT and TTS function.
+Missing fields, missing parts, `false`, `null`, `cloud`, and `unknown` select the fallback.
+With HA local only off, healthy server functions keep their usual selection.
+
+Tests use the pinned client decoder and audio methods with a fake HTTP and WebSocket peer.
+Each refusal keeps its cause in the turn record, without transcript or reply text.
+Diagnostics show the last health fields, and missing fields show as `not_reported`.
+Speaker health does not select STT or TTS. The speaker result keeps its use-time check.
+An option change updates the ledger without a restart.
+
+The full local test suite gave `703 passed`.
+Seven temporary source changes each caused a named test failure:
+
+- Remove the server local-only check.
+- Accept a missing server local-only state.
+- Remove the part destination check.
+- Accept an `unknown` destination.
+- Remove the RIFF magic check.
+- Remove text-producer cancellation from cleanup.
+- Include a fallback entity ID in diagnostics.
+
+Each subprocess puts the initial file contents back in `finally`.
+The privacy checks use `$PRIVATE_DENYLIST` without a published local path.
+These checks do not include a hardware trial, cloud request, commit, or publication.

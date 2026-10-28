@@ -110,7 +110,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         try:
             async with asyncio.timeout(0.2):
                 health = await self.client.health_capabilities(timeout=0.2)
-                healthy = self.ledger.server_selected(health, "tts")
+                healthy = self.ledger.server_selected(health, "tts", turn.turn_id)
         except ProtocolError, TimeoutError, OSError:
             healthy = False
         healthy = healthy and await self.ledger.connect(turn)

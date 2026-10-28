@@ -1,5 +1,7 @@
 import ipaddress
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -18,19 +20,23 @@ async def test_diagnostics_exclude_all_content_and_private_configuration(hass, c
         "name": "synthetic-speaker-content",
         "url": "http://server.invalid",
         "private_address": str(ipaddress.ip_address(0x0A000007)),
+        "fallback_stt": "stt.planted-fallback",
+        "fallback_tts": "tts.planted-fallback",
+        "conversation_entity": "conversation.planted",
     }
     entry = MockConfigEntry(
         domain="assist_live",
         data={
             **planted,
             "satellites": {"device-a": "satellite-a"},
-            "fallback_stt": "stt.standard",
-            "fallback_tts": "tts.standard",
+            "pipelines": {"device-a": "pipeline-a"},
         },
     )
     runtime = Runtime(hass, entry, client)
     turn = runtime.ledger.open_voice("satellite-a")
     runtime.ledger.records[turn.turn_id].speaker = planted
+    runtime.ledger.used(turn.turn_id, "stt_fallback", planted["fallback_stt"], "local")
+    runtime.ledger.used(turn.turn_id, "tts_fallback", planted["fallback_tts"], "local")
     runtime.ledger.records[turn.turn_id].audio_format = {
         **planted,
         "codec": "pcm_s16le",
@@ -39,12 +45,36 @@ async def test_diagnostics_exclude_all_content_and_private_configuration(hass, c
         "width": 2,
     }
     hass.data["assist_live"] = {entry.entry_id: runtime}
-    result = await async_get_config_entry_diagnostics(hass, entry)
+    with (
+        patch(
+            "custom_components.assist_live.diagnostics.assist_pipeline.async_get_pipelines",
+            return_value=[
+                SimpleNamespace(
+                    id="pipeline-a", conversation_engine=planted["conversation_entity"]
+                )
+            ],
+        ) as pipelines,
+        patch(
+            "custom_components.assist_live.diagnostics.entity_iot_class",
+            return_value="local_push",
+        ) as iot,
+    ):
+        result = await async_get_config_entry_diagnostics(hass, entry)
+    pipelines.assert_called_once_with(hass)
+    assert {call.args[1] for call in iot.call_args_list} == {
+        planted["fallback_stt"],
+        planted["fallback_tts"],
+        planted["conversation_entity"],
+    }
     serialized = json.dumps(result)
     for value in planted.values():
         assert value not in serialized
     assert result["agent_boundary"] == "outside_local_only"
-    assert result["turns"][0]["destinations"] == []
+    assert [row["provider"] for row in result["turns"][0]["destinations"]] == [
+        "ha_entity",
+        "ha_entity",
+    ]
+    assert result["turns"][0]["satellite"] == "satellite-a"
 
 
 async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, client):

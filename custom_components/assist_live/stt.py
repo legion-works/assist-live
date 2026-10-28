@@ -74,6 +74,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         self, messages: AsyncIterator[dict[str, Any]], turn_id: str
     ) -> None:
         received = False
+        cancelled = False
         try:
             async with asyncio.timeout(0.6):
                 async for message in messages:
@@ -83,10 +84,13 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                         self.ledger.speaker_result(turn_id, message)
                         received = True
                         break
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         except Exception:
             pass
         finally:
-            if not received:
+            if not received and not cancelled:
                 self.ledger.speaker_missing += 1
             if isinstance(messages, AsyncGenerator):
                 with suppress(Exception):
@@ -149,7 +153,9 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 try:
                     async with asyncio.timeout(0.2):
                         health = await self.client.health_capabilities(timeout=0.2)
-                        healthy = self.ledger.server_selected(health, "stt")
+                        healthy = self.ledger.server_selected(
+                            health, "stt", turn.turn_id
+                        )
                 except ProtocolError, TimeoutError, OSError:
                     healthy = False
                 if healthy and await self.ledger.connect(turn):
@@ -179,8 +185,6 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                         "end_decision",
                                         decision_source="server_detector",
                                     )
-                                elif message["type"] == "speaker_result":
-                                    self.ledger.speaker_result(turn.turn_id, message)
                         finally:
                             if not background and isinstance(messages, AsyncGenerator):
                                 # A close error cannot invalidate a complete transcript.

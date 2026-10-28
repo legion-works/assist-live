@@ -14,6 +14,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
         ("cloud_polling", "cloud"),
         (None, "unknown"),
         ("assumed_state", "unknown"),
+        (123, "unknown"),
+        ({"unexpected": "local"}, "unknown"),
     ],
 )
 def test_iot_class_is_not_assumed_local(iot_class, want):
@@ -207,7 +209,9 @@ async def test_midturn_cloud_tts_is_refused_with_full_text(hass, client):
     hass.bus.async_listen(
         "assist_live_tts_failed", callback(lambda event: failed.append(event.data))
     )
-    client.health_capabilities.return_value = HealthCapabilities(True, True, True, True)
+    client.health_capabilities.return_value = HealthCapabilities(
+        True, True, True, True, True, {"stt": "local", "tts": "local"}
+    )
 
     async def broken(turn_id, parts, voice, **kwargs):
         assert len([part async for part in parts]) == 2
@@ -342,7 +346,7 @@ async def test_optional_speaker_read_is_bounded_and_cancelled(client, ledger, en
         await forward.async_will_remove_from_hass()
     await asyncio.wait_for(closed.wait(), 1)
     await ledger.stop_speaker_reads()
-    assert ledger.speaker_missing == 1
+    assert ledger.speaker_missing == (1 if ending in {"missing", "invalid"} else 0)
     assert ledger.latest["satellite-a"].speaker is None
 
 
@@ -583,3 +587,103 @@ async def test_midturn_stt_records_provider_and_fallback(client, ledger):
     assert decision.source == "integration"
     assert decision.quality == "proxy"
     assert decision.data["decision_source"] == "ha_audio_end"
+
+
+async def test_local_speaker_clears_previous_destination_issue(hass, client):
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.assist_live import Runtime
+
+    entry = MockConfigEntry(
+        domain="assist_live", data={"satellites": {}, "local_only": True}
+    )
+    runtime = Runtime(hass, entry, client)
+    runtime.speaker_metadata({"destination": "cloud"})
+    registry = ir.async_get(hass)
+    issue_id = f"{entry.entry_id}_speaker_destination"
+    assert registry.async_get_issue("assist_live", issue_id) is not None
+    runtime.speaker_metadata({"destination": "local"})
+    assert registry.async_get_issue("assist_live", issue_id) is None
+
+
+async def test_background_read_owns_speaker_result(client, ledger):
+    import asyncio
+
+    from assist_live_client.models import HealthCapabilities
+    from test_stt_forward import Fallback, audio, entity, metadata
+
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+
+    async def messages(*args):
+        yield {"type": "speaker_result"}
+        yield {"type": "final", "text": "synthetic command"}
+        yield {
+            "type": "speaker_result",
+            "name": "synthetic-speaker",
+            "distance": 0.2,
+            "destination": "local",
+        }
+
+    client.stt = messages
+    forward = entity(client, ledger, Fallback())
+    try:
+        result = await forward.async_process_audio_stream(
+            metadata(), audio([bytes(320)])
+        )
+        assert result.text == "synthetic command"
+        await asyncio.gather(*ledger.speaker_reads.values())
+        assert ledger.latest["satellite-a"].speaker["destination"] == "local"
+    finally:
+        await forward.async_will_remove_from_hass()
+
+
+async def test_options_listener_updates_ledger_local_only(hass, client):
+    from unittest.mock import AsyncMock
+
+    from assist_live_client.models import HealthCapabilities
+
+    from custom_components.assist_live import Runtime, async_setup_entry
+
+    entry = MockConfigEntry(
+        domain="assist_live",
+        data={
+            "url": "https://server.example",
+            "token": "test-only",
+            "fallback_stt": "stt.standard",
+            "fallback_tts": "tts.standard",
+            "satellites": {},
+            "local_only": True,
+        },
+        options={"local_only": False},
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.assist_live.AssistLiveClient", return_value=client),
+        patch.object(Runtime, "start", new_callable=AsyncMock),
+        patch.object(Runtime, "_maintenance", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+        patch(
+            "custom_components.assist_live.assist_pipeline.async_get_pipelines",
+            return_value=[],
+        ),
+    ):
+        assert await async_setup_entry(hass, entry)
+    runtime = hass.data["assist_live"][entry.entry_id]
+    try:
+        turn = runtime.ledger.open_voice("satellite-a")
+        health = HealthCapabilities(True, True, True, False, False, {"stt": "local"})
+        assert runtime.ledger.server_selected(health, "stt", turn.turn_id)
+        hass.config_entries.async_update_entry(entry, options={"local_only": True})
+        await hass.async_block_till_done()
+        assert not runtime.ledger.server_selected(health, "stt", turn.turn_id)
+        assert (
+            runtime.ledger.records[turn.turn_id].server_refusals["stt"]
+            == "server_not_local_only"
+        )
+        hass.config_entries.async_update_entry(entry, options={"local_only": False})
+        await hass.async_block_till_done()
+        assert runtime.ledger.server_selected(health, "stt", turn.turn_id)
+    finally:
+        await entry.async_unload(hass)

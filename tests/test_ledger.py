@@ -129,3 +129,21 @@ def test_cache_pressure_preserves_other_satellite_parent(ledger):
         ledger.device_event("satellite-a", turn.turn_id, "playback_end")
     assert len(ledger.records) <= 128
     assert ledger.open_voice("satellite-b").parent_turn_id == first.turn_id
+
+
+def test_device_end_decision_keeps_source(ledger):
+    turn = ledger.open_voice("satellite-a")
+    ledger.observe(
+        {
+            "turn_id": turn.turn_id,
+            "satellite": "satellite-a",
+            "stage": "end_decision",
+            "source": "device",
+            "t_utc_ns": 1,
+            "quality": "measured",
+        }
+    )
+    assert (
+        ledger.records[turn.turn_id].timings["end_decision"]["decision_source"]
+        == "device"
+    )

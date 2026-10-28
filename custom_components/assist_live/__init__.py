@@ -49,9 +49,7 @@ class Runtime:
         self.entry = entry
         self.client = client
         self.ledger = TurnLedger(client)
-        self.ledger.record_transcripts = entry.options.get(
-            "record_transcripts", entry.data.get("record_transcripts", False)
-        )
+        self.update_options(entry)
         self.ledger.fallback_policy = self.fallback_destination
         self.ledger.speaker_event = self.speaker_metadata
         self.speaker_policy_violations = 0
@@ -74,6 +72,12 @@ class Runtime:
         self._healthy = False
         self._store_retry_due = 0.0
 
+    @callback
+    def update_options(self, entry: ConfigEntry) -> None:
+        settings = {**entry.data, **entry.options}
+        self.ledger.record_transcripts = settings.get("record_transcripts", False)
+        self.ledger.local_only = settings.get("local_only", False)
+
     async def fallback_destination(self, entity_id: str) -> str:
         from .config_flow import destination, entity_iot_class
 
@@ -87,16 +91,17 @@ class Runtime:
             == "local"
         ):
             mode = "local"
-        if settings.get("local_only", False) and mode != "local":
+        if self.ledger.local_only and mode != "local":
             raise HomeAssistantError("fallback destination refused")
         return mode
 
     @callback
     def speaker_metadata(self, data: dict[str, object]) -> None:
-        settings = {**self.entry.data, **self.entry.options}
-        if settings.get("local_only", False) and data["destination"] != "local":
+        if self.ledger.local_only and data["destination"] != "local":
             self.speaker_policy_violations += 1
             speaker_destination_issue(self.hass, self.entry.entry_id)
+        elif data["destination"] == "local":
+            speaker_destination_issue(self.hass, self.entry.entry_id, False)
         self.hass.bus.async_fire("assist_live_speaker", data)
 
     async def _save(
@@ -335,9 +340,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await runtime.start()
 
         async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
-            runtime.ledger.record_transcripts = updated.options.get(
-                "record_transcripts", updated.data.get("record_transcripts", False)
-            )
+            runtime.update_options(updated)
 
         entry.async_on_unload(entry.add_update_listener(options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

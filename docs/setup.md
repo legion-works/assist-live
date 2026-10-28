@@ -58,6 +58,10 @@ Keep the saved ID when the pipeline is in the list.
 
 ## Fallback behavior
 
+With local only on, HA uses server STT or TTS only when health reports `local_only=true` and `local` for that part.
+If a check is unsatisfactory, HA uses the fallback. With local only on, HA does not use an older server without these health fields.
+These configured-destination checks are not a firewall. These checks do not include the conversation agent.
+
 STT always reports `requires_external_vad=False` through its `audio_processing` property.
 It checks server health with a 200 ms limit.
 When the server is unavailable, `pymicro-vad` ends the local stream after 0.7 s without voice.

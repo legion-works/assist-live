@@ -532,3 +532,24 @@ async def test_wav_pcm_parser_closes_and_strips_fragmented_header(unknown_size):
     )
     assert result == b"\x02\x00\x02\x00"
     assert closed == [True]
+
+
+async def test_wav_pcm_parser_refuses_wrong_riff_magic():
+    from custom_components.assist_live.tts_fallback import compatible_pcm
+
+    closed = []
+
+    async def source():
+        try:
+            yield b"NOPE" + wav_audio()[4:]
+        finally:
+            closed.append(True)
+
+    with pytest.raises(ValueError, match="invalid fallback WAV"):
+        _ = [
+            part
+            async for part in compatible_pcm(
+                TTSAudioResponse("wav", source()), TTSFormat("pcm_s16le", 16000, 1, 2)
+            )
+        ]
+    assert closed == [True]

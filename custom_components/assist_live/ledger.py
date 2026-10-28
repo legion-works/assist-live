@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import uuid7
@@ -22,6 +22,7 @@ class Record:
     speaker: dict[str, Any] | None = None
     voice: str | None = None
     audio_format: dict[str, Any] | None = None
+    server_refusals: dict[str, str] = field(default_factory=dict)
 
 
 class TurnLedger:
@@ -45,11 +46,28 @@ class TurnLedger:
         self.fallback_policy: Callable[[str], Awaitable[str]] | None = None
         self.speaker_reads: dict[str, asyncio.Task[None]] = {}
         self.speaker_missing = 0
+        self.local_only = False
+        self.last_health: HealthCapabilities | None = None
 
     def server_selected(
-        self, health: HealthCapabilities, part: Literal["stt", "tts"]
+        self, health: HealthCapabilities, part: Literal["stt", "tts"], turn_id: str
     ) -> bool:
-        return health.healthy is True and getattr(health, part) is True
+        self.last_health = health
+        record = self.records[turn_id]
+        record.server_refusals.pop(part, None)
+        if health.healthy is not True or getattr(health, part) is not True:
+            return False
+        if self.local_only:
+            if health.local_only is not True:
+                record.server_refusals[part] = "server_not_local_only"
+                return False
+            if (
+                not isinstance(health.destinations, Mapping)
+                or health.destinations.get(part) != "local"
+            ):
+                record.server_refusals[part] = "server_destination_not_local"
+                return False
+        return True
 
     async def stop_speaker_reads(self) -> None:
         tasks = list(self.speaker_reads.values())
@@ -178,9 +196,10 @@ class TurnLedger:
                 for key in ("t_utc_ns", "quality", "uncertainty_ms", "source")
             }
         if stage == "end_decision" and stage in record.timings and not keep_local_end:
-            record.timings[stage]["decision_source"] = data.get(
-                "decision_source",
-                "server_detector" if event.get("source") == "server" else "unknown",
+            record.timings[stage]["decision_source"] = data.get("decision_source") or (
+                "server_detector"
+                if event.get("source") == "server"
+                else event.get("source", "unknown")
             )
         if data.get("part") in {
             "stt",
@@ -236,6 +255,9 @@ class TurnLedger:
             and record.destinations[-1]["part"].endswith("_fallback")
         ):
             data.update(record.destinations[-1])
+            part = record.destinations[-1]["part"].removesuffix("_fallback")
+            if reason := record.server_refusals.get(part):
+                data["reason"] = reason
         self._pending.append(
             TimingEvent(
                 turn_id,
@@ -254,6 +276,7 @@ class TurnLedger:
             "uncertainty_ms": None,
             "source": "integration",
             "decision_source": decision_source,
+            **({"reason": data["reason"]} if "reason" in data else {}),
         }
         if not (
             decision_source == "server_detector"

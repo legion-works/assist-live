@@ -9,11 +9,11 @@
           "token": "Access token",
           "fallback_stt": "Fallback STT entity",
           "fallback_tts": "Fallback TTS entity",
-        "notify_tts_failure": "Show full reply in a persistent notification if TTS fails",
-        "local_only": "Check local fallback destinations",
-        "record_transcripts": "Permit transcript storage on the server",
-        "fallback_stt_local": "Record an unknown fallback STT destination as local",
-        "fallback_tts_local": "Record an unknown fallback TTS destination as local"
+          "notify_tts_failure": "Show full reply in a persistent notification if TTS fails",
+          "local_only": "Use local destinations only",
+          "record_transcripts": "Permit transcript storage on the server",
+          "fallback_stt_local": "Record an unknown fallback STT destination as local",
+          "fallback_tts_local": "Record an unknown fallback TTS destination as local"
         }
       },
       "http_warning": {
@@ -46,9 +46,9 @@
     "step": {
       "init": {
         "title": "Destination checks and transcript storage",
-        "description": "HA checks its fallback destinations and speaker events. Set local_only on the server to check server providers. HA cannot read that server setting. Diagnostics show server destinations only after a turn uses them. The conversation agent is outside these checks.",
+        "description": "With local only on, HA uses server STT or TTS only when health reports local_only on and a local destination for that part. If a check is unsatisfactory, HA uses the fallback. HA does not use an older server without these fields. HA also checks fallback destinations and speaker events. These configured-destination checks are not a firewall. These checks do not include the conversation agent.",
         "data": {
-          "local_only": "Check local fallback destinations",
+          "local_only": "Use local destinations only",
           "record_transcripts": "Permit transcript storage on the server",
           "fallback_stt_local": "Record an unknown fallback STT destination as local",
           "fallback_tts_local": "Record an unknown fallback TTS destination as local"

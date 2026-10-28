@@ -3,7 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+from assist_live_client.models import (
+    HealthCapabilities,
+    TTSAudio,
+    TTSFormat,
+    TTSSentenceEnd,
+)
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components.tts import TTSAudioRequest
 from test_tts_forward import Fallback, entity, text
@@ -12,9 +17,7 @@ from test_tts_forward import Fallback, entity, text
 def capable(client, *, healthy=True, stt=True, tts=True, text_positions=True):
     client.health.return_value = healthy
     client.health_capabilities = AsyncMock(
-        return_value=SimpleNamespace(
-            healthy=healthy, stt=stt, tts=tts, text_positions=text_positions
-        )
+        return_value=HealthCapabilities(healthy, stt, tts, text_positions)
     )
 
 
@@ -235,3 +238,40 @@ async def test_start_protocol_failure_logs_type_without_content(client, ledger, 
     assert records[0].getMessage() == "TTS stream failed: ProtocolError"
     assert records[0].exc_info is None
     assert "planted-sensitive-protocol-content" not in caplog.text
+
+
+async def test_output_close_cancels_pending_text_producer(client, ledger):
+    capable(client)
+    entered, closed = asyncio.Event(), asyncio.Event()
+    release = asyncio.Event()
+
+    async def source():
+        try:
+            yield "First. "
+            entered.set()
+            await release.wait()
+            yield "Second."
+        finally:
+            closed.set()
+
+    async def synth(turn, parts, voice, *, text_positions=False):
+        assert await anext(parts) == "First. "
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        await release.wait()
+
+    client.tts_stream = synth
+    response = await entity(client, ledger, Fallback()).async_stream_tts_audio(
+        TTSAudioRequest("en", {"voice": "voice-2"}, source())
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    assert (await anext(response.data_gen))[:4] == b"RIFF"
+    closing = asyncio.create_task(response.data_gen.aclose())
+    try:
+        done, _ = await asyncio.wait({closing}, timeout=0.2)
+        assert closing in done
+        await closing
+        assert closed.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(closing, 1)

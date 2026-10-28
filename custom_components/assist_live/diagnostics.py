@@ -83,10 +83,10 @@ async def async_get_config_entry_diagnostics(
                     }
                 )
     turns = []
-    for index, record in enumerate(runtime.ledger.latest.values()):
+    for record in runtime.ledger.latest.values():
         turns.append(
             {
-                "satellite": index + 1,
+                "satellite": safe_label(record.turn.satellite),
                 "destinations": [
                     {
                         "part": safe_label(row["part"]),
@@ -121,6 +121,7 @@ async def async_get_config_entry_diagnostics(
                 else "unknown",
             }
         )
+    health = runtime.ledger.last_health
     return {
         "protocol_version": 1,
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
@@ -129,7 +130,12 @@ async def async_get_config_entry_diagnostics(
         "fallback_count": runtime.ledger.failures.get("fallback_used", 0),
         "speaker_metadata_missing": runtime.ledger.speaker_missing,
         "speaker_policy_violations": getattr(runtime, "speaker_policy_violations", 0),
-        "server_profile": "unknown",
+        "server_local_only": health.local_only
+        if health is not None and health.local_only is not None
+        else "not_reported",
+        "server_destinations": dict(health.destinations)
+        if health is not None and health.destinations is not None
+        else "not_reported",
         "local_only": settings.get("local_only", False),
         "record_transcripts": settings.get("record_transcripts", False),
         "fallbacks": fallbacks,

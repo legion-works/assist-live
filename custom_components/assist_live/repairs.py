@@ -5,7 +5,12 @@ from .const import DOMAIN
 
 
 @callback
-def speaker_destination_issue(hass: HomeAssistant, entry_id: str) -> None:
+def speaker_destination_issue(
+    hass: HomeAssistant, entry_id: str, active: bool = True
+) -> None:
+    if not active:
+        ir.async_delete_issue(hass, DOMAIN, f"{entry_id}_speaker_destination")
+        return
     ir.async_create_issue(
         hass,
         DOMAIN,

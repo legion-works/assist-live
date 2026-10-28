@@ -7,13 +7,14 @@ The project is experimental and has no release.
 The [public design](design.md) states: "All device control uses the HA agent and HA exposure rules."
 Sensors and diagnostics only read integration state. They add no device-control path.
 
-HA's `local_only` option checks HA fallback destinations and speaker events.
-It does not check the server's provider selection.
-The operator must set `local_only` on the server to check server providers and speaker addresses.
-HA cannot read that setting through the pinned protocol.
+HA's `local_only` option checks configured server destinations, HA fallback destinations, and speaker events.
+With this option on, HA uses server STT or TTS only when health reports `local_only=true` and `local` for that part.
+If a check is unsatisfactory, HA uses the fallback. With local only on, HA does not use an older server without these fields.
+Set `local_only` on the server to check server providers and speaker addresses.
 
-Diagnostics show server destinations only after a turn uses them.
-Unknown server destinations stay `unknown`. They do not become local by default.
+Diagnostics show the last health values as `server_local_only` and `server_destinations`.
+Missing values show as `not_reported`. Unknown server destinations stay `unknown`.
+The health speaker destination does not select STT or TTS. The server checks speaker addresses before use.
 
 These checks are not a network firewall.
 They cannot examine the traffic of other HA integrations.
@@ -28,7 +29,7 @@ HA checks the current destination again before each fallback call and each mid-t
 
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/b4a920241e4131df34df678de1faab5e9cec59b0/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/f6ac2d61da342dc962db446d9e9d5fab8f80ee95/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.

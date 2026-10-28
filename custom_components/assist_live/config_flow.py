@@ -16,9 +16,9 @@ from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
 
 
 def destination(iot_class: str | None) -> str:
-    if iot_class and iot_class.startswith("local"):
+    if isinstance(iot_class, str) and iot_class.startswith("local"):
         return "local"
-    if iot_class and iot_class.startswith("cloud"):
+    if isinstance(iot_class, str) and iot_class.startswith("cloud"):
         return "cloud"
     return "unknown"
 

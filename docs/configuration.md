@@ -22,23 +22,26 @@ HA reads the fallback integration's `iot_class` again before each fallback reque
 | Starts with `cloud` | `cloud` |
 | Missing or a different value | `unknown` |
 
-HA checks fallback destinations and speaker events, not server provider selection.
-Set `local_only` on the server too.
+With local only on, HA uses server STT or TTS only when health reports `local_only=true` and `local` for that part.
+If a check is unsatisfactory, HA uses the fallback. This includes older servers without these health fields.
+
+Set `local_only` on the server too. These configured-destination checks are not a firewall.
+These checks do not include the conversation agent.
 See [privacy](privacy.md) for the limits of these checks.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/b4a920241e4131df34df678de1faab5e9cec59b0/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/f6ac2d61da342dc962db446d9e9d5fab8f80ee95/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
 Piper buffers each sentence before synthesis. It streams the sentence audio to HA.
 It does not make audio for each text token.
 
-The pinned protocol does not show the server `profile` or provider configuration through health.
+The pinned protocol does not show the server turn `profile` through health.
 HA cannot read or select a server turn `profile` through this protocol.
-HA diagnostics show `server_profile` as `unknown`.
-Provider destinations stay `unknown` until timing events identify the services that a turn used.
+HA diagnostics show the last health values as `server_local_only` and `server_destinations`.
+Missing health fields show as `not_reported`. The destination map also includes the configured speaker plug-in.
 Diagnostics show the actual voice and audio format when HA has them.
 
 ## Fallback and timing
@@ -78,3 +81,4 @@ uv run python tools/check_release_pin.py --manifest custom_components/assist_liv
 The check refuses a different manifest pin or client package version.
 It also refuses a version without a package file on PyPI.
 The check does not publish a package.
+The manual archive workflow stops before it builds an archive if this check is unsatisfactory. It uploads nothing.
