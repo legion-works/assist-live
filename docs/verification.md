@@ -2532,3 +2532,20 @@ Seven temporary source changes each caused a named test failure:
 Each subprocess puts the initial file contents back in `finally`.
 The privacy checks use `$PRIVATE_DENYLIST` without a published local path.
 These checks do not include a hardware trial, cloud request, commit, or publication.
+
+## Health destination fields
+
+Diagnostics include only `stt`, `tts`, and `speaker` in the health destination map.
+Each value is `local`, `cloud`, or `unknown`.
+Other keys and values are not in the diagnostic output.
+
+The disclosure test uses the pinned health decoder with a fake HTTP peer.
+Four synthetic content strings in map keys are not in the serialized diagnostics.
+Correct STT, TTS, and speaker entries stay available.
+Before the correction, the new tests gave `4 failed`.
+After the correction, the diagnostics suite gave `6 passed`.
+A temporary full-map copy caused the disclosure assertion to stop the test.
+
+The subprocess puts the initial source contents back in `finally`.
+The TTS protocol URL uses client revision `f6ac2d61da342dc962db446d9e9d5fab8f80ee95`.
+Only historical records in this file use the previous pin.

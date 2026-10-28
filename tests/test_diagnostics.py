@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
@@ -163,3 +164,69 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
     assert result["turns"][0]["voice"] == "en_US-lessac-medium"
     assert result["turns"][0]["audio_format"]["rate"] == 22050
     assert result["turns"][0]["tts_text_input"] == "sentence_buffered"
+
+
+async def test_health_destination_keys_do_not_disclose_content(hass, socket_enabled):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from assist_live_client import AssistLiveClient
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    planted = [
+        "synthetic-token-content",
+        "synthetic-transcript-content",
+        "https://server.invalid",
+        "stt.synthetic-entity",
+    ]
+    permitted = {"stt": "local", "tts": "cloud", "speaker": "unknown"}
+
+    async def health(request):
+        return web.json_response(
+            {
+                "version": 1,
+                "healthy": True,
+                "local_only": True,
+                "destinations": {**permitted, **dict.fromkeys(planted, "local")},
+            }
+        )
+
+    app = web.Application()
+    app.router.add_get("/health", health)
+    async with (
+        TestServer(app) as server,
+        AssistLiveClient(str(server.make_url("")), "test-only") as client,
+    ):
+        entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+        runtime = Runtime(hass, entry, client)
+        runtime.ledger.last_health = await client.health_capabilities()
+        hass.data["assist_live"] = {entry.entry_id: runtime}
+        result = await async_get_config_entry_diagnostics(hass, entry)
+    serialized = json.dumps(result)
+    for value in planted:
+        assert value not in serialized
+    assert result["server_destinations"] == permitted
+
+
+@pytest.mark.parametrize("part", ["stt", "tts", "speaker"])
+async def test_diagnostics_drop_unrecognized_health_destination_values(
+    hass, client, part
+):
+    from assist_live_client.models import HealthCapabilities
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+    runtime = Runtime(hass, entry, client)
+    runtime.ledger.last_health = HealthCapabilities(
+        True, destinations={part: "synthetic-unrecognized-destination"}
+    )
+    hass.data["assist_live"] = {entry.entry_id: runtime}
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["server_destinations"] == {}

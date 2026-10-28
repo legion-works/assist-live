@@ -133,7 +133,12 @@ async def async_get_config_entry_diagnostics(
         "server_local_only": health.local_only
         if health is not None and health.local_only is not None
         else "not_reported",
-        "server_destinations": dict(health.destinations)
+        "server_destinations": {
+            part: value
+            for part, value in health.destinations.items()
+            if part in {"stt", "tts", "speaker"}
+            and value in {"local", "cloud", "unknown"}
+        }
         if health is not None and health.destinations is not None
         else "not_reported",
         "local_only": settings.get("local_only", False),
