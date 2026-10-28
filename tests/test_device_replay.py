@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import hashlib
 import json
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tools.device_replay import (
+    ACOUSTIC_METHOD,
     DEVICE_STAGES,
     AlsaCapture,
     AlsaOutput,
@@ -86,10 +88,17 @@ def sample():
             "mark_start_monotonic_ns": 1,
             "command_play_requested_utc_ns": 2,
         },
+        "server_clock": {
+            "kind": "same_host",
+            "offset_ns": 0,
+            "uncertainty_ms": 0,
+            "source": "local-interface",
+        },
         "alignment": {
-            "method": "synthetic",
+            "method": ACOUSTIC_METHOD,
             "quality": "estimate",
             "uncertainty_ms": 10,
+            "clock_uncertainty_ms": 0,
             "last_voice_utc_ns": 11_500_000_000,
             "reply_start_utc_ns": 12_000_000_000,
             "reply_end_utc_ns": 13_000_000_000,
@@ -356,6 +365,12 @@ class FakeCapture:
 
 class FakeEvents:
     def __init__(self, events=None, exported=None):
+        self.server_clock = {
+            "kind": "same_host",
+            "offset_ns": 0,
+            "uncertainty_ms": 0,
+            "source": "local-interface",
+        }
         self.events = (
             [event(stage, i * 1000) for i, stage in enumerate(DEVICE_STAGES)]
             if events is None
@@ -613,8 +628,10 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     baselines.write_text(json.dumps(baseline) + "\n")
     token = tmp_path / "token.json"
     token.write_text(json.dumps({"token": "test-only"}))
+    clock_record = tmp_path / "clock.json"
+    clock_record.write_text(json.dumps({"kind": "same_host"}))
     for key, value in {
-        "ASSIST_LIVE_URL": "https://example.com",
+        "ASSIST_LIVE_URL": "http://127.0.0.1",
         "ASSIST_LIVE_TOKEN_FILE": str(token),
         "ASSIST_LIVE_SATELLITE": "test_satellite",
         "ASSIST_LIVE_WAKE_AUDIO": "wake.wav",
@@ -673,8 +690,10 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     monkeypatch.setattr("tools.device_replay.ClientEvents", RecordingEvents)
     args = options("--phase", "p1", "--profiles", "safe,fast", "--limit", "1")
     args.labels, args.audio_root = labels, tmp_path
+    args.clock_record = clock_record
     selector = Selector()
     rows = await run(args, selector)
+    assert all(row["mode"] == "smoke" for row in rows)
     assert selector.calls == ["safe", "fast"]
     assert [row["profile"] for row in rows] == ["safe", "fast"]
     assert all(
@@ -690,6 +709,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     selector.calls.clear()
     args.phase, args.profiles = "p0", None
     rows = await run(args)
+    assert all(row["mode"] == "smoke" for row in rows)
     assert [row["profile"] for row in rows] == ["baseline"]
     assert selector.calls == []
 
@@ -753,4 +773,393 @@ async def test_client_adapter_reads_public_events_turn_and_export():
     assert (await source.next())["stage"] == "mic_open"
     assert await source.turn(TURN) == {"turn_id": TURN}
     assert (await source.export(10_500_000_000))[0]["stage"] == "mic_open"
+    await source.close()
+
+
+def review_signal(*, tail_ms=40, click=False, onset=False):
+    reference = [0.0] * 800 + tone(4000, 0.5) + tone(tail_ms * 16, 0.005) + [0.0] * 1600
+    boundary = 800 + 4000 + tail_ms * 16 - 1
+    prefix = [0.0] * 800 + reference + [0.0] * 3200
+    start = len(prefix)
+    quiet = tone(2400, 0.004) if onset else []
+    reply = quiet + tone(4800, 0.4, 419)
+    mic = prefix + reply + [0.0] * 3200
+    if click:
+        mic[start - 1600 : start - 1120] = tone(480, 0.5, 917)
+    return reference, mic, boundary, start
+
+
+def test_labelled_sub_two_percent_tail_maps_through_fit():
+    reference, mic, boundary, _ = review_signal()
+    result = align_capture(Capture(mic, 16000, 2_000_000_000, 0), reference, boundary)
+    mapped = result["command_offset_samples"] + boundary
+    assert result["last_voice_sample"] == mapped
+    assert (
+        result["last_voice_utc_ns"] == 2_000_000_000 + mapped * 1_000_000_000 // 16000
+    )
+    assert result["uncertainty_ms"] >= 50
+
+
+def test_sixty_ms_energy_disagreement_is_still_refused():
+    reference, mic, boundary, _ = review_signal(tail_ms=60)
+    with pytest.raises(ReplayError, match="ALIGNMENT_BOUNDARY"):
+        align_capture(Capture(mic, 16000, 0, 0), reference, boundary)
+
+
+def test_thirty_ms_click_before_reply_is_not_reply_start():
+    reference, mic, boundary, start = review_signal(click=True)
+    result = align_capture(Capture(mic, 16000, 0, 0), reference, boundary)
+    assert result["reply_start_sample"] == start
+    assert result["uncertainty_ms"] >= 100
+
+
+def test_quiet_150_ms_reply_onset_is_measured_from_noise_floor():
+    reference, mic, boundary, start = review_signal(onset=True)
+    result = align_capture(Capture(mic, 16000, 0, 0), reference, boundary)
+    assert result["reply_start_sample"] == start
+    assert result["reply_end_sample"] == start + 2400 + 4800 - 1
+
+
+@pytest.mark.parametrize("stage", DEVICE_STAGES[1:])
+def test_duplicate_device_stage_has_duplicate_name(stage):
+    row = sample()
+    row["events"].append(copy.deepcopy(row[stage]))
+    assert "DUPLICATE_DEVICE_" + stage.upper() in sample_errors(row)
+
+
+@pytest.mark.parametrize(
+    "earlier,later", list(zip(DEVICE_STAGES[:-1], DEVICE_STAGES[1:], strict=True))
+)
+def test_device_stage_order_is_required(earlier, later):
+    row = sample()
+    row[later]["t_utc_ns"] = row[earlier]["t_utc_ns"] - 1
+    assert "DEVICE_EVENT_ORDER" in sample_errors(row)
+
+
+def test_playback_command_time_is_not_an_acoustic_start():
+    row = sample()
+    row["host_timing"]["command_play_requested_utc_ns"] = row["alignment"][
+        "reply_start_utc_ns"
+    ]
+    assert "NON_ACOUSTIC_ALIGNMENT" in sample_errors(row)
+
+
+@pytest.mark.parametrize("method", ["synthetic", "playback-command", "unknown"])
+def test_non_acoustic_alignment_method_is_refused(method):
+    row = sample()
+    row["alignment"]["method"] = method
+    assert "NON_ACOUSTIC_ALIGNMENT" in sample_errors(row)
+
+
+@pytest.mark.asyncio
+async def test_playback_timeout_has_audio_output_error(monkeypatch, tmp_path):
+    class Process:
+        returncode = None
+        calls = 0
+
+        async def wait(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError
+            self.returncode = -9
+            return -9
+
+        def kill(self):
+            self.returncode = -9
+
+    async def spawn(*args, **kwargs):
+        return Process()
+
+    monkeypatch.setattr("tools.device_replay.shutil.which", lambda name: name)
+    monkeypatch.setattr("tools.device_replay.asyncio.create_subprocess_exec", spawn)
+    label, recording = bundle(tmp_path)
+    try:
+        await replay_sample(
+            label,
+            tmp_path,
+            tmp_path / "wake.wav",
+            AlsaOutput(),
+            FakeCapture(recording),
+            FakeEvents(),
+        )
+    except Exception as error:
+        assert isinstance(error, ReplayError)
+        assert str(error) == "AUDIO_OUTPUT_FAILED"
+    else:
+        pytest.fail("playback timeout was not refused")
+
+
+def test_acoustic_document_does_not_claim_peak_threshold_keeps_quiet_tails():
+    document = (ROOT / "docs/testing/device-replay.md").read_text()
+    assert (
+        "A low relative threshold keeps quiet tails above the measured noise floor"
+        not in document
+    )
+
+
+@pytest.mark.asyncio
+async def test_hash_error_includes_corpus_failure_text(tmp_path):
+    label, recording = bundle(tmp_path)
+    label["audio_sha256"] = "0" * 64
+    with pytest.raises(ReplayError, match="audio hash mismatch"):
+        await replay_sample(
+            label,
+            tmp_path,
+            tmp_path / "wake.wav",
+            FakeOutput(),
+            FakeCapture(recording),
+            FakeEvents(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_client_protocol_failure_has_named_device_error(tmp_path):
+    from assist_live_client.protocol import ProtocolError
+
+    class BrokenEvents(FakeEvents):
+        async def next(self):
+            raise ProtocolError("event stream stopped")
+
+    label, recording = bundle(tmp_path)
+    capture, source = FakeCapture(recording), BrokenEvents()
+    try:
+        await replay_sample(
+            label, tmp_path, tmp_path / "wake.wav", FakeOutput(), capture, source
+        )
+    except Exception as error:
+        assert isinstance(error, ReplayError)
+        assert str(error) == "MISSING_DEVICE_EVENT"
+    else:
+        pytest.fail("protocol failure was not refused")
+    assert capture.aborted and source.closed
+
+
+@pytest.mark.asyncio
+async def test_capture_origin_is_first_pcm_byte_with_short_period(monkeypatch):
+    clock = {"utc": 1_000_000_000}
+    finished = asyncio.Event()
+    calls = []
+
+    class Output:
+        calls = 0
+
+        async def read(self, count):
+            self.calls += 1
+            if self.calls == 1:
+                clock["utc"] += 80_000_000
+                return b"\0\0" * 160
+            await finished.wait()
+            return b""
+
+    class Process:
+        returncode = None
+        stdout = Output()
+
+        def terminate(self):
+            self.returncode = -15
+            finished.set()
+
+        def kill(self):
+            self.terminate()
+
+        async def wait(self):
+            return self.returncode
+
+    async def spawn(*args, **kwargs):
+        calls.append(args)
+        return Process()
+
+    monkeypatch.setattr("tools.device_replay.time.time_ns", lambda: clock["utc"])
+    monkeypatch.setattr("tools.device_replay.shutil.which", lambda name: name)
+    monkeypatch.setattr("tools.device_replay.asyncio.create_subprocess_exec", spawn)
+    capture = AlsaCapture()
+    await capture.start()
+    result = await capture.finish()
+    assert result.start_utc_ns == 1_080_000_000
+    assert result.uncertainty_ms == 20
+    assert "--period-size=160" in calls[0]
+    assert "--buffer-size=320" in calls[0]
+    assert not capture.pcm
+
+
+def measured_clock(offset_ns=0, uncertainty_ms=0):
+    return {
+        "kind": "measured",
+        "offset_ns": offset_ns,
+        "uncertainty_ms": uncertainty_ms,
+        "source": "synthetic-ptp-report",
+    }
+
+
+@pytest.mark.asyncio
+async def test_replay_records_server_clock_and_charges_uncertainty(tmp_path):
+    label, recording = bundle(tmp_path)
+    source = FakeEvents()
+    source.server_clock = measured_clock(250_000_000, 7)
+    row = await replay_sample(
+        label,
+        tmp_path,
+        tmp_path / "wake.wav",
+        FakeOutput(),
+        FakeCapture(recording),
+        source,
+    )
+    assert row.get("server_clock") == source.server_clock
+    assert row["alignment"].get("clock_uncertainty_ms") == 7
+    assert row["alignment"]["uncertainty_ms"] >= 4 + 10 + 50 + 7
+    assert (
+        source.since
+        == row["host_timing"]["mark_start_utc_ns"] + 250_000_000 - 7_000_000
+    )
+
+
+def test_schema_refuses_missing_clock_metadata():
+    row = sample()
+    row.pop("server_clock", None)
+    assert "INVALID_SERVER_CLOCK" in sample_errors(row)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {},
+        {"kind": "measured", "offset_ns": 1, "uncertainty_ms": -1, "source": "ptp"},
+        {"kind": "measured", "offset_ns": 1, "uncertainty_ms": 1, "source": ""},
+        {
+            "kind": "same_host",
+            "offset_ns": 1,
+            "uncertainty_ms": 0,
+            "source": "local-interface",
+        },
+    ],
+)
+def test_schema_refuses_invalid_server_clock(invalid):
+    row = sample()
+    row["server_clock"] = invalid
+    assert "INVALID_SERVER_CLOCK" in sample_errors(row)
+
+
+def test_same_host_clock_proves_all_resolved_addresses_are_local(tmp_path, monkeypatch):
+    from tools.device_replay import read_server_clock
+
+    path = tmp_path / "clock.json"
+    path.write_text(json.dumps({"kind": "same_host"}))
+    monkeypatch.setattr(
+        "tools.device_replay.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 80))],
+    )
+    result = read_server_clock(path, "https://example.com")
+    assert result["offset_ns"] == 0 and result["uncertainty_ms"] == 0
+    monkeypatch.setattr("tools.device_replay.local_addresses", lambda: {"192.0.2.10"})
+    monkeypatch.setattr(
+        "tools.device_replay.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("192.0.2.10", 80))],
+    )
+    assert read_server_clock(path, "https://example.com")["kind"] == "same_host"
+    monkeypatch.setattr(
+        "tools.device_replay.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("127.0.0.1", 80)),
+            (2, 1, 6, "", ("192.0.2.11", 80)),
+        ],
+    )
+    with pytest.raises(ReplayError, match="SERVER_CLOCK_NOT_LOCAL"):
+        read_server_clock(path, "https://example.com")
+
+
+def test_measured_clock_requires_named_nonnegative_uncertainty(tmp_path):
+    from tools.device_replay import read_server_clock
+
+    path = tmp_path / "clock.json"
+    record = measured_clock(250_000_000, 3)
+    path.write_text(json.dumps(record))
+    assert read_server_clock(path, "https://example.com") == record
+    for bad in [
+        {**record, "uncertainty_ms": -1},
+        {**record, "source": ""},
+        {"kind": "unknown"},
+    ]:
+        path.write_text(json.dumps(bad))
+        with pytest.raises(ReplayError, match="INVALID_SERVER_CLOCK"):
+            read_server_clock(path, "https://example.com")
+
+
+def test_local_interface_addresses_use_kernel_interfaces(monkeypatch):
+    import errno
+
+    from tools.device_replay import local_addresses
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def fileno(self):
+            return 42
+
+    monkeypatch.setattr("tools.device_replay.socket.socket", lambda *args: Socket())
+    monkeypatch.setattr(
+        "tools.device_replay.socket.if_nameindex", lambda: [(1, "lo"), (2, "test0")]
+    )
+
+    def interface_address(fd, operation, request):
+        assert fd == 42 and operation == 0x8915
+        if request.startswith(b"lo\0"):
+            raise OSError(errno.EADDRNOTAVAIL, "no IPv4")
+        return b"\0" * 20 + bytes((192, 0, 2, 10)) + b"\0" * 232
+
+    monkeypatch.setattr("tools.device_replay.fcntl.ioctl", interface_address)
+    monkeypatch.setattr("tools.device_replay.Path.exists", lambda path: True)
+    monkeypatch.setattr(
+        "tools.device_replay.Path.read_text",
+        lambda path: "20010db8000000000000000000000001 02 40 00 80 test0\n",
+    )
+    assert local_addresses() == {"192.0.2.10", "2001:db8::1"}
+
+
+def test_local_interface_proof_errors_fail_closed(tmp_path, monkeypatch):
+    from tools.device_replay import read_server_clock
+
+    path = tmp_path / "clock.json"
+    path.write_text('{"kind":"same_host"}')
+    monkeypatch.setattr(
+        "tools.device_replay.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("192.0.2.10", 80))],
+    )
+
+    def unavailable():
+        raise ReplayError("SERVER_CLOCK_LOCAL_PROOF_UNAVAILABLE")
+
+    monkeypatch.setattr("tools.device_replay.local_addresses", unavailable)
+    with pytest.raises(ReplayError, match="SERVER_CLOCK_LOCAL_PROOF_UNAVAILABLE"):
+        read_server_clock(path, "https://example.com")
+    with pytest.raises(ReplayError, match="SERVER_CLOCK_NOT_AVAILABLE"):
+        read_server_clock(None, "https://example.com")
+
+
+def test_device_stage_equal_timestamps_are_valid():
+    row = sample()
+    for item in row["events"]:
+        item["t_utc_ns"] = 10_000_000_000
+    assert validate_sample(row)
+
+
+@pytest.mark.asyncio
+async def test_client_event_timeout_is_missing_device_event(monkeypatch):
+    class Client:
+        async def events(self, satellite):
+            raise TimeoutError
+            yield
+
+    source = ClientEvents(Client(), "test_satellite")
+    await source.start(0)
+    try:
+        await source.next()
+    except Exception as error:
+        assert isinstance(error, ReplayError)
+        assert str(error) == "MISSING_DEVICE_EVENT"
+    else:
+        pytest.fail("event timeout was not refused")
     await source.close()

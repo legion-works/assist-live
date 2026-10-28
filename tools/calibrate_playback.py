@@ -9,6 +9,7 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tools import annotate_corpus
 from tools.corpus import load_corpus
 from tools.device_replay import ReplayError, sample_errors
 
@@ -20,11 +21,7 @@ def percentile(values: list[float], percent: float) -> float:
         or any(not math.isfinite(value) for value in values)
     ):
         raise ReplayError("INVALID_PERCENTILE_INPUT")
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * percent / 100
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+    return annotate_corpus.percentile(values, percent / 100)
 
 
 def calibrate(rows: list[dict[str, Any]], device: str) -> dict[str, Any]:
@@ -43,25 +40,29 @@ def calibrate(rows: list[dict[str, Any]], device: str) -> dict[str, Any]:
         or len({row["calibration_revision"] for row in rows}) != 1
     ):
         raise ReplayError("CALIBRATION_MIXED_CONFIGURATION")
+    uncertainty = [row["alignment"]["uncertainty_ms"] for row in rows]
+    uncertainty_p90 = percentile(uncertainty, 90)
     proxies = {}
     for boundary in ("start", "end"):
         absolute_errors = [
             abs(
                 row["playback_" + boundary]["t_utc_ns"]
+                - row["server_clock"]["offset_ns"]
                 - row["alignment"]["reply_" + boundary + "_utc_ns"]
             )
             / 1e6
             for row in rows
         ]
         p90 = percentile(absolute_errors, 90)
+        accepted = p90 + uncertainty_p90 <= 100
         proxies[boundary] = {
             "n": len(rows),
             "p50_absolute_error_ms": percentile(absolute_errors, 50),
             "p90_absolute_error_ms": p90,
-            "accepted": p90 <= 100,
-            "status": "accepted" if p90 <= 100 else "rejected",
+            "p90_error_bound_ms": p90 + uncertainty_p90,
+            "accepted": accepted,
+            "status": "accepted" if accepted else "rejected",
         }
-    uncertainty = [row["alignment"]["uncertainty_ms"] for row in rows]
     return {
         "schema_version": 1,
         "device": device,
@@ -110,9 +111,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"p90={proxy['p90_absolute_error_ms']:g}ms {proxy['status']}"
             )
         if args.check:
-            print("PASS calibration n>=50")
             if not result["latency_gates_accepted"]:
                 raise ReplayError("CALIBRATION_PROXY_REJECTED: latency gates blocked")
+            print("PASS calibration n>=50")
     except (ReplayError, OSError, ValueError) as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1

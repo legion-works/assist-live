@@ -2560,3 +2560,17 @@ Smoke rows cannot satisfy acceptance validation.
 Acceptance stays blocked until the corpus is frozen and the public recorder supplies turn identifiers, monotonic operation times, and an explicit completed flag.
 The device trial, smoke run, and 50-reply calibration are `NOT RUN: hardware not available`.
 No hardware calibration report contains invented values.
+
+## Acoustic measurement limits
+
+The last-voice marker uses the labelled sample and the fitted microphone offset.
+The energy endpoint is only a cross-check, and uncertainty includes its permitted difference.
+Reply boundaries use the noise floor and sustained regions, not a reply-peak percentage.
+Short isolated sounds do not become reply boundaries, and uncertainty includes their possible voice intervals.
+
+Capture timing starts with the first PCM byte and includes the requested buffer interval.
+Each row has an explicit server-clock record with its offset, source, and uncertainty.
+Local clock records must have a local-address check.
+A named clock measurement is necessary for a remote record.
+Proxy acceptance includes acoustic and clock uncertainty in the 100 ms bound.
+The device trial, smoke run, and 50-reply calibration stay `NOT RUN: hardware not available`.

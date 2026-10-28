@@ -1,11 +1,15 @@
 import argparse
 import asyncio
 import contextlib
+import errno
+import fcntl
 import hashlib
+import ipaddress
 import json
 import math
 import os
 import shutil
+import socket
 import struct
 import sys
 import time
@@ -14,12 +18,14 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeGuard, cast
+from urllib.parse import urlsplit
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from assist_live_client import AssistLiveClient
 from assist_live_client.models import TimingEvent
+from assist_live_client.protocol import ProtocolError
 
 from tools.corpus import (
     boundary_review_reasons,
@@ -34,6 +40,9 @@ from tools.test_environment import (
 )
 
 Row = dict[str, Any]
+ACOUSTIC_METHOD = "rms-10ms-reference-fit-noise-floor-50ms"
+CAPTURE_PERIOD_SAMPLES = 160
+CAPTURE_BUFFER_SAMPLES = 320
 DEVICE_STAGES = ("wake_detected", "mic_open", "playback_start", "playback_end")
 BRIDGE_FIELDS = (
     "turn_id",
@@ -61,6 +70,86 @@ def finite(value: object) -> TypeGuard[int | float]:
         and not isinstance(value, bool)
         and math.isfinite(value)
     )
+
+
+def valid_server_clock(record: object) -> TypeGuard[Row]:
+    return (
+        isinstance(record, dict)
+        and record.get("kind") in ("same_host", "measured")
+        and type(record.get("offset_ns")) is int
+        and finite(record.get("uncertainty_ms"))
+        and record["uncertainty_ms"] >= 0
+        and text(record.get("source"))
+        and (
+            record["kind"] != "same_host"
+            or (record["offset_ns"] == 0 and record["uncertainty_ms"] == 0)
+        )
+    )
+
+
+def local_addresses() -> set[str]:
+    addresses = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            for _, name in socket.if_nameindex():
+                try:
+                    value = fcntl.ioctl(
+                        probe.fileno(), 0x8915, struct.pack("256s", name.encode())
+                    )
+                    addresses.add(str(ipaddress.IPv4Address(value[20:24])))
+                except OSError as error:
+                    if error.errno not in (
+                        errno.EADDRNOTAVAIL,
+                        errno.ENODEV,
+                        errno.EAFNOSUPPORT,
+                    ):
+                        raise
+        ipv6 = Path("/proc/net/if_inet6")
+        if ipv6.exists():
+            addresses.update(
+                str(ipaddress.IPv6Address(int(line.split()[0], 16)))
+                for line in ipv6.read_text().splitlines()
+            )
+    except OSError, ValueError, IndexError:
+        raise ReplayError("SERVER_CLOCK_LOCAL_PROOF_UNAVAILABLE") from None
+    return addresses
+
+
+def read_server_clock(path: Path | None, url: str) -> Row:
+    if path is None:
+        raise ReplayError("SERVER_CLOCK_NOT_AVAILABLE")
+    try:
+        record = json.loads(path.read_text())
+        if not isinstance(record, dict):
+            raise ReplayError("INVALID_SERVER_CLOCK")
+        if record.get("kind") == "same_host":
+            host = urlsplit(url).hostname
+            if not host:
+                raise ReplayError("SERVER_CLOCK_NOT_LOCAL")
+            resolved = {
+                ipaddress.ip_address(str(item[4][0]).split("%")[0])
+                for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            }
+            if not resolved:
+                raise ReplayError("SERVER_CLOCK_NOT_LOCAL")
+            non_loopback = {
+                str(address) for address in resolved if not address.is_loopback
+            }
+            if non_loopback and not non_loopback <= local_addresses():
+                raise ReplayError("SERVER_CLOCK_NOT_LOCAL")
+            record = {
+                **record,
+                "offset_ns": record.get("offset_ns", 0),
+                "uncertainty_ms": record.get("uncertainty_ms", 0),
+                "source": "local-interface",
+            }
+        if not valid_server_clock(record):
+            raise ReplayError("INVALID_SERVER_CLOCK")
+        return record
+    except (OSError, ValueError) as error:
+        if isinstance(error, ReplayError):
+            raise
+        raise ReplayError("INVALID_SERVER_CLOCK") from None
 
 
 def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
@@ -149,6 +238,7 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
         valid_events.append(event)
         if event["turn_id"] != row.get("turn_id") or event["stage"] == "unmatched":
             errors.append("UNMATCHED_TURN")
+    device_times = []
     for stage in DEVICE_STAGES:
         found = [
             event
@@ -162,10 +252,16 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
             errors.append(
                 "DUPLICATE_WAKE"
                 if stage == "wake_detected" and len(found) > 1
+                else "DUPLICATE_DEVICE_" + stage.upper()
+                if len(found) > 1
                 else "MISSING_DEVICE_" + stage.upper()
             )
         elif row.get(stage) != found[0]:
             errors.append("DEVICE_BOUNDARY_MISMATCH")
+        if len(found) == 1:
+            device_times.append(found[0]["t_utc_ns"])
+    if len(device_times) == len(DEVICE_STAGES) and device_times != sorted(device_times):
+        errors.append("DEVICE_EVENT_ORDER")
     host = row.get("host_timing")
     if not isinstance(host, dict) or any(
         not finite(host.get(key))
@@ -177,6 +273,9 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
     ):
         errors.append("MISSING_HOST_TIMING")
     alignment = row.get("alignment")
+    clock = row.get("server_clock")
+    if not valid_server_clock(clock):
+        errors.append("INVALID_SERVER_CLOCK")
     if (
         not isinstance(alignment, dict)
         or alignment.get("quality") != "estimate"
@@ -198,6 +297,19 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
         <= alignment["reply_end_utc_ns"]
     ):
         errors.append("ALIGNMENT_ORDER")
+    if isinstance(alignment, dict):
+        if alignment.get("method") != ACOUSTIC_METHOD or (
+            isinstance(host, dict)
+            and alignment.get("reply_start_utc_ns")
+            == host.get("command_play_requested_utc_ns")
+        ):
+            errors.append("NON_ACOUSTIC_ALIGNMENT")
+        if valid_server_clock(clock) and (
+            alignment.get("clock_uncertainty_ms") != clock["uncertainty_ms"]
+            or not finite(alignment.get("uncertainty_ms"))
+            or alignment["uncertainty_ms"] < clock["uncertainty_ms"]
+        ):
+            errors.append("ALIGNMENT_CLOCK_UNCERTAINTY")
     return errors
 
 
@@ -306,11 +418,18 @@ def align_capture(
     )
     if reasons:
         raise ReplayError("ALIGNMENT_BOUNDARY: " + ",".join(reasons))
-    reply_offset = lag + command[-1] + 2
+    mapped_last_voice = lag * width + last_voice_sample
+    reply_offset = lag + math.ceil((last_voice_sample + 1) / width) + 1
     reply = mic[reply_offset:]
     if not reply:
         raise ReplayError("ALIGNMENT_REPLY_MISSING")
-    reply_active = sustained(reply, max(0.001, noise * 4, max(reply) * 0.02))
+    all_reply_active = sustained(reply, max(1 / 32768, noise * 4))
+    regions: list[list[int]] = []
+    for index in all_reply_active:
+        if not regions or index != regions[-1][-1] + 1:
+            regions.append([])
+        regions[-1].append(index)
+    reply_active = [index for region in regions if len(region) >= 5 for index in region]
     if not reply_active:
         raise ReplayError("ALIGNMENT_REPLY_MISSING")
     if len(reply) - reply_active[-1] - 1 < 10:
@@ -319,17 +438,27 @@ def align_capture(
     end = min(
         len(capture.samples) - 1, (reply_offset + reply_active[-1] + 1) * width - 1
     )
-    uncertainty = capture.uncertainty_ms + 10 + (max(near) - min(near)) * 10
+    discarded_ms = (
+        max(
+            reply_active[0] - all_reply_active[0],
+            all_reply_active[-1] - reply_active[-1],
+        )
+        * 10
+    )
+    # The energy cross-check permits 50 ms of label disagreement.
+    uncertainty = (
+        capture.uncertainty_ms + 10 + 50 + (max(near) - min(near)) * 10 + discarded_ms
+    )
     return {
-        "method": "rms-10ms-reference-fit-sustained-20ms",
+        "method": ACOUSTIC_METHOD,
         "quality": "estimate",
         "uncertainty_ms": uncertainty,
         "command_offset_samples": lag * width,
-        "last_voice_sample": lag * width + command_end,
+        "last_voice_sample": mapped_last_voice,
         "reply_start_sample": start,
         "reply_end_sample": end,
         "last_voice_utc_ns": capture.start_utc_ns
-        + (lag * width + command_end) * 1_000_000_000 // capture.rate,
+        + mapped_last_voice * 1_000_000_000 // capture.rate,
         "reply_start_utc_ns": capture.start_utc_ns
         + start * 1_000_000_000 // capture.rate,
         "reply_end_utc_ns": capture.start_utc_ns + end * 1_000_000_000 // capture.rate,
@@ -347,6 +476,8 @@ class AudioCapture(Protocol):
 
 
 class DeviceEvents(Protocol):
+    server_clock: Row
+
     async def start(self, since_utc_ns: int) -> None: ...
     async def next(self) -> Row: ...
     async def turn(self, turn_id: str) -> Row: ...
@@ -385,6 +516,8 @@ class AlsaOutput:
                 code = await process.wait()
             if code:
                 raise ReplayError("AUDIO_OUTPUT_FAILED")
+        except TimeoutError:
+            raise ReplayError("AUDIO_OUTPUT_FAILED") from None
         finally:
             if process.returncode is None:
                 process.kill()
@@ -404,7 +537,6 @@ class AlsaCapture:
             raise ReplayError("AUDIO_CAPTURE_NOT_AVAILABLE: arecord")
         self.pcm.clear()
         self.first_byte_ns = None
-        self.start_ns = time.time_ns()
         self.process = await asyncio.create_subprocess_exec(
             "arecord",
             "-q",
@@ -418,6 +550,8 @@ class AlsaCapture:
             "16000",
             "-c",
             "1",
+            f"--period-size={CAPTURE_PERIOD_SAMPLES}",
+            f"--buffer-size={CAPTURE_BUFFER_SAMPLES}",
             "--",
             "-",
             stdout=asyncio.subprocess.PIPE,
@@ -426,7 +560,7 @@ class AlsaCapture:
 
         async def read_pcm() -> None:
             assert self.process is not None and self.process.stdout is not None
-            while data := await self.process.stdout.read(3200):
+            while data := await self.process.stdout.read(CAPTURE_PERIOD_SAMPLES * 2):
                 if self.first_byte_ns is None:
                     self.first_byte_ns = time.time_ns()
                 self.pcm.extend(data)
@@ -455,9 +589,9 @@ class AlsaCapture:
             ):
                 raise ReplayError("AUDIO_CAPTURE_FAILED")
             samples = [value[0] / 32768 for value in struct.iter_unpack("<h", self.pcm)]
-            # The first read bounds startup delay, not the first acoustic sample.
-            uncertainty = (self.first_byte_ns - self.start_ns) / 1e6 + 100
-            return Capture(samples, 16000, self.start_ns, uncertainty)
+            # PCM delivery can lag its first sample by the requested buffer length.
+            uncertainty = CAPTURE_BUFFER_SAMPLES * 1000 / 16000
+            return Capture(samples, 16000, self.first_byte_ns, uncertainty)
         finally:
             self.pcm.clear()
 
@@ -473,8 +607,11 @@ class AlsaCapture:
 
 
 class ClientEvents:
-    def __init__(self, client: AssistLiveClient, satellite: str) -> None:
+    def __init__(
+        self, client: AssistLiveClient, satellite: str, server_clock: Row | None = None
+    ) -> None:
         self.client, self.satellite = client, satellite
+        self.server_clock = server_clock or {}
         self.stream: AsyncGenerator[Row] | None = None
 
     async def start(self, since_utc_ns: int) -> None:
@@ -483,11 +620,14 @@ class ClientEvents:
 
     async def next(self) -> Row:
         assert self.stream is not None
-        async with asyncio.timeout(120):
-            async for envelope in self.stream:
-                event = envelope["event"]
-                if event["t_utc_ns"] >= self.since:
-                    return dict(event)
+        try:
+            async with asyncio.timeout(120):
+                async for envelope in self.stream:
+                    event = envelope["event"]
+                    if event["t_utc_ns"] >= self.since:
+                        return dict(event)
+        except TimeoutError, ProtocolError:
+            raise ReplayError("MISSING_DEVICE_EVENT") from None
         raise ReplayError("MISSING_DEVICE_EVENT")
 
     async def turn(self, turn_id: str) -> Row:
@@ -527,14 +667,21 @@ async def replay_sample(
     capture: AudioCapture,
     source: DeviceEvents,
 ) -> Row:
-    if check_audio([label], audio_root):
-        raise ReplayError("AUDIO_HASH_OR_FORMAT_MISMATCH")
+    audio_errors = check_audio([label], audio_root)
+    if audio_errors:
+        raise ReplayError("AUDIO_HASH_OR_FORMAT_MISMATCH: " + "; ".join(audio_errors))
+    clock = source.server_clock
+    if not valid_server_clock(clock):
+        raise ReplayError("INVALID_SERVER_CLOCK")
     path = resolve_audio(audio_root, label["audio_path"])
     reference, _ = load_audio(path)
     mark = time.time_ns()
     host = {"mark_start_utc_ns": mark, "mark_start_monotonic_ns": time.monotonic_ns()}
     events: list[Row] = []
-    await source.start(mark)
+    server_since = max(
+        0, mark + clock["offset_ns"] - math.ceil(clock["uncertainty_ms"] * 1e6)
+    )
+    await source.start(server_since)
     try:
         await output.play(wake_audio)
         turn_id = None
@@ -570,10 +717,12 @@ async def replay_sample(
         recording = await capture.finish()
         try:
             alignment = align_capture(recording, reference, label["last_voice_sample"])
+            alignment["clock_uncertainty_ms"] = clock["uncertainty_ms"]
+            alignment["uncertainty_ms"] += clock["uncertainty_ms"]
         finally:
             recording.samples.clear()
         stored = await source.turn(turn_id)
-        exported = await source.export(mark)
+        exported = await source.export(server_since)
         check_events(exported, turn_id)
         if stored.get("turn_type") != "voice" or stored.get("turn_id") != turn_id:
             raise ReplayError("UNMATCHED_TURN")
@@ -592,6 +741,7 @@ async def replay_sample(
             "recognized_transcript": transcript,
             "alignment": alignment,
             "host_timing": host,
+            "server_clock": dict(clock),
             **{
                 stage: next(
                     (
@@ -605,7 +755,7 @@ async def replay_sample(
                 for stage in DEVICE_STAGES
             },
         }
-    except TimeoutError, StopAsyncIteration:
+    except ProtocolError, StopAsyncIteration:
         raise ReplayError("MISSING_DEVICE_EVENT") from None
     finally:
         await capture.abort()
@@ -689,6 +839,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--limit", type=int)
     result.add_argument("--acceptance", action="store_true")
     result.add_argument("--output", type=Path, required=True)
+    result.add_argument("--clock-record", type=Path)
     return result
 
 
@@ -736,6 +887,7 @@ async def run(
     )
     if any(not os.environ.get(key) for key in required):
         raise ReplayError("REPLAY_SETUP_NOT_AVAILABLE")
+    clock = read_server_clock(args.clock_record, os.environ["ASSIST_LIVE_URL"])
     evidence_path = Path(os.environ["ASSIST_LIVE_OPERATION_RECORDS"])
     if evidence_path.exists():
         raise ReplayError("STALE_OPERATION_EVIDENCE")
@@ -765,7 +917,7 @@ async def run(
                     AlsaCapture(
                         os.environ.get("ASSIST_LIVE_CAPTURE_DEVICE", "default")
                     ),
-                    ClientEvents(client, os.environ["ASSIST_LIVE_SATELLITE"]),
+                    ClientEvents(client, os.environ["ASSIST_LIVE_SATELLITE"], clock),
                 )
                 if any(row["turn_id"] == sample["turn_id"] for _, row in pending):
                     raise ReplayError("DUPLICATE_REPLAY_TURN")

@@ -13,6 +13,30 @@ Keep the speaker, device, and microphone positions constant for P0 and P1.
 Keep the volume, sample format, HA engines, voice, and endpoint settings constant.
 Identify that configuration with an immutable `ASSIST_LIVE_BASELINE_CONFIG_ID`.
 
+Supply an explicit clock record with `--clock-record "$CLOCK_RECORD"` for each run.
+For `same_host`, the server and replay process must use the same kernel UTC clock.
+A container on the replay computer can satisfy this requirement.
+The runner checks all resolved server addresses against loopback or local interface addresses.
+It refuses a non-local address or an unavailable local-interface check.
+The resulting clock offset and clock uncertainty are 0.
+
+For a different computer, supply a `measured` clock record from an NTP or PTP monitor report.
+Include `offset_ns` (server minus replay UTC), `uncertainty_ms`, and a nonempty `source` name.
+Clock uncertainty must not be negative.
+The runner records these values on each row and adds clock uncertainty to the acoustic uncertainty.
+Calibration subtracts the clock offset from server event times, then compares them with acoustic times.
+The runner does not invent a remote clock measurement.
+
+The clock files contain one of these JSON objects:
+
+```json
+{"kind": "same_host"}
+```
+
+```json
+{"kind": "measured", "offset_ns": 25000000, "uncertainty_ms": 2, "source": "ptp-tracking-report"}
+```
+
 WARNING: Get consent from each person in the room before microphone capture.
 Use an isolated room without household voice.
 The capture adapter keeps PCM in memory and clears its buffer after each sample.
@@ -70,7 +94,7 @@ This missing function is not a hardware step.
 This command uses all three hardware items:
 
 ```sh
-uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --limit 2 --output "$RUNROOT/replay-smoke.jsonl"
+uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --limit 2 --output "$RUNROOT/replay-smoke.jsonl"
 ```
 
 The tool checks each recording's SHA-256 before it plays the wake word or command.
@@ -91,8 +115,8 @@ The tool refuses acceptance with `BLOCKED corpus not frozen` until corpus collec
 These commands use hardware:
 
 ```sh
-uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --acceptance --output "$RUNROOT/p0-runs.jsonl"
-uv run python tools/device_replay.py --phase p1 --profiles safe,fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --acceptance --output "$RUNROOT/p1-runs.jsonl"
+uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --acceptance --output "$RUNROOT/p0-runs.jsonl"
+uv run python tools/device_replay.py --phase p1 --profiles safe,fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --acceptance --output "$RUNROOT/p1-runs.jsonl"
 ```
 
 Without `--limit`, replay also uses acceptance mode when `--acceptance` is missing.
@@ -117,17 +141,29 @@ A missing transcript, intent, or operation record also causes failure.
 
 The aligner fits the command's 10 ms RMS envelope to the external microphone capture.
 It searches the first two seconds for the command offset.
-It finds sustained audio energy for the command end and the first and last reply samples.
-Two adjacent active frames reject an isolated click.
-A low relative threshold keeps quiet tails above the measured noise floor.
+The last-voice marker is the labelled sample plus the fitted command offset.
+The command-energy endpoint is only a cross-check.
+Energy below 2% of the command peak is not an energy endpoint, also for a quiet tail above the noise floor.
+A difference above 50 ms causes refusal, and uncertainty includes the permitted 50 ms difference.
+
+Reply boundaries use the noise floor, not 2% of the reply peak.
+The threshold is four times the lower-decile RMS noise, with a minimum of one PCM16 quantization step.
+Reply regions must contain a minimum of five adjacent 10 ms frames above this threshold.
+Short isolated sounds do not become the reply start or end when a sustained region follows.
+Uncertainty also includes the distance to discarded sounds, because a short sound can be voice or a click.
 
 No sound, ambiguous fits, boundary differences, missing replies, and truncated replies cause named failures.
 The capture must have a minimum of 100 ms without sound after the reply.
 
 The acoustic reply start is not the time when the playback command starts.
 Each `alignment` has `quality: estimate` and `uncertainty_ms`.
-The uncertainty includes frame size, command-fit variation, and the capture adapter's startup bound.
-This bound is conservative because a subprocess read is not an acoustic sample callback.
+The uncertainty includes frame size, command-fit variation, the cross-check limit, discarded sounds, capture buffering, and the clock record.
+Capture sample 0 uses the time of the first PCM byte, not the process-start time.
+
+`arecord` requests a 160-sample period and a 320-sample buffer at 16 kHz.
+The capture uncertainty includes that 20 ms buffer, not the process-start interval.
+
+This is an estimated acoustic boundary, not a measured sample callback.
 Synthetic tones and noise check known boundaries, quiet tails, no sound, and clicks.
 Acoustic boundary precision in a room stays unmeasured.
 
@@ -145,9 +181,10 @@ uv run pytest tests/test_device_replay.py tests/test_calibration.py -q && uv run
 For each playback boundary, the report gives p50 and p90 absolute error against the acoustic boundary.
 Percentiles use linear interpolation at index `(n-1)*p` in sorted values.
 The report also gives p50, p90, and maximum `alignment` uncertainty.
-The tool accepts a proxy only when its p90 error is at most 100 ms.
+The tool accepts a proxy only when its p90 error plus p90 acoustic uncertainty is at most 100 ms.
+
 A rejected proxy keeps latency gates blocked and makes `--check` give a failure.
-`PASS calibration n>=50` reports only the count condition, not proxy acceptance.
+The tool prints `PASS calibration n>=50` only after satisfactory count and proxy checks.
 Fewer than 50 replies cause `CALIBRATION_TOO_FEW_REPLIES` and no count-success line.
 
 The hardware trial, smoke run, and 50-reply calibration stay `NOT RUN: hardware not available`.
