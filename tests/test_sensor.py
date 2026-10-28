@@ -47,6 +47,25 @@ def test_latency_has_separate_quality_and_uncertainty(ledger, quality, want):
     assert sensor.extra_state_attributes["quality"] == "missing"
 
 
+async def test_turn_identity_is_public_before_conversation_and_not_recorded(
+    hass, ledger
+):
+    from custom_components.assist_live.sensor import TurnLatencySensor
+
+    sensor = TurnLatencySensor("satellite-a", "device-a", ledger)
+    sensor.hass = hass
+    sensor.entity_id = "sensor.test_turn_latency"
+    await sensor.async_added_to_hass()
+    assert sensor.extra_state_attributes["turn_id"] is None
+    first = ledger.open_voice("satellite-a")
+    assert hass.states.get(sensor.entity_id).attributes["turn_id"] == first.turn_id
+    assert hass.states.get(sensor.entity_id).attributes["turn_type"] == "voice"
+    assert sensor.native_value is None
+    second = ledger.open_voice("satellite-a")
+    assert hass.states.get(sensor.entity_id).attributes["turn_id"] == second.turn_id
+    assert {"turn_id", "turn_type"} <= sensor._unrecorded_attributes
+
+
 async def test_fallback_end_decision_keeps_ha_audio_source(client, ledger):
     from test_stt_forward import Fallback, audio, entity, metadata
 

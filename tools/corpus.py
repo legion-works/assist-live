@@ -17,6 +17,7 @@ Row = dict[str, Any]
 LICENSES = {"CC0-1.0", "CC-BY-4.0"}
 DEFAULT_LICENSES = Path(__file__).resolve().parents[1] / "tests/data/LICENSES.json"
 MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+BOUNDARY_TOLERANCE_MS = 50
 HA_INTENTS = frozenset(
     """
     HassTurnOn HassTurnOff HassGetState HassNevermind HassRespond HassBroadcast
@@ -113,7 +114,7 @@ def boundary_review_reasons(
     reasons = []
     if aligned_end is None:
         reasons.append("alignment_failed")
-    elif abs(energy_end - aligned_end) * 1000 > 50 * sample_rate:
+    elif abs(energy_end - aligned_end) * 1000 > BOUNDARY_TOLERANCE_MS * sample_rate:
         reasons.append("boundary_difference")
     if (
         not math.isfinite(alignment_confidence)

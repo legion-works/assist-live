@@ -1,4 +1,4 @@
-from assist_live_client.protocol import MESSAGE_DEADLINE
+from assist_live_client.protocol import MESSAGE_DEADLINE as MESSAGE_DEADLINE
 
 DOMAIN = "assist_live"
 CONF_NOTIFY_TTS_FAILURE = "notify_tts_failure"
@@ -16,3 +16,5 @@ SPEAKER_RESULT_DEADLINE = (
 # The server applies its own limits (revision f6ac2d6, app.py:50-51).
 MAX_SPEAKER_READS_PER_SATELLITE = 1
 MAX_SPEAKER_READS = 8
+# The pinned server uses this normalized distance bound (f6ac2d6, speaker.py:40).
+MAX_SPEAKER_DISTANCE = 2

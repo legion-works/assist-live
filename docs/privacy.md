@@ -24,6 +24,10 @@ Diagnostics show the selected agent's `iot_class` and destination. They do not s
 An unknown fallback must have an explicit local decision before use with `local_only`.
 The options flow stores that decision and its UTC time.
 Diagnostics show the audit record, without the entity name.
+
+Per-turn fallback destination rows show `fallback_reason` when a server destination check refused use.
+The named values are `server_not_local_only` and `server_destination_not_local`.
+Other values show as `unknown`, without content disclosure.
 A known cloud fallback cannot use that decision.
 HA checks the current destination again before each fallback call and each mid-turn TTS continuation.
 
@@ -36,13 +40,18 @@ HA sends the transcript to its pipeline when it gets `final`. It does not wait f
 
 A different read waits for speaker metadata after the `final` transcript, with one 10.6 s deadline.
 This includes 5 s for server address resolution, 5 s for HTTP, and the 600 ms message deadline.
-Heartbeats do not extend the total deadline. A missing or invalid result only increases the `speaker_metadata_missing` count.
+Heartbeats do not extend the total deadline.
+`speaker_metadata_missing` counts reads that end at the deadline or stream close without a recorded result.
+It checks the two streams at that time.
 Turn closure does not cancel the read. Entity removal cancels it without a missing-result count.
 
 HA keeps a maximum of one pending speaker read for each satellite and eight for each integration.
 A new STT turn cancels the previous read for that satellite first.
 At the integration limit, HA cancels the oldest pending read before it adds a new read.
-These cancellations increase `speaker_superseded`, not the missing-result count. They do not change the repair issue.
+These cancellations increase `speaker_superseded` only when the two streams have no recorded result at that time.
+They do not increase the missing-result count or change the repair issue.
+`speaker_not_identified` counts received local results without a speaker name.
+Subsequent timing results apply the destination policy, without a change to earlier diagnostic counts.
 
 These limits bound pending audio sockets only. The server applies its own limits to audio sockets and timing subscriptions.
 

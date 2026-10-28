@@ -33,6 +33,7 @@ class TurnLatencySensor(SensorEntity):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
+    _unrecorded_attributes = frozenset({"turn_id", "turn_type"})
 
     def __init__(self, satellite: str, device: str, ledger: TurnLedger) -> None:
         self.satellite = satellite
@@ -70,6 +71,8 @@ class TurnLatencySensor(SensorEntity):
         start = record.timings.get("end_decision", {}) if record else {}
         end = record.timings.get("playback_start", {}) if record else {}
         return {
+            "turn_id": record.turn.turn_id if record else None,
+            "turn_type": record.turn.turn_type if record else None,
             "quality": quality,
             "uncertainty_ms": uncertainty,
             "end_decision_source": start.get("decision_source")

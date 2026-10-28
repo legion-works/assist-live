@@ -63,6 +63,10 @@ It is not a server-detector measurement.
 Device clock estimates keep their uncertainty and show as proxy quality in the sensor.
 The `playback_quality` attribute keeps the initial quality value.
 
+The `turn_id` and `turn_type` attributes identify the latest turn when it opens, before the conversation step.
+These diagnostic correlation IDs contain no transcript or audio content.
+HA does not include these two attributes in recorder history.
+
 ## Transcript storage and release checks
 
 The `record_transcripts` option defaults to `false`.

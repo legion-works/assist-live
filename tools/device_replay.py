@@ -28,6 +28,7 @@ from assist_live_client.models import TimingEvent
 from assist_live_client.protocol import ProtocolError
 
 from tools.corpus import (
+    BOUNDARY_TOLERANCE_MS,
     boundary_review_reasons,
     check_audio,
     load_corpus,
@@ -46,6 +47,8 @@ CAPTURE_BUFFER_SAMPLES = 320
 DEVICE_STAGES = ("wake_detected", "mic_open", "playback_start", "playback_end")
 BRIDGE_FIELDS = (
     "turn_id",
+    "turn_type",
+    "device_id",
     "run_id",
     "baseline_configuration_id",
     "completed",
@@ -58,10 +61,38 @@ BRIDGE_OPERATION_MAP = {
     "t_monotonic_ns": "monotonic_ns",
 }
 ROOT = Path(__file__).resolve().parents[1]
+RUN_FIELDS = (
+    "schema_version",
+    "clip_id",
+    "audio_sha256",
+    "split",
+    "phase",
+    "profile",
+    "mode",
+    "frozen",
+    "run_id",
+    "baseline_config_id",
+    "turn_id",
+    "calibration_revision",
+    "recognized_transcript",
+    "evaluated_intent",
+    "action_trace",
+    "action_trace_complete",
+    "reply_text",
+    "reply_char_count",
+    "reply_group",
+    "events",
+    "host_timing",
+    "server_clock",
+    "alignment",
+    *DEVICE_STAGES,
+)
 
 
 class ReplayError(ValueError):
-    pass
+    def __init__(self, message: str, *, partial: Row | None = None) -> None:
+        super().__init__(message)
+        self.partial = partial or {}
 
 
 def finite(value: object) -> TypeGuard[int | float]:
@@ -152,8 +183,17 @@ def read_server_clock(path: Path | None, url: str) -> Row:
         raise ReplayError("INVALID_SERVER_CLOCK") from None
 
 
-def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
+def sample_errors(
+    row: Row, *, acceptance: bool = True, allow_incomplete: bool = False
+) -> list[str]:
     errors = []
+    if "complete" in row and type(row["complete"]) is not bool:
+        errors.append("INVALID_COMPLETION_FLAG")
+    if row.get("complete") is True and row.get("failures"):
+        errors.append("COMPLETE_WITH_FAILURES")
+    incomplete = allow_incomplete and row.get("complete") is False
+    if row.get("complete") is False and not allow_incomplete:
+        errors.append("INCOMPLETE_ATTEMPT")
     if row.get("schema_version") != 2:
         errors.append("SCHEMA_VERSION")
     for key in (
@@ -165,7 +205,9 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
         "recognized_transcript",
         "reply_text",
     ):
-        if not text(row.get(key)):
+        if not text(row.get(key)) and not (
+            incomplete and key in ("turn_id", "recognized_transcript", "reply_text")
+        ):
             errors.append("MISSING_" + key.upper())
     if row.get("phase") not in ("p0", "p1"):
         errors.append("PHASE")
@@ -190,6 +232,23 @@ def sample_errors(row: Row, *, acceptance: bool = True) -> list[str]:
         acceptance and row.get("frozen") is not True
     ):
         errors.append("BLOCKED corpus not frozen")
+    if incomplete:
+        errors.extend("MISSING_" + key.upper() for key in RUN_FIELDS if key not in row)
+        if (
+            not isinstance(row.get("failures"), list)
+            or not row["failures"]
+            or any(not text(reason) for reason in row["failures"])
+        ):
+            errors.append("MISSING_FAILURE_REASONS")
+        if not isinstance(row.get("events"), list):
+            errors.append("MISSING_EVENTS")
+        else:
+            for event in row["events"]:
+                try:
+                    TimingEvent(**event)
+                except TypeError, ValueError, AttributeError:
+                    errors.append("INVALID_EVENT")
+        return errors
     intent = row.get("evaluated_intent")
     if (
         not isinstance(intent, dict)
@@ -447,7 +506,11 @@ def align_capture(
     )
     # The energy cross-check permits 50 ms of label disagreement.
     uncertainty = (
-        capture.uncertainty_ms + 10 + 50 + (max(near) - min(near)) * 10 + discarded_ms
+        capture.uncertainty_ms
+        + 10
+        + BOUNDARY_TOLERANCE_MS
+        + (max(near) - min(near)) * 10
+        + discarded_ms
     )
     return {
         "method": ACOUSTIC_METHOD,
@@ -681,10 +744,10 @@ async def replay_sample(
     server_since = max(
         0, mark + clock["offset_ns"] - math.ceil(clock["uncertainty_ms"] * 1e6)
     )
-    await source.start(server_since)
+    turn_id = None
     try:
+        await source.start(server_since)
         await output.play(wake_audio)
-        turn_id = None
         while True:
             event = await source.next()
             events.append(event)
@@ -756,7 +819,28 @@ async def replay_sample(
             },
         }
     except ProtocolError, StopAsyncIteration:
-        raise ReplayError("MISSING_DEVICE_EVENT") from None
+        raise ReplayError(
+            "MISSING_DEVICE_EVENT",
+            partial={
+                "turn_id": turn_id,
+                "events": events,
+                "host_timing": host,
+                "server_clock": dict(clock),
+            },
+        ) from None
+    except Exception as error:
+        partial = {
+            "turn_id": turn_id,
+            "events": events,
+            "host_timing": host,
+            "server_clock": dict(clock),
+        }
+        if isinstance(error, ReplayError):
+            error.partial = partial
+            raise
+        raise ReplayError(
+            "SAMPLE_" + type(error).__name__.upper(), partial=partial
+        ) from None
     finally:
         await capture.abort()
         await source.close()
@@ -901,58 +985,104 @@ async def run(
     pending: list[tuple[Row, Row]] = []
     async with AssistLiveClient(os.environ["ASSIST_LIVE_URL"], token) as client:
         for profile in profiles:
+            selection_error = None
             if selector is not None:
-                await selector.select(profile)
-            for label in selected:
-                baseline = (
-                    baseline_for(label, config, baselines)
-                    if args.phase == "p1"
-                    else None
-                )
-                sample = await replay_sample(
-                    label,
-                    args.audio_root,
-                    Path(os.environ["ASSIST_LIVE_WAKE_AUDIO"]),
-                    AlsaOutput(os.environ.get("ASSIST_LIVE_OUTPUT_DEVICE", "default")),
-                    AlsaCapture(
-                        os.environ.get("ASSIST_LIVE_CAPTURE_DEVICE", "default")
-                    ),
-                    ClientEvents(client, os.environ["ASSIST_LIVE_SATELLITE"], clock),
-                )
-                if any(row["turn_id"] == sample["turn_id"] for _, row in pending):
-                    raise ReplayError("DUPLICATE_REPLAY_TURN")
-                pending.append(
-                    (
-                        label,
-                        {
-                            **sample,
-                            "schema_version": 2,
-                            "mode": "smoke" if args.limit is not None else "acceptance",
-                            "phase": args.phase,
-                            "profile": profile,
-                            "clip_id": label["id"],
-                            "audio_sha256": label["audio_sha256"],
-                            "split": args.split,
-                            "frozen": frozen,
-                            "run_id": os.environ["ASSIST_LIVE_RUN_ID"],
-                            "baseline_config_id": config,
-                            "calibration_revision": os.environ[
-                                "ASSIST_LIVE_CALIBRATION_REVISION"
-                            ],
-                            "baseline_transcript": baseline,
-                        },
+                try:
+                    await selector.select(profile)
+                except Exception as error:
+                    if not pending:
+                        raise
+                    selection_error = (
+                        "PROFILE_SELECTION_" + type(error).__name__.upper()
                     )
+            for label in selected:
+                row: Row = {key: None for key in RUN_FIELDS}
+                row.update(
+                    {
+                        "schema_version": 2,
+                        "mode": "smoke" if args.limit is not None else "acceptance",
+                        "phase": args.phase,
+                        "profile": profile,
+                        "clip_id": label["id"],
+                        "audio_sha256": label["audio_sha256"],
+                        "split": args.split,
+                        "frozen": frozen,
+                        "run_id": os.environ["ASSIST_LIVE_RUN_ID"],
+                        "baseline_config_id": config,
+                        "calibration_revision": os.environ[
+                            "ASSIST_LIVE_CALIBRATION_REVISION"
+                        ],
+                        "baseline_transcript": None,
+                        "complete": False,
+                        "failures": [],
+                        "events": [],
+                        "action_trace_complete": False,
+                        "turn_type": "voice",
+                        "server_clock": dict(clock),
+                    }
                 )
-    if not evidence_path.exists():
-        raise ReplayError("MISSING_OPERATION_EVIDENCE")
-    records = load_corpus(evidence_path)
+                try:
+                    if selection_error:
+                        raise ReplayError(selection_error)
+                    row["baseline_transcript"] = (
+                        baseline_for(label, config, baselines)
+                        if args.phase == "p1"
+                        else None
+                    )
+                    sample = await replay_sample(
+                        label,
+                        args.audio_root,
+                        Path(os.environ["ASSIST_LIVE_WAKE_AUDIO"]),
+                        AlsaOutput(
+                            os.environ.get("ASSIST_LIVE_OUTPUT_DEVICE", "default")
+                        ),
+                        AlsaCapture(
+                            os.environ.get("ASSIST_LIVE_CAPTURE_DEVICE", "default")
+                        ),
+                        ClientEvents(
+                            client, os.environ["ASSIST_LIVE_SATELLITE"], clock
+                        ),
+                    )
+                    row.update(sample)
+                    if row["turn_id"] is not None and any(
+                        previous["turn_id"] == row["turn_id"] for _, previous in pending
+                    ):
+                        raise ReplayError("DUPLICATE_REPLAY_TURN")
+                except Exception as error:
+                    if isinstance(error, ReplayError):
+                        row.update(error.partial)
+                        row["failures"].append(str(error))
+                    else:
+                        row["failures"].append("SAMPLE_" + type(error).__name__.upper())
+                pending.append((label, row))
+                args.output.write_text(
+                    "".join(json.dumps(item) + "\n" for _, item in pending)
+                )
+    try:
+        records = load_corpus(evidence_path)
+        evidence_error = None
+    except OSError, ValueError:
+        records = []
+        evidence_error = "MISSING_OR_INVALID_OPERATION_EVIDENCE"
     completed = []
     for label, row in pending:
-        sample = attach_evidence(row, label, records)
-        errors = sample_errors(sample, acceptance=args.limit is None)
-        if errors:
-            raise ReplayError(",".join(errors))
-        completed.append(sample)
+        try:
+            if evidence_error:
+                raise ReplayError(evidence_error)
+            row.update(attach_evidence(row, label, records))
+        except (ValueError, KeyError, TypeError) as error:
+            row["failures"].append(
+                str(error)
+                if isinstance(error, ReplayError)
+                else "INVALID_OPERATION_EVIDENCE"
+            )
+        row["complete"] = not row["failures"]
+        errors = sample_errors(row, acceptance=args.limit is None)
+        if errors and row["complete"]:
+            row["failures"].extend(errors)
+            row["complete"] = False
+        completed.append(row)
+        args.output.write_text("".join(json.dumps(item) + "\n" for _, item in pending))
     return completed
 
 
@@ -966,8 +1096,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ReplayError, OSError, ValueError) as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1
-    print(f"PASS replay rows={len(rows)}")
-    return 0
+    failures = sum(row.get("complete") is False for row in rows)
+    print(
+        f"{'FAIL' if failures else 'PASS'} replay rows={len(rows)} "
+        f"incomplete={failures}"
+    )
+    return int(bool(failures))
 
 
 if __name__ == "__main__":

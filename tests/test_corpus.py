@@ -993,3 +993,20 @@ def test_archive_provenance_is_required_and_typed(
     else:
         item[field] = value
     assert any("archive provenance" in error for error in label_errors(item))
+
+
+def test_boundary_review_uses_the_shared_tolerance(monkeypatch):
+    from tools import corpus
+
+    monkeypatch.setattr(corpus, "BOUNDARY_TOLERANCE_MS", 100)
+    assert (
+        corpus.boundary_review_reasons(
+            0,
+            80,
+            1000,
+            alignment_confidence=1,
+            minimum_word_confidence=1,
+            transcript_matches=True,
+        )
+        == []
+    )

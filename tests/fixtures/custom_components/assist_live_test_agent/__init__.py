@@ -1,4 +1,5 @@
 from contextvars import ContextVar
+from time import monotonic_ns
 
 from homeassistant.components.intent import async_register_timer_handler
 from homeassistant.core import callback
@@ -13,8 +14,17 @@ def register_timer(hass, device_id=DEVICE_ID):
     @callback
     def timer_event(event_type, timer):
         if (record := ACTIVE_RECORD.get()) is not None:
+            stamp = monotonic_ns()
             record["actions"].append(
                 {"kind": "timer", "event": event_type.value, "seconds": timer.seconds}
+            )
+            record["operations"].append(
+                {
+                    "service": "timer." + event_type.value,
+                    "target": DEVICE_ID,
+                    "arguments": {"seconds": timer.seconds},
+                    "t_monotonic_ns": stamp,
+                }
             )
 
     return async_register_timer_handler(hass, device_id, timer_event)

@@ -72,7 +72,8 @@ The recorder must start before replay and finish its file before replay ends.
 The replay tool refuses a recorder file from before the run.
 It reads that file one time, after all device samples.
 
-Each recorder record must contain `turn_id`, `run_id`, and `baseline_configuration_id` that agree with the replay row.
+Each recorder record must contain `turn_id`, `turn_type: voice`, `device_id`, `run_id`, and `baseline_configuration_id`.
+The turn, run, and configuration identifiers must agree with the replay row.
 It must also contain the public intent, operation, service-call, response, and text-delta fields from the virtual intent environment.
 The validators check those fields against the corpus records.
 The transcript must equal the device STT transcript, not a copied corpus value.
@@ -83,11 +84,9 @@ An empty operation log must have the explicit completed-recorder flag.
 The bridge maps these fields to `action_trace` and `action_trace_complete` in run schema version 2.
 `BRIDGE_FIELDS` and `BRIDGE_OPERATION_MAP` in `device_replay.py` give the bridge contract.
 
-The current text-only recorder does not supply turn identifiers, monotonic operation times, or that flag.
-Its output alone cannot satisfy device replay.
-This software prerequisite gives `MISSING_BRIDGE_FIELD: turn_id` for the current recorder output.
-A subsequent recorder change must supply those fields through public events.
-This missing function is not a hardware step.
+The [passive device recorder](virtual-intents.md#device-operation-bridge) connects public sensor turn IDs to conversation context IDs.
+It supplies monotonic operation times and an explicit completed flag through public events.
+The text-only recorder has no device turn connection and cannot satisfy device replay.
 
 ## Smoke run
 
@@ -99,7 +98,7 @@ uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl
 
 The tool checks each recording's SHA-256 before it plays the wake word or command.
 It plays the wake word, waits for one device wake event and microphone-open event, then plays the command.
-Duplicate wakes, unmatched turns, and missing device events stop the run.
+Duplicate wakes, unmatched turns, and missing device events cause an unsatisfactory sample result.
 Timing records come through the pinned client's public subscription, turn query, and export methods.
 
 Only smoke mode accepts `--limit`.
@@ -136,6 +135,17 @@ Rows keep the device and host times, event quality, event uncertainty, calibrati
 Device wake, microphone-open, playback-start, and playback-end records are mandatory.
 A server-only WebSocket sample cannot satisfy these checks.
 A missing transcript, intent, or operation record also causes failure.
+
+The runner writes one row for each sample trial, with failures.
+Rows that are not complete use `complete: false` and named `failures`.
+Unavailable observations have explicit missing values, not invented transcripts, intents, or empty operation logs.
+Available events stay in the row when capture is not satisfactory.
+The runner continues and gives a failure status if one trial is not complete.
+
+Only setup failures before the first trial can stop the run without a sample row.
+The [report](native-functions.md#p0-report) keeps unsatisfactory trials in its denominator.
+Unavailable test records cause an unsatisfactory gate result.
+Playback calibration accepts only complete samples.
 
 ## Acoustic boundaries
 

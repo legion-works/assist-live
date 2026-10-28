@@ -68,7 +68,7 @@ def sample():
         "turn_id": TURN,
         "calibration_revision": "calibration-01",
         "recognized_transcript": "turn on test light",
-        "evaluated_intent": {"name": "HassTurnOn", "slots": {}},
+        "evaluated_intent": {"name": "HassTurnOn", "slots": {"name": "virtual light"}},
         "action_trace": [
             {
                 "service": "light.turn_on",
@@ -334,7 +334,7 @@ def bundle(tmp_path):
         "audio_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "sample_rate": 16000,
         "last_voice_sample": 7999,
-        "intent": {"name": "HassTurnOn", "slots": {}},
+        "intent": {"name": "HassTurnOn", "slots": {"name": "virtual light"}},
     }
     return label, Capture(mic, 16000, 10_000_000_000, 4)
 
@@ -478,6 +478,8 @@ def recorder(row):
     }
     return {
         "turn_id": row["turn_id"],
+        "turn_type": "voice",
+        "device_id": "virtual-device",
         "run_id": row["run_id"],
         "baseline_configuration_id": row["baseline_config_id"],
         "recognized_transcript": row["recognized_transcript"],
@@ -502,7 +504,7 @@ def recorder(row):
     }
 
 
-def test_recorder_bridge_reuses_m17_and_refuses_other_runs():
+def test_recorder_bridge_reuses_virtual_recorder_and_refuses_other_runs():
     row = sample()
     record = recorder(row)
     label = {"intent": row["evaluated_intent"]}
@@ -529,7 +531,7 @@ def test_bridge_missing_field_is_named(field):
         attach_evidence(row, {"intent": row["evaluated_intent"]}, [record])
 
 
-def test_current_m17_recorder_shape_is_refused_as_named_gap():
+def test_text_only_recorder_shape_is_refused_as_named_gap():
     row = sample()
     record = recorder(row)
     for field in (
@@ -690,6 +692,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     monkeypatch.setattr("tools.device_replay.ClientEvents", RecordingEvents)
     args = options("--phase", "p1", "--profiles", "safe,fast", "--limit", "1")
     args.labels, args.audio_root = labels, tmp_path
+    args.output = tmp_path / "runs.jsonl"
     args.clock_record = clock_record
     selector = Selector()
     rows = await run(args, selector)
@@ -1163,3 +1166,106 @@ async def test_client_event_timeout_is_missing_device_event(monkeypatch):
     else:
         pytest.fail("event timeout was not refused")
     await source.close()
+
+
+def test_alignment_uncertainty_uses_the_shared_boundary_tolerance(
+    tmp_path, monkeypatch
+):
+    from tools import corpus, device_replay
+
+    label, recording = bundle(tmp_path)
+    reference, _ = device_replay.load_audio(tmp_path / label["audio_path"])
+    before = align_capture(recording, reference, label["last_voice_sample"])
+    monkeypatch.setattr(corpus, "BOUNDARY_TOLERANCE_MS", 100)
+    monkeypatch.setattr(device_replay, "BOUNDARY_TOLERANCE_MS", 100)
+    after = align_capture(recording, reference, label["last_voice_sample"])
+    assert after["uncertainty_ms"] == before["uncertainty_ms"] + 50
+
+
+@pytest.mark.asyncio
+async def test_one_failed_attempt_of_three_is_written_and_not_dropped(
+    tmp_path, monkeypatch
+):
+    labels = [
+        {
+            "id": f"clip-{i}",
+            "audio_sha256": "a" * 64,
+            "split": "held_out",
+            "set": "replay",
+            "intent": {"name": "HassTurnOn", "slots": {"name": "virtual light"}},
+        }
+        for i in range(3)
+    ]
+    token, records_path = tmp_path / "token.json", tmp_path / "operations.jsonl"
+    token.write_text(json.dumps({"token": "test-only"}))
+    for key, value in {
+        "ASSIST_LIVE_URL": "http://127.0.0.1",
+        "ASSIST_LIVE_TOKEN_FILE": str(token),
+        "ASSIST_LIVE_SATELLITE": "test_satellite",
+        "ASSIST_LIVE_WAKE_AUDIO": "wake.wav",
+        "ASSIST_LIVE_RUN_ID": "test-run",
+        "ASSIST_LIVE_BASELINE_CONFIG_ID": "config-sha256-01",
+        "ASSIST_LIVE_CALIBRATION_REVISION": "calibration-01",
+        "ASSIST_LIVE_OPERATION_RECORDS": str(records_path),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr("tools.device_replay.frozen_corpus", lambda *args: True)
+    monkeypatch.setattr(
+        "tools.device_replay.load_corpus",
+        lambda path: (
+            labels
+            if path.name == "labels.jsonl"
+            else [json.loads(line) for line in records_path.read_text().splitlines()]
+        ),
+    )
+    monkeypatch.setattr(
+        "tools.device_replay.read_server_clock", lambda *args: sample()["server_clock"]
+    )
+
+    class Client:
+        def __init__(self, *args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    records = []
+
+    async def replay(label, *args):
+        if label["id"] == "clip-1":
+            raise ReplayError("MISSING_DEVICE_PLAYBACK_END")
+        row = sample()
+        row["clip_id"] = label["id"]
+        row["turn_id"] = f"01900000-0000-7000-8000-{int(label['id'][-1]) + 1:012x}"
+        for item in row["events"]:
+            item["turn_id"] = row["turn_id"]
+        records.append(recorder(row))
+        records_path.write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        return row
+
+    monkeypatch.setattr("tools.device_replay.AssistLiveClient", Client)
+    monkeypatch.setattr("tools.device_replay.replay_sample", replay)
+    args = options()
+    args.labels, args.output = tmp_path / "labels.jsonl", tmp_path / "runs.jsonl"
+    rows = await run(args)
+    assert len(rows) == 3
+    assert [row["complete"] for row in rows] == [True, False, True]
+    assert "MISSING_DEVICE_PLAYBACK_END" in rows[1]["failures"]
+    assert rows[1]["action_trace_complete"] is False
+    assert len(args.output.read_text().splitlines()) == 3
+
+
+def test_bridge_operations_cannot_disagree_with_public_actions():
+    row = sample()
+    record = recorder(row)
+    record["service_calls"][0].update(
+        domain="fan", service="turn_off", service_data={"entity_id": "fan.virtual_fan"}
+    )
+    record["actions"][0] = {"kind": "service", **record["service_calls"][0]}
+    with pytest.raises(ReplayError, match="INVALID_OPERATION_EVIDENCE"):
+        attach_evidence(row, {"intent": row["evaluated_intent"]}, [record])

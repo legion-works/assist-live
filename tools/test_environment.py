@@ -3,12 +3,17 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import aiohttp
 import yaml
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures"
@@ -17,7 +22,9 @@ URL = "http://127.0.0.1:18123"
 DEVICE_ID = "assist_live_virtual"
 
 
-def validate_run_evidence(record: dict[str, Any]) -> list[str]:
+def validate_run_evidence(
+    record: dict[str, Any], *, require_bridge: bool = False
+) -> list[str]:
     failures = []
     for key in (
         "recognized_transcript",
@@ -58,7 +65,10 @@ def validate_run_evidence(record: dict[str, Any]) -> list[str]:
     if record["response_type"] != "action_done" or not record["context_id"]:
         failures.append("unsatisfactory response")
     actions = record["actions"]
-    if not isinstance(actions, list) or not actions:
+    if not isinstance(actions, list) or (
+        not actions
+        and not (record.get("completed") is True and record.get("operations") == [])
+    ):
         failures.append("missing action record")
     else:
         for action in actions:
@@ -123,7 +133,141 @@ def validate_run_evidence(record: dict[str, Any]) -> list[str]:
             failures.append("long reply must stream text deltas")
     else:
         failures.append("unknown reply group")
+    if require_bridge or record.get("turn_id"):
+        from tools.device_replay import BRIDGE_FIELDS, BRIDGE_OPERATION_MAP
+
+        for field in BRIDGE_FIELDS:
+            if field not in record:
+                failures.append("missing bridge " + field)
+        if any(
+            not isinstance(record.get(key), str) or not record[key].strip()
+            for key in ("turn_id", "run_id", "baseline_configuration_id")
+        ):
+            failures.append("missing turn link or run identity")
+        if record.get("turn_type") != "voice" or not record.get("device_id"):
+            failures.append("missing voice turn link")
+        if record.get("completed") is not True:
+            failures.append("incomplete recorder")
+        operations = record.get("operations")
+        if not isinstance(operations, list):
+            failures.append("missing bridge operations")
+        else:
+            for operation in operations:
+                if (
+                    not isinstance(operation, dict)
+                    or set(operation) != set(BRIDGE_OPERATION_MAP)
+                    or not isinstance(operation.get("service"), str)
+                    or not operation["service"]
+                    or not isinstance(operation.get("target"), str)
+                    or not operation["target"]
+                    or not isinstance(operation.get("arguments"), dict)
+                    or type(operation.get("t_monotonic_ns")) is not int
+                    or operation["t_monotonic_ns"] < 0
+                ):
+                    failures.append("invalid bridge operation")
+            observed: list[dict[str, Any]] = []
+            for action in actions if isinstance(actions, list) else []:
+                if not isinstance(action, dict):
+                    continue
+                if action.get("kind") == "service" and isinstance(
+                    action.get("service_data"), dict
+                ):
+                    arguments = dict(action["service_data"])
+                    targets = arguments.pop("entity_id", [])
+                    if isinstance(targets, str):
+                        targets = [targets]
+                    if isinstance(targets, list):
+                        observed.extend(
+                            {
+                                "service": str(action.get("domain"))
+                                + "."
+                                + str(action.get("service")),
+                                "target": target,
+                                "arguments": arguments,
+                            }
+                            for target in targets
+                        )
+                elif action.get("kind") in ("timer", "delayed_action"):
+                    arguments = {"seconds": action.get("seconds")}
+                    if action["kind"] == "delayed_action":
+                        arguments["command"] = action.get("command")
+                    observed.append(
+                        {
+                            "service": "timer.scheduled"
+                            if action["kind"] == "delayed_action"
+                            else "timer." + str(action.get("event")),
+                            "target": DEVICE_ID,
+                            "arguments": arguments,
+                        }
+                    )
+            if all(isinstance(item, dict) for item in operations) and Counter(
+                json.dumps(
+                    {key: item.get(key) for key in ("service", "target", "arguments")},
+                    sort_keys=True,
+                )
+                for item in operations
+            ) != Counter(json.dumps(item, sort_keys=True) for item in observed):
+                failures.append("operations disagree with public action records")
     return failures
+
+
+def expected_operations(
+    label: dict[str, Any], inventory: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    intent = label["intent"]
+    entry = inventory.get(intent["name"])
+    if not isinstance(entry, dict):
+        return None
+    slots = intent["slots"]
+    if entry.get("operation") == "timer":
+        if len(entry.get("entities", [])) != 1:
+            return None
+        try:
+            seconds = sum(
+                int(slots.get(key, 0)) * factor
+                for key, factor in (("hours", 3600), ("minutes", 60), ("seconds", 1))
+            )
+        except ValueError, TypeError, OverflowError:
+            return None
+        if seconds <= 0:
+            return None
+        arguments: dict[str, Any] = {"seconds": seconds}
+        service = "timer.started"
+        if slots.get("conversation_command"):
+            service = "timer.scheduled"
+            arguments["command"] = slots["conversation_command"]
+        return [
+            {"service": service, "target": entry["entities"][0], "arguments": arguments}
+        ]
+    if entry.get("operation") != "service" or intent["name"] not in (
+        "HassTurnOn",
+        "HassTurnOff",
+    ):
+        return None
+    name = str(slots.get("name", "")).casefold().replace("_", " ")
+    targets = [
+        target
+        for target in entry.get("entities", [])
+        if name
+        and name
+        in (
+            target,
+            target.split(".")[-1].replace("_", " "),
+            target.split(".")[0],
+            "test " + target.split(".")[0],
+        )
+    ]
+    if len(targets) != 1:
+        return None
+    target = targets[0]
+    return [
+        {
+            "service": target.split(".")[0]
+            + (".turn_on" if intent["name"] == "HassTurnOn" else ".turn_off"),
+            "target": target,
+            "arguments": {},
+        }
+    ]
 
 
 def validate_intent_action_evidence(
@@ -136,11 +280,34 @@ def validate_intent_action_evidence(
         int(label["intent"]["slots"].get(key, 0)) * factor
         for key, factor in (("hours", 3600), ("minutes", 60), ("seconds", 1))
     )
-    if label["intent"]["name"] == "HassStartTimer" and not any(
-        action.get("kind") == "timer" and action.get("seconds") == expected_seconds
-        for action in record["actions"]
+    if (
+        "operations" not in record
+        and label["intent"]["name"] == "HassStartTimer"
+        and not any(
+            action.get("kind") == "timer" and action.get("seconds") == expected_seconds
+            for action in record["actions"]
+        )
     ):
         failures.append("timer duration differs")
+    if "operations" in record:
+        inventory = json.loads((FIXTURES / "intents.json").read_text())
+        expected = expected_operations(label, inventory)
+        if expected is None:
+            failures.append("operation expectation unavailable")
+        else:
+            actual = record["operations"]
+            if not isinstance(actual, list) or any(
+                not isinstance(item, dict) for item in actual
+            ):
+                failures.append("operations differ")
+            elif Counter(
+                json.dumps(
+                    {key: item.get(key) for key in ("service", "target", "arguments")},
+                    sort_keys=True,
+                )
+                for item in actual
+            ) != Counter(json.dumps(item, sort_keys=True) for item in expected):
+                failures.append("operations differ")
     return failures
 
 
@@ -435,7 +602,12 @@ async def run_live(
                             failures.append(f"{row['id']}: missing agent record")
                             continue
                         record = pending[-1]
-                        record.update(recording_id=row["id"], phase=phase)
+                        record.update(
+                            recording_id=row["id"],
+                            phase=phase,
+                            run_id="text-validation",
+                            baseline_configuration_id="text-validation",
+                        )
                         errors = validate_run_evidence(record)
                         errors += validate_intent_action_evidence(record, row)
                         if (
@@ -470,6 +642,55 @@ async def run_live(
     return failures
 
 
+async def record_device(
+    token_file: Path, output: Path, count: int, run_id: str, config: str
+) -> list[str]:
+    if count <= 0 or not run_id or not config or output.exists():
+        raise ValueError(
+            "new output, positive count, run ID, and baseline "
+            "configuration are necessary"
+        )
+    if output.resolve().is_relative_to(ROOT):
+        raise ValueError("test records must stay external to the repository")
+    token = json.loads(token_file.read_text())["token"]
+    records: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(URL + "/api/websocket") as ws:
+            async with asyncio.timeout(30):
+                if (await ws.receive_json()).get("ha_version") != "2026.10.3":
+                    raise ValueError("isolated test instance requires HA 2026.10.3")
+                await ws.send_json({"type": "auth", "access_token": token})
+                if (await ws.receive_json()).get("type") != "auth_ok":
+                    raise ValueError("test authentication failed")
+                await ws.send_json(
+                    {
+                        "id": 1,
+                        "type": "subscribe_events",
+                        "event_type": "assist_live_test_record",
+                    }
+                )
+                if (await ws.receive_json()).get("success") is not True:
+                    raise ValueError("public recorder subscription failed")
+            print("READY device operation recorder", flush=True)
+            async with asyncio.timeout(count * 120):
+                while len(records) < count:
+                    message = await ws.receive_json()
+                    if message.get("type") != "event":
+                        continue
+                    record = message["event"]["data"]
+                    record.update(run_id=run_id, baseline_configuration_id=config)
+                    failures = validate_run_evidence(record, require_bridge=True)
+                    if failures:
+                        return failures
+                    if any(item["turn_id"] == record["turn_id"] for item in records):
+                        return ["duplicate device turn"]
+                    records.append(record)
+                    output.write_text(
+                        "".join(json.dumps(item) + "\n" for item in records)
+                    )
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--labels", type=Path, required=True)
@@ -481,8 +702,24 @@ def main(argv: list[str] | None = None) -> int:
         "--token-file", type=Path, default=os.environ.get("ASSIST_LIVE_TEST_TOKEN_FILE")
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--record-device", type=int, metavar="TURNS")
     args = parser.parse_args(argv)
     try:
+        if args.record_device is not None:
+            if args.token_file is None or args.output is None:
+                raise ValueError("device recorder requires --token-file and --output")
+            failures = asyncio.run(
+                record_device(
+                    args.token_file,
+                    args.output,
+                    args.record_device,
+                    os.environ.get("ASSIST_LIVE_RUN_ID", ""),
+                    os.environ.get("ASSIST_LIVE_BASELINE_CONFIG_ID", ""),
+                )
+            )
+            for failure in failures:
+                print("FAIL " + failure)
+            return int(bool(failures))
         rows = [
             json.loads(line)
             for line in args.labels.read_text(encoding="utf-8").splitlines()

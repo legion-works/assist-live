@@ -169,3 +169,91 @@ async def test_superseding_during_received_close_does_not_count_superseded(
     with suppress(asyncio.CancelledError):
         state["task"].cancel()
         await state["task"]
+
+
+@pytest.mark.parametrize("stopper", ["unload", "prepare"])
+async def test_prestart_cleanup_is_awaited_until_close_finishes(
+    client, ledger, stopper
+):
+    closing, close_gate, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def stream():
+        try:
+            yield {"type": "final", "text": "synthetic command"}
+            await asyncio.Event().wait()
+        finally:
+            closing.set()
+            await close_gate.wait()
+            closed.set()
+
+    messages = stream()
+    await anext(messages)
+    forward = entity(client, ledger, Fallback())
+    turn = ledger.open_voice("satellite-a")
+    forward._start_speaker_read(
+        messages, turn.turn_id, asyncio.get_running_loop().time() + 10
+    )
+    stopped = False
+
+    async def release_close():
+        await closing.wait()
+        await asyncio.sleep(0)
+        assert not stopped, "cleanup must finish before the caller returns"
+        close_gate.set()
+
+    observer = asyncio.create_task(release_close())
+    try:
+        if stopper == "unload":
+            await forward.async_will_remove_from_hass()
+        else:
+            await ledger.prepare_speaker_read("satellite-a")
+        stopped = True
+        await observer
+        assert closed.is_set()
+        assert messages.ag_frame is None
+    finally:
+        close_gate.set()
+        if not observer.done():
+            observer.cancel()
+            with suppress(asyncio.CancelledError):
+                await observer
+        await forward.async_will_remove_from_hass()
+        await messages.aclose()
+
+
+async def test_never_ending_prestart_close_bounds_unload_without_missing_result(
+    reader, ledger, monkeypatch
+):
+    from custom_components.assist_live.const import MESSAGE_DEADLINE
+
+    state = await reader(slow_close=True, cancel_before_start=True)
+    unload = asyncio.create_task(state["entity"].async_will_remove_from_hass())
+    await state["closing"].wait()
+    loop = asyncio.get_running_loop()
+    clock = loop.time
+    monkeypatch.setattr(loop, "time", lambda: clock() + MESSAGE_DEADLINE + 0.01)
+    for _ in range(6):
+        await asyncio.sleep(0)
+    assert unload.done(), "unload must finish after the close deadline"
+    await unload
+    assert state["closed"].is_set()
+    assert state["messages"].ag_frame is None
+    assert ledger.speaker_missing == 0
+
+
+async def test_initial_speaker_receive_uses_the_shared_message_deadline(
+    reader, monkeypatch
+):
+    from custom_components.assist_live import stt as stt_module
+
+    seen = []
+    timeout = asyncio.timeout
+
+    def observe(delay):
+        seen.append(delay)
+        return timeout(delay)
+
+    monkeypatch.setattr(stt_module, "MESSAGE_DEADLINE", 0.123)
+    monkeypatch.setattr(asyncio, "timeout", observe)
+    await reader()
+    assert 0.123 in seen

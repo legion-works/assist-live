@@ -354,3 +354,247 @@ async def test_real_ha_agent_records_timer_and_streams(configured_hass, monkeypa
     assert hass.states.get("input_boolean.test_light").state == "on"
     assert not validate_run_evidence(records[-1]), records[-1]
     assert records[-1]["actions"][0]["kind"] == "delayed_action"
+
+
+@pytest.fixture
+def bridge_evidence(evidence):
+    evidence.update(
+        turn_id="01900000-0000-7000-8000-000000000001",
+        turn_type="voice",
+        device_id="virtual-device",
+        run_id="test-run",
+        baseline_configuration_id="test-config",
+        completed=True,
+        operations=[
+            {
+                "service": "timer.started",
+                "target": "assist_live_virtual",
+                "arguments": {"seconds": 300},
+                "t_monotonic_ns": 123,
+            }
+        ],
+    )
+    return evidence
+
+
+def test_bridge_fields_and_completion_are_checked_by_the_single_validator(
+    bridge_evidence,
+):
+    from tools.device_replay import BRIDGE_FIELDS
+    from tools.test_environment import validate_run_evidence
+
+    assert not validate_run_evidence(bridge_evidence, require_bridge=True)
+    for field in BRIDGE_FIELDS:
+        row = copy.deepcopy(bridge_evidence)
+        del row[field]
+        assert validate_run_evidence(row, require_bridge=True), field
+    bridge_evidence["completed"] = False
+    assert "incomplete recorder" in validate_run_evidence(
+        bridge_evidence, require_bridge=True
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "wrong-type"])
+def test_device_bridge_never_infers_a_voice_turn_link(bridge_evidence, value):
+    from tools.test_environment import validate_run_evidence
+
+    bridge_evidence["turn_id"] = value if value != "wrong-type" else 123
+    assert "missing turn link or run identity" in validate_run_evidence(
+        bridge_evidence, require_bridge=True
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("t_monotonic_ns", None),
+        ("t_monotonic_ns", -1),
+        ("t_monotonic_ns", True),
+        ("service", ""),
+        ("target", ""),
+        ("arguments", []),
+        ("extra", 1),
+    ],
+)
+def test_each_bridge_operation_has_exact_fields_and_a_monotonic_time(
+    bridge_evidence, field, value
+):
+    from tools.test_environment import validate_run_evidence
+
+    bridge_evidence["operations"][0][field] = value
+    assert "invalid bridge operation" in validate_run_evidence(bridge_evidence)
+
+
+def test_expected_operations_come_from_inventory_and_label_slots():
+    import json
+
+    from tools.test_environment import expected_operations
+
+    inventory = json.loads((ROOT / "tests/fixtures/intents.json").read_text())
+    assert expected_operations(
+        {"intent": {"name": "HassStartTimer", "slots": {"minutes": 5}}}, inventory
+    ) == [
+        {
+            "service": "timer.started",
+            "target": "assist_live_virtual",
+            "arguments": {"seconds": 300},
+        }
+    ]
+    assert expected_operations(
+        {"intent": {"name": "HassTurnOff", "slots": {"name": "virtual fan"}}}, inventory
+    ) == [{"service": "fan.turn_off", "target": "fan.virtual_fan", "arguments": {}}]
+    for intent in (
+        {"name": "Unknown", "slots": {}},
+        {"name": "HassTurnOn", "slots": {}},
+        {"name": "HassStartTimer", "slots": {"seconds": 0}},
+    ):
+        assert expected_operations({"intent": intent}, inventory) is None
+
+
+@pytest.mark.parametrize(
+    "change", ["extra", "duplicate", "missing", "service", "target", "arguments"]
+)
+def test_strict_operation_multiset_refuses_every_difference(bridge_evidence, change):
+    from tools.test_environment import validate_intent_action_evidence
+
+    label = {"intent": bridge_evidence["selected_intent"]}
+    assert validate_intent_action_evidence(bridge_evidence, label) == []
+    operation = bridge_evidence["operations"][0]
+    if change in ("extra", "duplicate"):
+        bridge_evidence["operations"].append(
+            {
+                **operation,
+                **({"target": "fan.virtual_fan"} if change == "extra" else {}),
+            }
+        )
+    elif change == "missing":
+        bridge_evidence["operations"] = []
+    else:
+        operation[change] = {} if change == "arguments" else "different"
+    assert "operations differ" in validate_intent_action_evidence(
+        bridge_evidence, label
+    )
+
+
+async def test_public_sensor_links_actual_agent_context_and_timed_operations(
+    configured_hass,  # noqa: F811
+    monkeypatch,
+):
+    from homeassistant.components import conversation
+    from homeassistant.core import Context
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    from homeassistant.setup import async_setup_component
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    import custom_components
+    from custom_components.assist_live.ledger import TurnLedger
+    from custom_components.assist_live.sensor import TurnLatencySensor
+
+    hass = configured_hass
+    monkeypatch.setattr(
+        custom_components,
+        "__path__",
+        [str(ROOT / "tests/fixtures/custom_components"), *custom_components.__path__],
+    )
+    assert await async_setup_component(hass, "conversation", {})
+    assert await async_setup_component(hass, "intent", {})
+    from custom_components.assist_live_test_agent import register_timer
+    from custom_components.assist_live_test_agent.conversation import TestAgent
+
+    entry = MockConfigEntry(domain="assist_live")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "virtual")}
+    )
+    registered = er.async_get(hass).async_get_or_create(
+        "sensor", "assist_live", "virtual-latency", device_id=device.id
+    )
+    ledger = TurnLedger(None)
+    sensor = TurnLatencySensor("virtual", device.id, ledger)
+    sensor.hass = hass
+    sensor.entity_id = registered.entity_id
+    await sensor.async_added_to_hass()
+    register_timer(hass, device.id)
+    agent = TestAgent("short", device.id)
+    await hass.data[conversation.DATA_COMPONENT].async_add_entities([agent])
+    records = []
+    hass.bus.async_listen(
+        "assist_live_test_record", callback(lambda event: records.append(event.data))
+    )
+    context = Context()
+    turn = ledger.open_voice("virtual")
+    await conversation.async_converse(
+        hass,
+        "start a timer for five minutes",
+        None,
+        context,
+        language="en",
+        agent_id=agent.entity_id,
+        device_id=device.id,
+    )
+    await hass.async_block_till_done()
+    record = records[-1]
+    assert record["turn_id"] == turn.turn_id
+    assert record["turn_type"] == "voice"
+    assert record["context_id"] == context.id
+    assert record["device_id"] == device.id
+    assert record["completed"] is True
+    assert record["operations"][0]["service"] == "timer.started"
+    assert record["operations"][0]["t_monotonic_ns"] > 0
+    record.update(run_id="test-run", baseline_configuration_id="test-config")
+    from tools.test_environment import validate_run_evidence
+
+    assert validate_run_evidence(record, require_bridge=True) == []
+    hass.states.async_remove(sensor.entity_id)
+    await conversation.async_converse(
+        hass,
+        "start a timer for five minutes",
+        None,
+        Context(),
+        language="en",
+        agent_id=agent.entity_id,
+        device_id=device.id,
+    )
+    await hass.async_block_till_done()
+    assert records[-1]["turn_id"] is None
+    assert validate_run_evidence(records[-1], require_bridge=True)
+
+
+async def test_handler_exception_does_not_mark_recorder_completed(
+    configured_hass,  # noqa: F811
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import custom_components
+
+    monkeypatch.setattr(
+        custom_components,
+        "__path__",
+        [str(ROOT / "tests/fixtures/custom_components"), *custom_components.__path__],
+    )
+    from custom_components.assist_live_test_agent import ACTIVE_RECORD
+    from custom_components.assist_live_test_agent.conversation import TestAgent
+
+    captured = []
+
+    async def fail(*args, **kwargs):
+        captured.append(ACTIVE_RECORD.get())
+        raise RuntimeError("synthetic handler error")
+
+    monkeypatch.setattr("homeassistant.components.conversation.async_converse", fail)
+    agent = TestAgent("short")
+    agent.hass = configured_hass
+    with pytest.raises(RuntimeError, match="synthetic handler error"):
+        await agent._async_handle_message(
+            SimpleNamespace(
+                text="test",
+                context=SimpleNamespace(id="context"),
+                device_id=None,
+                satellite_id=None,
+                language="en",
+            ),
+            None,
+        )
+    assert captured[0]["completed"] is False

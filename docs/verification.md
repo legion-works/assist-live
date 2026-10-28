@@ -2606,3 +2606,37 @@ Tests include cancellation before the read starts and during generator cleanup.
 Each exit clears the pending owner and closes its generator.
 A received result does not increase `speaker_superseded` during cleanup.
 Timing results keep their timestamp and event type. A result for a different satellite does not change the turn or policy.
+
+## Measurement reports and public operation records
+
+The report code checks the forwarding baseline and the two turn settings with synthetic test records.
+Rate intervals use two-sided 95% Clopper-Pearson intervals. Timing percentiles use linear interpolation.
+Short replies have at most 60 characters. The default `safe` setting must satisfy the latency gate in the two reply groups.
+
+The report shows `fast` results independently. It cannot replace `safe`.
+
+Each replay trial has a row, also when the voice turn is not complete.
+Missing transcript, intent, or operation test records stay in the denominator and cause an unsatisfactory gate result.
+Smoke runs, unfrozen corpus records, tuning records, and unresolved recording hashes cannot satisfy acceptance.
+Native-pipeline and synthetic results stay isolated from the forwarding baseline.
+
+Public sensor attributes connect the voice turn ID to the actual conversation context and device ID.
+These attributes contain no content and do not go into recorder history.
+The operation validator compares service, target, and arguments with labelled expectations and public service-call records.
+The completed flag and monotonic operation times come from the conversation handler and its callbacks.
+
+Synthetic tests include satisfactory and unsatisfactory gate arithmetic, missing observations, and physical observations that an operator must make.
+Temporary production changes each caused a named test assertion failure.
+The unchanged-source tests gave satisfactory results.
+The isolated virtual timer calls kept the same entity states before and after the test and cancelled their timers.
+An announcement request without a voice satellite gave no announcement observation with a satisfactory HTTP response.
+
+Speaker cleanup has a bounded close interval. Entity removal and a subsequent turn wait for pre-start cleanup.
+A timing result recorded before the read ends prevents a missing or superseded count.
+Subsequent results continue to apply destination policy without a change to earlier diagnostic counts.
+Per-turn diagnostics show only the two permitted fallback-refusal values.
+
+The [native-function procedure](testing/native-functions.md) gives the matrix and report commands for hardware trials.
+Use its P0 report procedure after held-out replay, playback calibration, and the two server-path observations are complete.
+Device replay, calibration, physical observations, and P0 acceptance are `NOT RUN: hardware not available`.
+No baseline report contains invented measurements.

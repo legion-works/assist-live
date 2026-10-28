@@ -1,6 +1,9 @@
+from time import monotonic_ns
+
 from homeassistant.components import conversation
 from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 
 from . import ACTIVE_RECORD, DEVICE_ID
@@ -46,7 +49,34 @@ class TestAgent(conversation.ConversationEntity):
             "service_calls": [],
             "group": self._reply_group,
             "text_deltas": [],
+            "turn_id": None,
+            "turn_type": None,
+            "device_id": user_input.device_id,
+            "completed": False,
+            "operations": [],
         }
+        registry = er.async_get(self.hass)
+        sensors = (
+            [
+                entity
+                for entity in er.async_entries_for_device(
+                    registry, user_input.device_id
+                )
+                if entity.platform == "assist_live" and entity.domain == "sensor"
+            ]
+            if user_input.device_id
+            else []
+        )
+        links = [
+            state
+            for entity in sensors
+            if (state := self.hass.states.get(entity.entity_id)) is not None
+            and state.attributes.get("turn_type") == "voice"
+            and state.attributes.get("turn_id")
+        ]
+        if len(links) == 1:
+            record["turn_id"] = links[0].attributes["turn_id"]
+            record["turn_type"] = links[0].attributes["turn_type"]
 
         @callback
         def service_event(event):
@@ -59,6 +89,22 @@ class TestAgent(conversation.ConversationEntity):
                 }
                 record["service_calls"].append(call)
                 record["actions"].append({"kind": "service", **call})
+                data = dict(event.data["service_data"])
+                targets = data.pop("entity_id", [])
+                if isinstance(targets, str):
+                    targets = [targets]
+                stamp = monotonic_ns()
+                for target in targets:
+                    record["operations"].append(
+                        {
+                            "service": event.data["domain"]
+                            + "."
+                            + event.data["service"],
+                            "target": target,
+                            "arguments": data,
+                            "t_monotonic_ns": stamp,
+                        }
+                    )
 
         unsub = self.hass.bus.async_listen(EVENT_CALL_SERVICE, service_event)
         token = ACTIVE_RECORD.set(record)
@@ -73,6 +119,7 @@ class TestAgent(conversation.ConversationEntity):
                 device_id=user_input.device_id,
                 satellite_id=user_input.satellite_id,
             )
+            record["completed"] = True
         finally:
             ACTIVE_RECORD.reset(token)
             unsub()
@@ -105,6 +152,17 @@ class TestAgent(conversation.ConversationEntity):
                             ("seconds", 1),
                         )
                     ),
+                }
+            )
+            record["operations"].append(
+                {
+                    "service": "timer.scheduled",
+                    "target": DEVICE_ID,
+                    "arguments": {
+                        "command": selected.slots["conversation_command"]["value"],
+                        "seconds": record["actions"][-1]["seconds"],
+                    },
+                    "t_monotonic_ns": monotonic_ns(),
                 }
             )
         reply = REPLIES[self._reply_group]

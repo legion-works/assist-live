@@ -96,6 +96,38 @@ No record is part of default runtime transcript storage.
 Use `--output "$TEST_RECORDS"` to keep JSONL records external to the repository.
 The output contains transcripts. Do not publish it without a data check.
 
+### Device operation bridge
+
+The text-only run does not invent an assist-live turn identifier.
+For device replay, the test agent finds the public latency sensor through the HA entity registry for the input device.
+The sensor shows `turn_id` and `turn_type` when the turn opens.
+The agent connects that voice turn to the conversation context ID and device ID.
+A missing sensor, ambiguous sensor, missing turn ID, or non-voice turn gives no connection.
+The device recorder refuses such a record.
+
+Records include `run_id`, `baseline_configuration_id`, `completed`, and `operations`.
+The handler sets `completed` only after its delegated conversation call is complete.
+Each operation has `service`, `target`, `arguments`, and `t_monotonic_ns` from the actual callback.
+The validator compares operations with the public `actions` and service-call records.
+Different services, targets, arguments, missing operations, and duplicate operations cause a failure.
+An empty operation list must have `completed: true` and an empty `actions` list.
+
+The operation expectation comes from `intents.json` and the labelled intent slots, not the actual result.
+The validator compares multisets and refuses more operations than the expectation.
+An unknown intent or ambiguous virtual target makes the expectation unavailable and causes an unsatisfactory acceptance result.
+Before device replay, start the passive recorder in a different terminal:
+
+```sh
+uv run python tools/test_environment.py --labels tests/data/labels.jsonl --token-file "$ASSIST_LIVE_TEST_TOKEN_FILE" --record-device "$EXPECTED_TURNS" --output "$ASSIST_LIVE_OPERATION_RECORDS"
+```
+
+Use the same `ASSIST_LIVE_RUN_ID` and `ASSIST_LIVE_BASELINE_CONFIG_ID` as device replay.
+Wait for `READY device operation recorder` before the first wake word.
+This mode does not call `conversation/process`.
+It writes after each completed public event and stops at the specified turn count.
+The file must not be available when device replay starts.
+Replay checks the actual transcript against the device STT transcript.
+
 The success lines are:
 
 ```text

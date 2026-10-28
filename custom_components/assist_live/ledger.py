@@ -9,7 +9,11 @@ from assist_live_client import AssistLiveClient
 from assist_live_client.models import HealthCapabilities, TimingEvent, TurnOpen
 from assist_live_client.protocol import ProtocolError
 
-from .const import MAX_SPEAKER_READS, MAX_SPEAKER_READS_PER_SATELLITE
+from .const import (
+    MAX_SPEAKER_DISTANCE,
+    MAX_SPEAKER_READS,
+    MAX_SPEAKER_READS_PER_SATELLITE,
+)
 
 
 @dataclass
@@ -118,8 +122,8 @@ class TurnLedger:
             victims.extend(remaining[: max(0, len(remaining) - MAX_SPEAKER_READS + 1)])
             reads = [self.speaker_reads[turn_id] for turn_id in victims]
             tasks = [read.task for read in reads]
-            for task in tasks:
-                if task.cancel():
+            for turn_id, task in zip(victims, tasks, strict=True):
+                if task.cancel() and not self.has_speaker_result(turn_id):
                     self.speaker_superseded += 1
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -213,6 +217,9 @@ class TurnLedger:
                 record.destinations.append(row)
             self.changed()
 
+    def has_speaker_result(self, turn_id: str) -> bool:
+        return turn_id in self._speaker_results
+
     def speaker_result(
         self, turn_id: str, result: dict[str, Any], *, satellite: str | None = None
     ) -> None:
@@ -264,7 +271,7 @@ class TurnLedger:
                 data.get("destination") in {"local", "cloud"}
                 and isinstance(data.get("distance"), (int, float))
                 and not isinstance(data["distance"], bool)
-                and 0 <= data["distance"] <= 2
+                and 0 <= data["distance"] <= MAX_SPEAKER_DISTANCE
             ):
                 self.speaker_result(
                     event["turn_id"], data, satellite=event["satellite"]

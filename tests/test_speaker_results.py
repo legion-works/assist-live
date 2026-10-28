@@ -504,3 +504,48 @@ async def test_speaker_timing_keeps_stage_and_timestamp(wire):
     assert "speaker_result" in record.timings
     assert record.timings["speaker_result"]["t_utc_ns"] == 1
     assert "speaker_result" in record.stages
+
+
+@pytest.mark.parametrize("ending", ["exhausted", "supersede"])
+async def test_timing_first_result_is_not_missing_or_superseded(wire, ending):
+    turn_id = await wire.start()
+    await wire.timing_result(wire.timing(turn_id))
+    if ending == "supersede":
+        await wire.runtime.ledger.prepare_speaker_read("satellite-a")
+    else:
+        read = wire.runtime.ledger.speaker_reads[turn_id]
+        wire.queues[turn_id].put_nowait(None)
+        await read.task
+    assert wire.runtime.ledger.speaker_missing == 0
+    assert wire.runtime.ledger.speaker_superseded == 0
+
+
+async def test_late_timing_result_still_applies_policy_without_rewriting_missing_count(
+    wire,
+):
+    turn_id = await wire.start()
+    read = wire.runtime.ledger.speaker_reads[turn_id]
+    wire.queues[turn_id].put_nowait(None)
+    await read.task
+    assert wire.runtime.ledger.speaker_missing == 1
+    await wire.timing_result(wire.timing(turn_id))
+    assert wire.runtime.ledger.records[turn_id].speaker["destination"] == "cloud"
+    assert wire.issue() is not None
+    assert wire.runtime.ledger.speaker_missing == 1
+
+
+@pytest.mark.parametrize("channel", ["audio", "timing"])
+async def test_both_speaker_paths_use_the_shared_distance_bound(
+    wire, monkeypatch, channel
+):
+    module = "custom_components.assist_live." + (
+        "stt" if channel == "audio" else "ledger"
+    )
+    monkeypatch.setattr(module + ".MAX_SPEAKER_DISTANCE", 0.1)
+    turn_id = await wire.start()
+    if channel == "audio":
+        await wire.result(turn_id)
+    else:
+        await wire.timing_result(wire.timing(turn_id))
+    assert wire.runtime.ledger.records[turn_id].speaker is None
+    assert wire.seen == []

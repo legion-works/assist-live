@@ -108,6 +108,25 @@ async def async_get_config_entry_diagnostics(
                         "destination": row["destination"]
                         if row["destination"] in {"local", "cloud", "unknown"}
                         else "unknown",
+                        **(
+                            {
+                                "fallback_reason": record.server_refusals[
+                                    row["part"].removesuffix("_fallback")
+                                ]
+                                if record.server_refusals[
+                                    row["part"].removesuffix("_fallback")
+                                ]
+                                in {
+                                    "server_not_local_only",
+                                    "server_destination_not_local",
+                                }
+                                else "unknown"
+                            }
+                            if row["part"].endswith("_fallback")
+                            and row["part"].removesuffix("_fallback")
+                            in record.server_refusals
+                            else {}
+                        ),
                     }
                     for row in record.destinations
                 ],

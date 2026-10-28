@@ -14,7 +14,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pymicro_vad import MicroVad
 
-from .const import DOMAIN, SPEAKER_RESULT_DEADLINE
+from .const import (
+    DOMAIN,
+    MAX_SPEAKER_DISTANCE,
+    MESSAGE_DEADLINE,
+    SPEAKER_RESULT_DEADLINE,
+)
 from .ledger import SpeakerRead, TurnLedger
 from .stt_fallback import FallbackAudio
 
@@ -80,7 +85,8 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
     ) -> None:
         if isinstance(messages, AsyncGenerator):
             with suppress(Exception):
-                await messages.aclose()
+                async with asyncio.timeout(MESSAGE_DEADLINE):
+                    await messages.aclose()
 
     def _start_speaker_read(
         self, messages: AsyncIterator[dict[str, Any]], turn_id: str, deadline: float
@@ -120,7 +126,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
             async with asyncio.timeout_at(deadline):
                 async for message in messages:
                     if message["type"] == "speaker_result":
-                        if not 0 <= message["distance"] <= 2:
+                        if not 0 <= message["distance"] <= MAX_SPEAKER_DISTANCE:
                             break
                         self.ledger.speaker_result(
                             turn_id, message, satellite=self.satellite
@@ -134,7 +140,11 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
             pass
         finally:
             self.ledger.speaker_reads.pop(turn_id, None)
-            if not received and not cancelled:
+            if (
+                not received
+                and not cancelled
+                and not self.ledger.has_speaker_result(turn_id)
+            ):
                 self.ledger.speaker_missing += 1
             await self._close_speaker_messages(messages)
 
@@ -207,7 +217,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                         messages = self.client.stt(turn.turn_id, audio.server_audio())
                         try:
                             while True:
-                                async with asyncio.timeout(0.6):
+                                async with asyncio.timeout(MESSAGE_DEADLINE):
                                     message = await anext(messages)
                                 if message["type"] == "final":
                                     self.ledger.mark(turn.turn_id, "stt_final")
