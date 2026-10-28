@@ -27,6 +27,13 @@ class Record:
     server_refusals: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class SpeakerRead:
+    satellite: str
+    task: asyncio.Task[None]
+    cleanup: asyncio.Task[None] | None = None
+
+
 class TurnLedger:
     def __init__(
         self, client: AssistLiveClient, *, clock: Callable[[], float] = time.monotonic
@@ -45,9 +52,9 @@ class TurnLedger:
         self.latest: dict[str, Record] = {}
         self.listeners: set[Callable[[], None]] = set()
         self.speaker_event: Callable[[dict[str, Any]], None] | None = None
+        self.speaker_destination: Callable[[dict[str, Any]], None] | None = None
         self.fallback_policy: Callable[[str], Awaitable[str]] | None = None
-        self.speaker_reads: dict[str, asyncio.Task[None]] = {}
-        self.speaker_satellites: dict[str, str] = {}
+        self.speaker_reads: dict[str, SpeakerRead] = {}
         self._speaker_read_lock = asyncio.Lock()
         self._speaker_results: dict[str, None] = {}
         self.speaker_missing = 0
@@ -77,10 +84,18 @@ class TurnLedger:
         return True
 
     async def stop_speaker_reads(self) -> None:
-        tasks = list(self.speaker_reads.values())
+        reads = list(self.speaker_reads.values())
+        tasks = [read.task for read in reads]
         for task in tasks:
             task.cancel()
+        if tasks:
+            # A completed task can have a queued pre-start cleanup callback.
+            await asyncio.wait(tasks)
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(
+            *(read.cleanup for read in reads if read.cleanup is not None),
+            return_exceptions=True,
+        )
 
     async def prepare_speaker_read(self, satellite: str) -> None:
         # Cancellation can suspend for socket cleanup. Serialize admission so
@@ -88,25 +103,30 @@ class TurnLedger:
         async with self._speaker_read_lock:
             pending = [
                 turn_id
-                for turn_id, task in self.speaker_reads.items()
-                if not task.done()
+                for turn_id, read in self.speaker_reads.items()
+                if not read.task.done()
             ]
             same_satellite = [
                 turn_id
                 for turn_id in pending
-                if self.speaker_satellites[turn_id] == satellite
+                if self.speaker_reads[turn_id].satellite == satellite
             ]
             victims = same_satellite[
                 : max(0, len(same_satellite) - MAX_SPEAKER_READS_PER_SATELLITE + 1)
             ]
             remaining = [turn_id for turn_id in pending if turn_id not in victims]
             victims.extend(remaining[: max(0, len(remaining) - MAX_SPEAKER_READS + 1)])
-            tasks = [self.speaker_reads[turn_id] for turn_id in victims]
+            reads = [self.speaker_reads[turn_id] for turn_id in victims]
+            tasks = [read.task for read in reads]
             for task in tasks:
                 if task.cancel():
                     self.speaker_superseded += 1
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(
+                    *(read.cleanup for read in reads if read.cleanup is not None),
+                    return_exceptions=True,
+                )
 
     def current(self, satellite: str) -> TurnOpen | None:
         if turn_id := self._active.get(satellite):
@@ -208,14 +228,21 @@ class TurnLedger:
         self._speaker_results[turn_id] = None
         if len(self._speaker_results) > 128:
             self._speaker_results.pop(next(iter(self._speaker_results)))
-        if not result.get("name"):
+        if not result.get("name") and result["destination"] == "local":
             self.speaker_not_identified += 1
             return
-        speaker = {key: result[key] for key in ("name", "distance", "destination")}
+        speaker = {
+            "name": result.get("name", ""),
+            "distance": result["distance"],
+            "destination": result["destination"],
+        }
         if record is not None:
             record.speaker = speaker
         self.used(turn_id, "speaker", "speaker_plugin", result["destination"])
-        if self.speaker_event is not None:
+        if not speaker["name"]:
+            if self.speaker_destination is not None:
+                self.speaker_destination(speaker)
+        elif self.speaker_event is not None:
             self.speaker_event(
                 {
                     "turn_id": turn_id,
@@ -230,7 +257,8 @@ class TurnLedger:
             return
         if event["stage"] == "speaker_result":
             # The server records the wire result without part/provider fields
-            # (server revision f6ac2d6, app.py:631). Storage omits an empty name.
+            # (server revision f6ac2d6, app.py:631). Storage omits an empty name
+            # (store.py:63-68), but its destination can still be cloud.
             data = event.get("data", {})
             if (
                 data.get("destination") in {"local", "cloud"}
@@ -241,11 +269,12 @@ class TurnLedger:
                 self.speaker_result(
                     event["turn_id"], data, satellite=event["satellite"]
                 )
-            return
         if record is None:
             return
         stage = event["stage"]
         data = event.get("data", {})
+        if stage == "speaker_result":
+            record.stages.add(stage)
         keep_local_end = (
             stage == "end_decision"
             and record.timings.get(stage, {}).get("decision_source") == "ha_audio_end"
@@ -262,7 +291,7 @@ class TurnLedger:
                 if event.get("source") == "server"
                 else event.get("source", "unknown")
             )
-        if data.get("part") in {
+        if stage != "speaker_result" and data.get("part") in {
             "stt",
             "tts",
             "speaker",

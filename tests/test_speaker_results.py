@@ -137,8 +137,8 @@ class SpeakerWire:
         steps = round(seconds * 10)
         for _ in range(steps):
             self.offset = round(self.offset + 0.1, 6)
-            for turn_id, task in list(self.runtime.ledger.speaker_reads.items()):
-                if not task.done():
+            for turn_id, read in list(self.runtime.ledger.speaker_reads.items()):
+                if not read.task.done():
                     self.queues[turn_id].put_nowait(
                         encode_control("heartbeat", turn_id)
                     )
@@ -250,7 +250,7 @@ async def test_delayed_cloud_result_raises_repair(wire, delay):
 
 async def test_heartbeats_do_not_extend_speaker_deadline(wire):
     turn_id = await wire.start()
-    task = wire.runtime.ledger.speaker_reads[turn_id]
+    task = wire.runtime.ledger.speaker_reads[turn_id].task
     await wire.advance(10.5)
     assert turn_id in wire.runtime.ledger.speaker_reads
     await wire.advance(0.2)
@@ -329,7 +329,7 @@ async def test_different_satellites_keep_their_own_results(wire):
 
 async def test_mismatched_wire_turn_cannot_attach_to_pending_turn(wire):
     turn_id = await wire.start()
-    task = wire.runtime.ledger.speaker_reads[turn_id]
+    task = wire.runtime.ledger.speaker_reads[turn_id].task
     wire.queues[turn_id].put_nowait(
         encode_control(
             "speaker_result",
@@ -424,3 +424,83 @@ async def test_no_identification_on_timing_stream_has_no_destination(wire):
     assert wire.runtime.ledger.speaker_missing == 0
     assert wire.issue() is None
     assert wire.seen == []
+
+
+@pytest.mark.parametrize("local_only", [False, True])
+@pytest.mark.parametrize(
+    "channel,destination,absent",
+    [
+        ("audio", "local", False),
+        ("audio", "cloud", False),
+        ("timing", "local", False),
+        ("timing", "local", True),
+        ("timing", "cloud", False),
+        ("timing", "cloud", True),
+    ],
+)
+async def test_unnamed_result_keeps_only_checked_cloud_destination(
+    wire, local_only, channel, destination, absent
+):
+    wire.runtime.ledger.local_only = local_only
+    turn_id = await wire.start()
+    if channel == "audio":
+        await wire.result(turn_id, name="", destination=destination)
+    else:
+        await wire.entities[0].async_will_remove_from_hass()
+        event = wire.timing(turn_id, name="", destination=destination)
+        if not absent:
+            event["data"]["name"] = ""
+        await wire.timing_result(event)
+    record = wire.runtime.ledger.records[turn_id]
+    speaker_rows = [row for row in record.destinations if row["part"] == "speaker"]
+    assert speaker_rows == (
+        [{"part": "speaker", "provider": "speaker_plugin", "destination": "cloud"}]
+        if destination == "cloud"
+        else []
+    )
+    assert bool(wire.issue()) is (local_only and destination == "cloud")
+    assert wire.runtime.speaker_policy_violations == (
+        local_only and destination == "cloud"
+    )
+    assert wire.runtime.ledger.speaker_not_identified == (destination == "local")
+    assert wire.runtime.ledger.speaker_missing == 0
+    assert wire.seen == []
+
+
+async def test_wrong_satellite_result_does_not_attach_or_apply_policy(wire):
+    turn_id = await wire.start()
+    wire.runtime.ledger.speaker_result(
+        turn_id, wire.timing(turn_id)["data"], satellite="satellite-b"
+    )
+    await wire.hass.async_block_till_done()
+    record = wire.runtime.ledger.records[turn_id]
+    assert record.speaker is None
+    assert not any(row["part"] == "speaker" for row in record.destinations)
+    assert wire.runtime.speaker_policy_violations == 0
+    assert wire.issue() is None
+    assert wire.seen == []
+
+
+async def test_wrong_satellite_timing_does_not_attach_or_apply_policy(wire):
+    turn_id = await wire.start()
+    event = wire.timing(turn_id)
+    event["satellite"] = "satellite-b"
+    wire.runtime.ledger.observe(event)
+    await wire.hass.async_block_till_done()
+    record = wire.runtime.ledger.records[turn_id]
+    assert record.speaker is None
+    assert "speaker_result" not in record.timings
+    assert "speaker_result" not in record.stages
+    assert not any(row["part"] == "speaker" for row in record.destinations)
+    assert wire.runtime.speaker_policy_violations == 0
+    assert wire.issue() is None
+    assert wire.seen == []
+
+
+async def test_speaker_timing_keeps_stage_and_timestamp(wire):
+    turn_id = await wire.start()
+    await wire.timing_result(wire.timing(turn_id))
+    record = wire.runtime.ledger.records[turn_id]
+    assert "speaker_result" in record.timings
+    assert record.timings["speaker_result"]["t_utc_ns"] == 1
+    assert "speaker_result" in record.stages

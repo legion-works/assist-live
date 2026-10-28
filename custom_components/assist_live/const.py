@@ -12,7 +12,7 @@ SPEAKER_RESULT_DEADLINE = (
     SPEAKER_RESOLVE_TIMEOUT + SPEAKER_HTTP_TIMEOUT + MESSAGE_DEADLINE
 )
 # One pending read per satellite prevents accumulation during rapid turns.
-# Eight reads reserve half of the server's 16 connections per integration token
-# for live audio and events (server revision f6ac2d6, app.py:50-51).
+# Eight reads bound pending audio sockets, not live audio or event subscriptions.
+# The server applies its own limits (revision f6ac2d6, app.py:50-51).
 MAX_SPEAKER_READS_PER_SATELLITE = 1
 MAX_SPEAKER_READS = 8

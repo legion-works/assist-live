@@ -52,6 +52,7 @@ class Runtime:
         self.update_options(entry)
         self.ledger.fallback_policy = self.fallback_destination
         self.ledger.speaker_event = self.speaker_metadata
+        self.ledger.speaker_destination = self.speaker_destination
         self.speaker_policy_violations = 0
         self.stt: dict[str, object] = {}
         self.tts: dict[str, object] = {}
@@ -96,12 +97,16 @@ class Runtime:
         return mode
 
     @callback
-    def speaker_metadata(self, data: dict[str, object]) -> None:
+    def speaker_destination(self, data: dict[str, object]) -> None:
         if self.ledger.local_only and data["destination"] != "local":
             self.speaker_policy_violations += 1
             speaker_destination_issue(self.hass, self.entry.entry_id)
         elif data["destination"] == "local":
             speaker_destination_issue(self.hass, self.entry.entry_id, False)
+
+    @callback
+    def speaker_metadata(self, data: dict[str, object]) -> None:
+        self.speaker_destination(data)
         self.hass.bus.async_fire("assist_live_speaker", data)
 
     async def _save(

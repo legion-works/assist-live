@@ -2579,9 +2579,10 @@ The device trial, smoke run, and 50-reply calibration stay `NOT RUN: hardware no
 
 Date: 2026-10-28 (UTC).
 
-An empty speaker name gives no speaker destination row, event, or repair change.
+An empty speaker name with destination `local` gives no speaker destination row, event, or repair change.
 The result increases `speaker_not_identified`, not the missing-result count.
-The timing-event path applies the same rule when the server event has no name.
+The timing-event path applies the same rule when the server event has no name and destination `local`.
+A cloud result without a name keeps its cloud destination and local-only check, without a speaker event.
 
 After `final`, the speaker read has a 10.6 s deadline. Heartbeats do not extend it.
 HA gives the transcript before the speaker result. Turn closure does not cancel the read.
@@ -2596,7 +2597,12 @@ These cancellations increase `speaker_superseded`. Entity removal does not incre
 Tests use the pinned client decoder and fake WebSocket peers. A test clock controls time.
 Cloud results at 1 s, 5 s, and 10 s cause the local-only repair.
 The deadline, empty name, turn closure, record expiry, turn identity, and two connection limits have behavior assertions.
-Seven in-memory changes each caused a named test assertion failure. The unchanged-source control gave a satisfactory result.
+Temporary in-memory changes each caused a named test assertion failure. The unchanged-source control gave a satisfactory result.
 
-The speaker suite gave `18 passed`. The mutation checks gave `8 passed` in an external test directory.
+The speaker suite and external mutation checks gave satisfactory results.
 These results do not include a hardware trial, a cloud request, or publication.
+
+Tests include cancellation before the read starts and during generator cleanup.
+Each exit clears the pending owner and closes its generator.
+A received result does not increase `speaker_superseded` during cleanup.
+Timing results keep their timestamp and event type. A result for a different satellite does not change the turn or policy.

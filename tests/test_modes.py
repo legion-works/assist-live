@@ -628,7 +628,7 @@ async def test_background_read_owns_speaker_result(client, ledger):
             metadata(), audio([bytes(320)])
         )
         assert result.text == "synthetic command"
-        await asyncio.gather(*ledger.speaker_reads.values())
+        await asyncio.gather(*(read.task for read in ledger.speaker_reads.values()))
         assert ledger.latest["satellite-a"].speaker["destination"] == "local"
     finally:
         await forward.async_will_remove_from_hass()

@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pymicro_vad import MicroVad
 
 from .const import DOMAIN, SPEAKER_RESULT_DEADLINE
-from .ledger import TurnLedger
+from .ledger import SpeakerRead, TurnLedger
 from .stt_fallback import FallbackAudio
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,12 +63,53 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
         self._speaker_tasks: set[asyncio.Task[None]] = set()
+        self._speaker_cleanup_tasks: set[asyncio.Task[None]] = set()
 
     async def async_will_remove_from_hass(self) -> None:
         tasks = list(self._speaker_tasks)
         for task in tasks:
             task.cancel()
+        if tasks:
+            # Task completion does not mean that its cleanup callback ran.
+            await asyncio.wait(tasks)
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*self._speaker_cleanup_tasks, return_exceptions=True)
+
+    async def _close_speaker_messages(
+        self, messages: AsyncIterator[dict[str, Any]]
+    ) -> None:
+        if isinstance(messages, AsyncGenerator):
+            with suppress(Exception):
+                await messages.aclose()
+
+    def _start_speaker_read(
+        self, messages: AsyncIterator[dict[str, Any]], turn_id: str, deadline: float
+    ) -> None:
+        started = False
+
+        async def consume() -> None:
+            nonlocal started
+            started = True
+            await self._speaker_metadata(messages, turn_id, deadline)
+
+        task = asyncio.create_task(consume())
+        read = SpeakerRead(self.satellite, task)
+        self.ledger.speaker_reads[turn_id] = read
+        self._speaker_tasks.add(task)
+
+        def finished(task: asyncio.Task[None]) -> None:
+            self.ledger.speaker_reads.pop(turn_id, None)
+            self._speaker_tasks.discard(task)
+            if not started:
+                # Pre-start cancellation cannot enter the reader's finally.
+                # Keep its close task so unload waits for socket cleanup.
+                read.cleanup = asyncio.create_task(
+                    self._close_speaker_messages(messages)
+                )
+                self._speaker_cleanup_tasks.add(read.cleanup)
+                read.cleanup.add_done_callback(self._speaker_cleanup_tasks.discard)
+
+        task.add_done_callback(finished)
 
     async def _speaker_metadata(
         self, messages: AsyncIterator[dict[str, Any]], turn_id: str, deadline: float
@@ -78,8 +119,6 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         try:
             async with asyncio.timeout_at(deadline):
                 async for message in messages:
-                    if message["type"] == "end":
-                        break
                     if message["type"] == "speaker_result":
                         if not 0 <= message["distance"] <= 2:
                             break
@@ -94,13 +133,10 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         except Exception:
             pass
         finally:
+            self.ledger.speaker_reads.pop(turn_id, None)
             if not received and not cancelled:
                 self.ledger.speaker_missing += 1
-            if isinstance(messages, AsyncGenerator):
-                with suppress(Exception):
-                    await messages.aclose()
-            self.ledger.speaker_reads.pop(turn_id, None)
-            self.ledger.speaker_satellites.pop(turn_id, None)
+            await self._close_speaker_messages(messages)
 
     @property
     def supported_languages(self) -> list[str]:
@@ -182,17 +218,9 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                     await self.ledger.prepare_speaker_read(
                                         self.satellite
                                     )
-                                    task = asyncio.create_task(
-                                        self._speaker_metadata(
-                                            messages, turn.turn_id, speaker_deadline
-                                        )
+                                    self._start_speaker_read(
+                                        messages, turn.turn_id, speaker_deadline
                                     )
-                                    self.ledger.speaker_reads[turn.turn_id] = task
-                                    self.ledger.speaker_satellites[turn.turn_id] = (
-                                        self.satellite
-                                    )
-                                    self._speaker_tasks.add(task)
-                                    task.add_done_callback(self._speaker_tasks.discard)
                                     background = True
                                     return stt.SpeechResult(
                                         message["text"], stt.SpeechResultState.SUCCESS

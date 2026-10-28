@@ -44,12 +44,16 @@ A new STT turn cancels the previous read for that satellite first.
 At the integration limit, HA cancels the oldest pending read before it adds a new read.
 These cancellations increase `speaker_superseded`, not the missing-result count. They do not change the repair issue.
 
-The limits reserve connection capacity for live audio and timing events. The server checks its shared connection limits.
+These limits bound pending audio sockets only. The server applies its own limits to audio sockets and timing subscriptions.
 
-An empty speaker name means no identification, not a checked local destination.
+An empty or missing speaker name with destination `local` means no identification, not a checked local destination.
 HA adds no speaker destination row, fires no speaker event, and does not change the repair issue for this result.
 Diagnostics increase only `speaker_not_identified`. This result is not missing.
-The same rule applies when the server timing event has no name.
+The same rule applies when the server timing event has no name and destination `local`.
+
+A cloud destination without a name means that a cloud plug-in checked the audio but gave no speaker name.
+HA records that cloud destination and applies the local-only repair when applicable. It does not fire a speaker event without a name.
+This cloud result does not increase `speaker_not_identified`.
 
 The speaker event keeps the server's name, distance, and destination.
 Names do not go into logs or default diagnostics.
