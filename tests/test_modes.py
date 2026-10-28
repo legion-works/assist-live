@@ -304,7 +304,7 @@ async def test_midturn_tts_fallback_records_both_destinations(hass, client, ledg
     assert fallback.text == "Second sentence."
 
 
-@pytest.mark.parametrize("ending", ["missing", "turn_end", "unload", "invalid"])
+@pytest.mark.parametrize("ending", ["missing", "unload", "invalid"])
 async def test_optional_speaker_read_is_bounded_and_cancelled(client, ledger, ending):
     import asyncio
 
@@ -339,10 +339,7 @@ async def test_optional_speaker_read_is_bounded_and_cancelled(client, ledger, en
     )
     assert result.text == "synthetic command"
     await asyncio.wait_for(entered.wait(), 1)
-    if ending == "turn_end":
-        turn = ledger.current("satellite-a")
-        ledger.device_event("satellite-a", turn.turn_id, "playback_end")
-    elif ending == "unload":
+    if ending == "unload":
         await forward.async_will_remove_from_hass()
     await asyncio.wait_for(closed.wait(), 1)
     await ledger.stop_speaker_reads()

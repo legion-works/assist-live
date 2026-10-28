@@ -2574,3 +2574,29 @@ Local clock records must have a local-address check.
 A named clock measurement is necessary for a remote record.
 Proxy acceptance includes acoustic and clock uncertainty in the 100 ms bound.
 The device trial, smoke run, and 50-reply calibration stay `NOT RUN: hardware not available`.
+
+## Speaker identification and result deadline
+
+Date: 2026-10-28 (UTC).
+
+An empty speaker name gives no speaker destination row, event, or repair change.
+The result increases `speaker_not_identified`, not the missing-result count.
+The timing-event path applies the same rule when the server event has no name.
+
+After `final`, the speaker read has a 10.6 s deadline. Heartbeats do not extend it.
+HA gives the transcript before the speaker result. Turn closure does not cancel the read.
+A result after record expiry applies the local-only check and fires the event for a non-empty name.
+Audio and timing results share the same check without duplicate policy counts for recent results.
+
+One pending read for each satellite and eight for each integration limit connection use.
+A new turn first cancels the previous read for that satellite.
+At the integration limit, the oldest pending read stops first.
+These cancellations increase `speaker_superseded`. Entity removal does not increase the missing-result count.
+
+Tests use the pinned client decoder and fake WebSocket peers. A test clock controls time.
+Cloud results at 1 s, 5 s, and 10 s cause the local-only repair.
+The deadline, empty name, turn closure, record expiry, turn identity, and two connection limits have behavior assertions.
+Seven in-memory changes each caused a named test assertion failure. The unchanged-source control gave a satisfactory result.
+
+The speaker suite gave `18 passed`. The mutation checks gave `8 passed` in an external test directory.
+These results do not include a hardware trial, a cloud request, or publication.

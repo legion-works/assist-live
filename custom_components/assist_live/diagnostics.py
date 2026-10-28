@@ -129,6 +129,8 @@ async def async_get_config_entry_diagnostics(
         "late_server_failures": runtime.ledger.late_server_failures,
         "fallback_count": runtime.ledger.failures.get("fallback_used", 0),
         "speaker_metadata_missing": runtime.ledger.speaker_missing,
+        "speaker_not_identified": runtime.ledger.speaker_not_identified,
+        "speaker_superseded": runtime.ledger.speaker_superseded,
         "speaker_policy_violations": getattr(runtime, "speaker_policy_violations", 0),
         "server_local_only": health.local_only
         if health is not None and health.local_only is not None

@@ -34,13 +34,29 @@ The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/f6
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.
 
-A different read has a 600 ms deadline for speaker metadata after the `final` transcript.
-A missing or invalid result only increases a diagnostics count.
-Turn closure and entity removal cancel that read.
+A different read waits for speaker metadata after the `final` transcript, with one 10.6 s deadline.
+This includes 5 s for server address resolution, 5 s for HTTP, and the 600 ms message deadline.
+Heartbeats do not extend the total deadline. A missing or invalid result only increases the `speaker_metadata_missing` count.
+Turn closure does not cancel the read. Entity removal cancels it without a missing-result count.
+
+HA keeps a maximum of one pending speaker read for each satellite and eight for each integration.
+A new STT turn cancels the previous read for that satellite first.
+At the integration limit, HA cancels the oldest pending read before it adds a new read.
+These cancellations increase `speaker_superseded`, not the missing-result count. They do not change the repair issue.
+
+The limits reserve connection capacity for live audio and timing events. The server checks its shared connection limits.
+
+An empty speaker name means no identification, not a checked local destination.
+HA adds no speaker destination row, fires no speaker event, and does not change the repair issue for this result.
+Diagnostics increase only `speaker_not_identified`. This result is not missing.
+The same rule applies when the server timing event has no name.
 
 The speaker event keeps the server's name, distance, and destination.
 Names do not go into logs or default diagnostics.
 A cloud speaker result with HA local-only checks on causes a repair issue.
+
+The audio stream and timing-event stream use the same check, without duplicate events or policy counts for a recent result.
+If the turn record expires first, only the record update stops. The policy check and speaker event continue.
 That check cannot stop a completed server request.
 
 The HA `record_transcripts` option and the turn request default to `false`.

@@ -14,7 +14,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pymicro_vad import MicroVad
 
-from .const import DOMAIN
+from .const import DOMAIN, SPEAKER_RESULT_DEADLINE
 from .ledger import TurnLedger
 from .stt_fallback import FallbackAudio
 
@@ -71,17 +71,21 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _speaker_metadata(
-        self, messages: AsyncIterator[dict[str, Any]], turn_id: str
+        self, messages: AsyncIterator[dict[str, Any]], turn_id: str, deadline: float
     ) -> None:
         received = False
         cancelled = False
         try:
-            async with asyncio.timeout(0.6):
+            async with asyncio.timeout_at(deadline):
                 async for message in messages:
+                    if message["type"] == "end":
+                        break
                     if message["type"] == "speaker_result":
                         if not 0 <= message["distance"] <= 2:
                             break
-                        self.ledger.speaker_result(turn_id, message)
+                        self.ledger.speaker_result(
+                            turn_id, message, satellite=self.satellite
+                        )
                         received = True
                         break
         except asyncio.CancelledError:
@@ -96,6 +100,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 with suppress(Exception):
                     await messages.aclose()
             self.ledger.speaker_reads.pop(turn_id, None)
+            self.ledger.speaker_satellites.pop(turn_id, None)
 
     @property
     def supported_languages(self) -> list[str]:
@@ -139,6 +144,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         self, metadata: stt.SpeechMetadata, stream: AsyncIterable[bytes]
     ) -> stt.SpeechResult:
         started = asyncio.get_running_loop().time()
+        await self.ledger.prepare_speaker_read(self.satellite)
         turn = self.ledger.open_voice(self.satellite)
         failed = stt.SpeechResult("", stt.SpeechResultState.ERROR)
         if not self.check_metadata(metadata) or not self._fallback_compatible(metadata):
@@ -169,10 +175,22 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                     message = await anext(messages)
                                 if message["type"] == "final":
                                     self.ledger.mark(turn.turn_id, "stt_final")
+                                    speaker_deadline = (
+                                        asyncio.get_running_loop().time()
+                                        + SPEAKER_RESULT_DEADLINE
+                                    )
+                                    await self.ledger.prepare_speaker_read(
+                                        self.satellite
+                                    )
                                     task = asyncio.create_task(
-                                        self._speaker_metadata(messages, turn.turn_id)
+                                        self._speaker_metadata(
+                                            messages, turn.turn_id, speaker_deadline
+                                        )
                                     )
                                     self.ledger.speaker_reads[turn.turn_id] = task
+                                    self.ledger.speaker_satellites[turn.turn_id] = (
+                                        self.satellite
+                                    )
                                     self._speaker_tasks.add(task)
                                     task.add_done_callback(self._speaker_tasks.discard)
                                     background = True
