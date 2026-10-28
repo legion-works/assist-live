@@ -2549,3 +2549,14 @@ A temporary full-map copy caused the disclosure assertion to stop the test.
 The subprocess puts the initial source contents back in `finally`.
 The TTS protocol URL uses client revision `f6ac2d61da342dc962db446d9e9d5fab8f80ee95`.
 Only historical records in this file use the previous pin.
+
+## Device replay code
+
+Synthetic tests check device-event refusals, recording hashes, run schema version 2, acoustic boundaries, paired transcripts, and completed operation records.
+They check quiet tails, noise, clicks, missing sound, and truncated replies without a device.
+They also check the 50-reply minimum, linear-interpolation percentiles, and the 100 ms proxy-error limit.
+
+Smoke rows cannot satisfy acceptance validation.
+Acceptance stays blocked until the corpus is frozen and the public recorder supplies turn identifiers, monotonic operation times, and an explicit completed flag.
+The device trial, smoke run, and 50-reply calibration are `NOT RUN: hardware not available`.
+No hardware calibration report contains invented values.
