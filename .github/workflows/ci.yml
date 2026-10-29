@@ -75,8 +75,8 @@ jobs:
           - ha: '2026.10.1'
             plugin: '0.13.372'
             member: minimum
-          - ha: '2026.10.3'
-            plugin: '0.13.374'
+          - ha: '2026.10.4'
+            plugin: '0.13.375'
             member: current
     outputs:
       minimum: ${{ steps.result.outputs.minimum }}

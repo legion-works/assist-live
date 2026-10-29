@@ -78,6 +78,25 @@ def test_task_privacy_branch_keeps_other_checks(repository, denylist, tmp_path, 
         assert "PASS public data matches=0" in result.stdout
 
 
+def test_ci_current_member_versions():
+    from tools.check_ci import HA_MATRIX
+
+    assert HA_MATRIX == [
+        {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
+        {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
+    ]
+
+
+def test_ci_rejects_previous_current_member(tmp_path):
+    from tools.check_ci import main
+
+    path = tmp_path / "ci.yml"
+    source = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "2026.10.4" in source
+    path.write_text(source.replace("2026.10.4", "2026.10.3"))
+    assert main(["--workflow", str(path)]) == 1
+
+
 def test_ci_has_required_jobs():
     from tools.check_ci import check_jobs
 

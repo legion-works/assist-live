@@ -2,7 +2,7 @@ version: '3'
 
 tasks:
   check:
-    desc: Run local code and privacy checks with HA 2026.10.3
+    desc: Run local code and privacy checks with HA 2026.10.4
     cmds:
       - uv sync --locked
       - task: lint

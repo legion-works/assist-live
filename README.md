@@ -15,6 +15,7 @@ These are design goals, not compatibility or performance claims.
 ## Development
 
 Use Python `3.14.2` or a subsequent version and `uv`.
+The test matrix uses HA `2026.10.1` (minimum) and `2026.10.4` (current).
 Run these commands from the repository root:
 
 ```sh

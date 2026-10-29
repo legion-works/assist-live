@@ -17,7 +17,7 @@ dev = [
     "mutagen==1.48.1",
     "pymicro-vad==1.0.1",
     "pyspeex-noise==1.0.2",
-    "pytest-homeassistant-custom-component==0.13.374",
+    "pytest-homeassistant-custom-component==0.13.375",
     "ruff==0.17.2",
     "mypy==2.4.0",
     "PyYAML==6.0.3",

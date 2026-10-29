@@ -21,7 +21,7 @@ REQUIRED_JOBS = {
 RESULT_COMMAND = 'uv run --locked python tools/check_ci.py --results "$NEEDS_JSON"'
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
-    {"ha": "2026.10.3", "plugin": "0.13.374", "member": "current"},
+    {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
 ]
 HA_COMPONENT_REQUIREMENTS = [
     "gazetteer-matcher==1.1.0",

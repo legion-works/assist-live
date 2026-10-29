@@ -2718,3 +2718,36 @@ The unchanged-source control also checked the two refused-voice recovery conditi
 Command in the isolated control, with the integration test environment:
 `python -m pytest tests/test_tts_voices.py::test_voice_repair_sweep_runs_once_per_voice_list tests/test_tts_voices.py::test_voice_metadata_changes_trigger_repair_sweep tests/test_tts_voices.py::test_unknown_voice_falls_back_and_repair_clears -q`.
 Result: `7 passed`.
+
+## Current HA test version
+
+Date: 2026-10-29 (UTC).
+
+The current CI member and locked development environment use HA `2026.10.4` and test package `0.13.375`.
+The minimum member keeps HA `2026.10.1` and test package `0.13.372`.
+The integration minimum stays at HA `2026.10.1`.
+Historical source records and isolated-instance tools keep their recorded HA versions.
+
+The installed HA `2026.10.4` wheel gives these component requirements:
+
+| Component | Exact requirements |
+| --- | --- |
+| `conversation` | `gazetteer-matcher==1.1.0`, `hassil==3.12.1`, `home-assistant-intents==2026.10.6` |
+| `tts` | `mutagen==1.48.1` |
+| `ffmpeg` | `ha-ffmpeg==3.2.2` |
+| `assist_pipeline` | `pymicro-vad==1.0.1`, `pyspeex-noise==1.0.2` |
+
+The seven pins agree with these requirements. Their values do not change.
+The lockfile keeps the two source-build hashes without a change.
+No production code changes are necessary.
+
+Before the version update, the two new current-member tests gave `2 failed`.
+After the update, the CI tests and public-interface contract tests gave `65 passed`.
+The contract files are `tests/test_pipeline_contract.py` and `tests/test_tts_lookup_contract.py`.
+They check public exports, signatures, documented entity types, and the permitted private TTS helper.
+A full current-member run with `uv run --locked pytest tests/ -q` gave `1035 passed` before this record.
+
+A scratch workflow kept the previous current HA version with the new test-package pin.
+The checker gave `FAIL CI HA matrix` and exit 1. The unchanged workflow gave `PASS CI`.
+The regression test writes only the scratch workflow, not the repository workflow.
+These checks do not include a device trial, cloud request, commit, or publication.

@@ -43,7 +43,7 @@ Contract tests pin their import paths and the fields that assist-live uses on ea
 
 The HA app must not go into the HACS repository.
 The project selects `2026.10.1` as the HA minimum.
-The planned CI matrix tests HA `2026.10.1` and `2026.10.3`.
+The CI matrix tests HA `2026.10.1` and `2026.10.4`.
 The baseline runtime is stock HA `2026.10.3`.
 These versions are design targets, not a compatibility claim.
 
