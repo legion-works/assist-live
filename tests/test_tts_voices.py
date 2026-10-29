@@ -245,6 +245,102 @@ async def test_unknown_voice_falls_back_and_repair_clears(
     ]
 
 
+async def test_voice_repair_sweep_runs_once_per_voice_list(hass, client):
+    from custom_components.assist_live import Runtime
+
+    entry = MockConfigEntry(
+        domain="assist_live", data={"satellites": {}, "pipeline_selects": {}}
+    )
+    runtime = Runtime(hass, entry, client)
+    forward = entity(client, runtime.ledger, Fallback())
+    forward.hass = hass
+    forward.entity_id = "tts.assist_live_test"
+    runtime.tts["device-a"] = forward
+    now = [100.0]
+    runtime.clock = lambda: now[0]
+    client.health_capabilities.return_value = health(("server-us", "US", "en-US"))
+    issue_id = f"{forward.unique_id}_unknown_tts_voice_server-retired"
+    ir.async_create_issue(
+        hass,
+        "assist_live",
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="unknown_tts_voice",
+        translation_placeholders={
+            "voice": "server-retired",
+            "entity": forward.entity_id,
+        },
+    )
+    with (
+        patch(
+            "homeassistant.components.assist_pipeline.async_get_pipelines",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.assist_live.tts.ir.async_delete_issue",
+            wraps=ir.async_delete_issue,
+        ) as delete,
+    ):
+
+        def voice_deletes():
+            return [
+                call
+                for call in delete.call_args_list
+                if "_unknown_tts_voice_" in call.args[2]
+            ]
+
+        await runtime._maintenance(None)
+        first_sweep = len(voice_deletes())
+        assert first_sweep == 1
+        previous = client.health_capabilities.return_value
+        client.health_capabilities.return_value = health(("server-us", "US", "en-US"))
+        assert client.health_capabilities.return_value == previous
+        assert client.health_capabilities.return_value is not previous
+        now[0] = 130.0
+        await runtime._maintenance(None)
+        assert client.health_capabilities.await_count == 2
+        forward.async_get_supported_voices("en")
+        assert len(voice_deletes()) == first_sweep
+        assert ir.async_get(hass).async_get_issue("assist_live", issue_id) is not None
+        client.health_capabilities.return_value = health(
+            ("server-retired", "Restored", "en-US")
+        )
+        now[0] = 160.0
+        await runtime._maintenance(None)
+        assert len(voice_deletes()) == first_sweep + 1
+        assert ir.async_get(hass).async_get_issue("assist_live", issue_id) is None
+
+
+@pytest.mark.parametrize(
+    "voices,default",
+    [
+        ((("server-next", "US", "en-US"),), None),
+        ((("server-us", "Next", "en-US"),), None),
+        ((("server-us", "US", "en-GB"),), None),
+        ((("server-us", "US", "en-US"),), "server-us"),
+    ],
+    ids=["id", "name", "language", "default"],
+)
+async def test_voice_metadata_changes_trigger_repair_sweep(
+    hass, client, ledger, voices, default
+):
+    forward = entity(client, ledger, Fallback())
+    forward.hass = hass
+    ledger.last_health = health(("server-us", "US", "en-US"))
+    with patch(
+        "custom_components.assist_live.tts.ir.async_delete_issue",
+        wraps=ir.async_delete_issue,
+    ) as delete:
+        forward.async_update_voices()
+        delete.assert_called_once()
+        ledger.last_health = health(*voices, default=default)
+        forward.async_update_voices()
+        assert delete.call_count == 2
+        forward.async_update_voices()
+        assert delete.call_count == 2
+
+
 async def test_options_select_voice_from_fallback_engine(hass):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
@@ -322,3 +418,36 @@ async def test_health_maintenance_refreshes_entity_and_fallback_option(hass, cli
     hass.config_entries.async_update_entry(entry, options={})
     runtime.update_options(entry)
     assert forward.fallback_voice is None
+
+
+async def test_public_health_refresh_updates_cache_on_schedule(hass, client):
+    from custom_components.assist_live import Runtime
+
+    entry = MockConfigEntry(
+        domain="assist_live", data={"satellites": {}, "pipeline_selects": {}}
+    )
+    runtime = Runtime(hass, entry, client)
+    refresh = getattr(runtime, "refresh_health", None)
+    assert callable(refresh)
+    now = [100.0]
+    runtime.clock = lambda: now[0]
+    initial = health(("server-us", "US", "en-US"))
+    client.health_capabilities.return_value = initial
+    await refresh()
+    assert runtime.ledger.last_health is initial
+    await refresh()
+    client.health_capabilities.assert_awaited_once_with(timeout=0.2)
+    changed = health(("server-next", "Next", "en-US"))
+    client.health_capabilities.return_value = changed
+    now[0] = 130.0
+    with (
+        patch(
+            "homeassistant.components.assist_pipeline.async_get_pipelines",
+            return_value=[],
+        ),
+        patch.object(runtime, "refresh_health", wraps=refresh) as public_refresh,
+    ):
+        await runtime._maintenance(None)
+    public_refresh.assert_awaited_once_with()
+    assert client.health_capabilities.await_count == 2
+    assert runtime.ledger.last_health is changed

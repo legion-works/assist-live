@@ -277,7 +277,7 @@ class Runtime:
             event_stream_issue(self.hass, self.entry.entry_id, satellite, True)
         return delay
 
-    async def _refresh_health(self) -> None:
+    async def refresh_health(self) -> None:
         from .tts import AssistLiveTTS
 
         if self.clock() < self._health_due:
@@ -311,7 +311,7 @@ class Runtime:
                 ]
                 self._store_retry_due = self.clock() + max(delays, default=30)
         await self.ledger.flush()
-        await self._refresh_health()
+        await self.refresh_health()
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
         registry = er.async_get(self.hass)
         forwarding_names = {
@@ -366,7 +366,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     try:
         await runtime.start()
-        await runtime._refresh_health()
+        await runtime.refresh_health()
 
         async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
             runtime.update_options(updated)

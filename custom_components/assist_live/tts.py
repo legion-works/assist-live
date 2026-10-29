@@ -102,6 +102,9 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         self.fallback = fallback
         self.fallback_voice: str | None = None
         self._refused_voices: dict[str, HealthCapabilities | None] = {}
+        self._swept_voices: (
+            tuple[tuple[tuple[str, str, str], ...], str | None] | None
+        ) = None
         self.notify_tts_failure = False
         self._attr_unique_id = f"{satellite}_tts"
         self._attr_name = f"assist-live {satellite}"
@@ -161,7 +164,18 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
 
     @callback
     def async_update_voices(self) -> None:
-        ids = {voice.id for voice in self.server_voices}
+        health = self.ledger.last_health
+        voices = self.server_voices
+        key = (
+            tuple((voice.id, voice.name, voice.language) for voice in voices),
+            health.tts_default_voice
+            if isinstance(health, HealthCapabilities)
+            else None,
+        )
+        if key == self._swept_voices:
+            return
+        self._swept_voices = key
+        ids = {voice.id for voice in voices}
         for voice in ids:
             # Only a subsequent health response can clear a refused voice.
             if (

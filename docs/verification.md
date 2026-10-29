@@ -2676,3 +2676,45 @@ Four temporary source changes gave satisfactory syntax checks and each caused a 
 
 The unchanged-source control gave `22 passed`.
 These checks use synthetic text and audio. They do not include a device trial or cloud request.
+
+### Voice-repair checks and public health refresh
+
+Date: 2026-10-29 (UTC).
+
+The entity checks unknown-voice repair issues one time for each new health object.
+Two reads of the same health object and a voice-list query do not delete registry entries again.
+A changed health list clears a repair when its voice is available again.
+The runtime has `refresh_health` as a public method. Setup and maintenance use that method without a change to the health schedule.
+
+Each regression test gave an assertion failure before its change.
+An isolated base-source run with the two tests gave `2 failed`.
+The repeated-deletion assertion gave `assert 3 == 1`. The public-method assertion gave `assert False`, with `callable(None)`.
+
+Two temporary source changes gave satisfactory syntax checks, then caused the same assertion failures:
+
+1. Remove the health-identity guard: the repeated-deletion test gave `1 failed`.
+2. Use the private health method: the public-method test gave `1 failed`.
+
+The unchanged-source control ran these two tests and the two refused-voice recovery conditions.
+Command in the isolated control, with the integration test environment:
+`python -m pytest tests/test_tts_voices.py::test_voice_repair_sweep_runs_once_per_health_object tests/test_tts_voices.py::test_public_health_refresh_updates_cache_on_schedule tests/test_tts_voices.py::test_unknown_voice_falls_back_and_repair_clears -q`.
+Result: `4 passed`.
+
+### Voice-list content and repair cleanup
+
+Date: 2026-10-29 (UTC).
+
+The repair-check key contains each voice ID, name, and language, plus the default voice ID.
+The key compares content, not health-object identity.
+Independently decoded health objects with equal voice data do not cause the same registry deletion again.
+Changes to an ID, a name, a language, or the default voice ID each cause a new check.
+The check clears the repair when the list includes its voice again.
+
+Before the content key, the equal-response test gave `assert 2 == 1` for the registry deletion count.
+The result was `1 failed, 4 passed`. The four satisfactory results checked changes to each key field.
+A temporary change back to an identity key gave a satisfactory syntax check, then `1 failed` with the same assertion.
+
+The unchanged-source control also checked the two refused-voice recovery conditions.
+Command in the isolated control, with the integration test environment:
+`python -m pytest tests/test_tts_voices.py::test_voice_repair_sweep_runs_once_per_voice_list tests/test_tts_voices.py::test_voice_metadata_changes_trigger_repair_sweep tests/test_tts_voices.py::test_unknown_voice_falls_back_and_repair_clears -q`.
+Result: `7 passed`.
