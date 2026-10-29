@@ -5,7 +5,13 @@ from collections.abc import AsyncGenerator
 from contextlib import suppress
 
 from assist_live_client import AssistLiveClient
-from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
+from assist_live_client.models import (
+    HealthCapabilities,
+    TTSAudio,
+    TTSFormat,
+    TTSSentenceEnd,
+    TTSVoice,
+)
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import tts
 from homeassistant.components.tts.entity import TTSAudioRequest
@@ -17,7 +23,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_NOTIFY_TTS_FAILURE, DOMAIN
+from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .ledger import TurnLedger
 from .tts_fallback import compatible_pcm
 
@@ -29,6 +35,15 @@ def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEnti
     if not isinstance(engine, tts.TextToSpeechEntity):
         raise HomeAssistantError("fallback TTS unavailable")
     return engine
+
+
+def language_matches(language: str, supported: str) -> bool:
+    language = language.replace("_", "-").lower()
+    supported = supported.replace("_", "-").lower()
+    return language == supported or (
+        language.split("-")[0] == supported.split("-")[0]
+        and ("-" not in language or "-" not in supported)
+    )
 
 
 async def async_setup_entry(
@@ -55,6 +70,9 @@ async def async_setup_entry(
             satellite, device, runtime.client, runtime.ledger, fallback
         )
         entity.notify_tts_failure = entry.data.get(CONF_NOTIFY_TTS_FAILURE, False)
+        entity.fallback_voice = {**entry.data, **entry.options}.get(
+            CONF_FALLBACK_TTS_VOICE
+        ) or None
         if registered := dr.async_get(hass).async_get(device):
             entity._attr_device_info = dr.DeviceInfo(
                 identifiers=registered.identifiers,
@@ -82,35 +100,108 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         self.client = client
         self.ledger = ledger
         self.fallback = fallback
+        self.fallback_voice: str | None = None
+        self._refused_voices: dict[str, HealthCapabilities | None] = {}
         self.notify_tts_failure = False
         self._attr_unique_id = f"{satellite}_tts"
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
-        self._attr_supported_languages = fallback.supported_languages
-        self._attr_default_language = fallback.default_language
+        self._fallback_languages = list(fallback.supported_languages)
+
+    @property
+    def server_voices(self) -> tuple[TTSVoice, ...]:
+        health = self.ledger.last_health
+        return health.tts_voices if isinstance(health, HealthCapabilities) else ()
+
+    @property
+    def supported_languages(self) -> list[str]:
+        if not (voices := self.server_voices):
+            return self._fallback_languages
+        return sorted(
+            {voice.language for voice in voices}
+            | {voice.language.replace("_", "-").split("-")[0] for voice in voices}
+        )
+
+    @property
+    def default_language(self) -> str:
+        default = (self.default_options or {}).get("voice")
+        for voice in self.server_voices:
+            if voice.id == default:
+                return voice.language
+        if self.server_voices:
+            return self.server_voices[0].language
+        return self.fallback.default_language
+
+    @property
+    def default_options(self) -> dict[str, str] | None:
+        health = self.ledger.last_health
+        if self.server_voices and isinstance(health, HealthCapabilities):
+            if health.tts_default_voice is not None:
+                return {"voice": health.tts_default_voice}
+        return None
+
+    @callback
+    def _voice_issue(self, voice: str, active: bool) -> None:
+        issue_id = f"{self.unique_id}_unknown_tts_voice_{voice}"
+        if active:
+            self._refused_voices[voice] = self.ledger.last_health
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="unknown_tts_voice",
+                translation_placeholders={"voice": voice, "entity": self.entity_id},
+            )
+        else:
+            self._refused_voices.pop(voice, None)
+            if self.hass is not None:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+
+    @callback
+    def async_update_voices(self) -> None:
+        ids = {voice.id for voice in self.server_voices}
+        for voice in ids:
+            # Only a subsequent health response can clear a refused voice.
+            if (
+                voice not in self._refused_voices
+                or self.ledger.last_health is not self._refused_voices[voice]
+            ):
+                self._voice_issue(voice, False)
 
     @callback
     def async_get_supported_voices(self, language: str) -> list[tts.Voice] | None:
-        return self.fallback.async_get_supported_voices(language)
+        self.async_update_voices()
+        return [
+            tts.Voice(voice.id, voice.name)
+            for voice in self.server_voices
+            if language_matches(language, voice.language)
+        ]
 
     async def async_stream_tts_audio(
         self, request: TTSAudioRequest
     ) -> tts.TTSAudioResponse:
-        if (
-            request.language not in self.supported_languages
-            or request.language not in self.fallback.supported_languages
+        if not self.server_voices and not any(
+            language_matches(request.language, lang)
+            for lang in self.fallback.supported_languages
         ):
             raise HomeAssistantError("fallback TTS language unavailable")
+        if not any(
+            language_matches(request.language, lang)
+            for lang in self.supported_languages
+        ):
+            raise HomeAssistantError("TTS language unavailable")
         turn = self.ledger.open_tts(self.satellite)
-        self.ledger.records[turn.turn_id].voice = request.options.get(
-            "voice", (self.fallback.default_options or {}).get("voice", "")
-        )
+        voice = request.options.get("voice")
+        self.ledger.records[turn.turn_id].voice = voice
         if self.ledger.save is not None:
             await self.ledger.save()
         try:
             async with asyncio.timeout(0.2):
                 health = await self.client.health_capabilities(timeout=0.2)
                 healthy = self.ledger.server_selected(health, "tts", turn.turn_id)
+                self.async_update_voices()
         except ProtocolError, TimeoutError, OSError:
             healthy = False
         healthy = healthy and await self.ledger.connect(turn)
@@ -175,6 +266,24 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         async def fallback(
             parts: AsyncGenerator[str] | None = None,
         ) -> tts.TTSAudioResponse:
+            fallback_language = next(
+                (
+                    lang
+                    for lang in self.fallback.supported_languages
+                    if language_matches(request.language, lang)
+                ),
+                None,
+            )
+            if fallback_language is None:
+                raise HomeAssistantError("fallback TTS language unavailable")
+            options = {**(self.fallback.default_options or {}), **request.options}
+            options.pop("voice", None)
+            fallback_voice = self.fallback_voice or (
+                self.fallback.default_options or {}
+            ).get("voice")
+            if fallback_voice is not None:
+                options["voice"] = fallback_voice
+            self.ledger.records[turn.turn_id].voice = fallback_voice
             await self.ledger.use_fallback(
                 turn.turn_id,
                 "tts_fallback",
@@ -183,8 +292,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             self.ledger.mark(turn.turn_id, "fallback_used")
             return await self.fallback.async_stream_tts_audio(
                 TTSAudioRequest(
-                    request.language,
-                    request.options,
+                    fallback_language,
+                    options,
                     fresh() if parts is None else parts,
                 )
             )
@@ -195,9 +304,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             self.client.tts_stream(
                 turn.turn_id,
                 capture(),
-                voice=request.options["voice"]
-                if "voice" in request.options
-                else (self.fallback.default_options or {}).get("voice", ""),
+                voice=voice,
                 text_positions=health.text_positions,
             )
             if healthy
@@ -246,6 +353,12 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     else:
                         raise ProtocolError("invalid TTS stream item")
             except (ProtocolError, TimeoutError) as error:
+                if (
+                    isinstance(error, ProtocolError)
+                    and str(error) == "unknown_tts_voice"
+                    and voice is not None
+                ):
+                    self._voice_issue(voice, True)
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except Exception as error:
@@ -305,7 +418,15 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     else:
                         invalid = True
                         raise ProtocolError("invalid TTS stream item")
+                if voice is not None:
+                    self._voice_issue(voice, False)
             except Exception as error:
+                if (
+                    isinstance(error, ProtocolError)
+                    and str(error) == "unknown_tts_voice"
+                    and voice is not None
+                ):
+                    self._voice_issue(voice, True)
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 full = "".join([part async for part in fresh()])
                 suffix = full[text_end:].lstrip() if text_end is not None else None

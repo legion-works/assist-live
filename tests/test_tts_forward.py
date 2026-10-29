@@ -13,6 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 class Fallback(TextToSpeechEntity):
     _attr_default_language = "en"
     _attr_supported_languages = ["en"]
+    _attr_default_options = {"voice": "voice-1"}
 
     def async_get_supported_voices(self, language):
         return [Voice("voice-1", "One"), Voice("voice-2", "Two")]
@@ -139,7 +140,7 @@ async def test_fallback_gets_new_unconsumed_generator(client, ledger):
     )
     assert b"".join([chunk async for chunk in response.data_gen]) == b"fallback"
     assert fallback.text == "First sentence. Second sentence."
-    assert fallback.voice == "voice-2"
+    assert fallback.voice == "voice-1"
 
 
 async def test_sender_cancellation_keeps_future_text(client, ledger):
@@ -198,7 +199,7 @@ async def test_non_default_pipeline_voice_reaches_client(client, ledger):
     client.tts_stream = synth
     forward = entity(client, ledger, Fallback())
     assert "voice" in forward.supported_options
-    assert forward.async_get_supported_voices("en")[1].voice_id == "voice-2"
+    assert forward.async_get_supported_voices("en") == []
     response = await forward.async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
     )

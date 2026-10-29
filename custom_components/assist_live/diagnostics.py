@@ -154,6 +154,10 @@ async def async_get_config_entry_diagnostics(
         "server_local_only": health.local_only
         if health is not None and health.local_only is not None
         else "not_reported",
+        "server_tts_voice_count": len(health.tts_voices) if health is not None else 0,
+        "server_tts_default_voice": safe_label(health.tts_default_voice)
+        if health is not None and health.tts_default_voice is not None
+        else None,
         "server_destinations": {
             part: value
             for part, value in health.destinations.items()

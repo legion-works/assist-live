@@ -7,7 +7,16 @@ The project is experimental and has no release.
 Select the server URL, access token, fallback STT entity, and fallback TTS entity.
 Use one pipeline for each satellite.
 Select the voice in the HA pipeline TTS options.
-The integration sends that voice to the client without a change.
+The entity shows the voices and default voice from the latest server health response.
+The integration sends an explicit voice to the server without a change.
+
+Without a voice option, it sends no voice. The server uses its default voice.
+An older server without a voice list gives no voice selections or default option.
+
+In the integration options, select `fallback_tts_voice` from the fallback engine's voice list.
+The empty selection uses that engine's default voice.
+Entries without this option use that default until an operator selects a voice.
+The integration does not send the fallback voice to the server or the server voice to the fallback.
 
 The `local_only` option defaults to `false` in HA.
 When it is on, HA refuses cloud fallback destinations before use.
@@ -31,7 +40,7 @@ See [privacy](privacy.md) for the limits of these checks.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/f6ac2d61da342dc962db446d9e9d5fab8f80ee95/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/b3b1e16e933fb5e7567c059f80e16faf68ef7d35/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -44,10 +53,12 @@ HA diagnostics show the last health values as `server_local_only` and `server_de
 Missing health fields show as `not_reported`. The destination map also includes the configured speaker plug-in.
 Diagnostics show the actual voice and audio format when HA has them.
 
+Diagnostics also show `server_tts_voice_count` and `server_tts_default_voice`, without reply text.
+
 ## Fallback and timing
 
 The STT fallback must accept the language, PCM codec, 16-bit samples, 16000 Hz, and `channel=1`.
-The TTS fallback must accept the language and voice that the pipeline selects.
+The TTS fallback must accept the language. It uses its own selected or default voice.
 A streaming fallback can start audio before HA gets all text.
 A non-streaming fallback buffers the full text. Diagnostics show this path as `full_file`.
 

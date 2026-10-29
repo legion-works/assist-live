@@ -15,7 +15,18 @@ A part that cannot fit a protocol message starts fallback before server audio.
 
 The pipeline selects the voice through the `voice` option.
 The entity sends that value unchanged.
-Only a missing option uses the fallback engine's advertised default voice.
+The voice selections and default option come from server health, not the fallback engine.
+A missing voice option sends no voice. The server uses its default voice.
+An older server without a voice list gives no voice selections or default option.
+
+The integration option `fallback_tts_voice` selects a voice from the fallback engine.
+An empty selection uses that engine's default voice, also for entries without this option.
+The integration does not send a server voice to the fallback or a fallback voice to the server.
+
+If the server refuses a voice with `unknown_tts_voice`, the request uses fallback.
+A repair issue gives the refused voice ID and TTS entity, without reply text.
+Select a voice from the current server list in the pipeline or request.
+The issue clears after a satisfactory request with that voice or when a subsequent server list includes it.
 
 ## Server and fallback
 
@@ -35,7 +46,7 @@ The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
 The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
 It does not find sentence boundaries itself.
-See the [server protocol](https://github.com/legion-works/assist-live-server/blob/f6ac2d61da342dc962db446d9e9d5fab8f80ee95/docs/protocol.md) at the pinned client revision `f6ac2d61da342dc962db446d9e9d5fab8f80ee95` for position rules.
+See the [server protocol](https://github.com/legion-works/assist-live-server/blob/b3b1e16e933fb5e7567c059f80e16faf68ef7d35/docs/protocol.md) at the pinned client revision `b3b1e16e933fb5e7567c059f80e16faf68ef7d35` for position rules.
 
 An older server without `text_positions` uses the failure path with the full text, not continuation.
 The same rule applies when no marker comes or the last marker has no `text_end`.
@@ -84,5 +95,7 @@ Diagnostics give the protocol version, failure counts, and the number of TTS ent
 The modes are `streaming` and `full_file`.
 The counts start at integration setup and include `fallback_used`, `stt_failed`, and `tts_failed`.
 The `late_server_failures` counter also starts at integration setup.
+
+The fields `server_tts_voice_count` and `server_tts_default_voice` show the latest server voice metadata.
 Diagnostics contain no text, transcript, token, URL, or audio.
 Failure logs contain the error type only, not its message or traceback.

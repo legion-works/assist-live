@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-assist-live-client = { git = "https://github.com/legion-works/assist-live-server", rev = "f6ac2d61da342dc962db446d9e9d5fab8f80ee95", subdirectory = "client" }
+assist-live-client = { git = "https://github.com/legion-works/assist-live-server", rev = "b3b1e16e933fb5e7567c059f80e16faf68ef7d35", subdirectory = "client" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

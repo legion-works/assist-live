@@ -33,7 +33,7 @@ HA checks the current destination again before each fallback call and each mid-t
 
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/f6ac2d61da342dc962db446d9e9d5fab8f80ee95/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/b3b1e16e933fb5e7567c059f80e16faf68ef7d35/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.

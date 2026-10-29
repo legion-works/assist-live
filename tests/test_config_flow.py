@@ -225,6 +225,15 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
 
     client.events = events
     client.bindings.return_value = [{"satellite": "satellite-a"}]
+    from assist_live_client.models import HealthCapabilities, TTSVoice
+
+    client.health_capabilities.return_value = HealthCapabilities(
+        True,
+        True,
+        True,
+        tts_voices=(TTSVoice("voice-two", "Server voice", "en-US"),),
+        tts_default_voice="voice-two",
+    )
     entry = MockConfigEntry(
         domain="assist_live",
         data={
@@ -252,6 +261,12 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
         assert await hass.config_entries.async_setup(entry.entry_id)
     runtime = hass.data["assist_live"][entry.entry_id]
+    assert runtime.tts[device.id].default_options == {"voice": "voice-two"}
+    assert (
+        runtime.tts[device.id].async_get_supported_voices("en")[0].name
+        == "Server voice"
+    )
+    assert runtime.tts[device.id].fallback_voice is None
     stt_id = runtime.stt[device.id].entity_id
     tts_id = runtime.tts[device.id].entity_id
     assert hass.states.get(stt_id) is not None
@@ -265,7 +280,7 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
     assert pipeline.stt_engine == stt_id
     assert pipeline.tts_engine == tts_id
     assert pipeline.tts_voice == "voice-two"
-    from assist_live_client.models import HealthCapabilities, TTSAudio, TTSFormat
+    from assist_live_client.models import TTSAudio, TTSFormat
     from homeassistant.components.tts import TTSAudioRequest
 
     selected_voices = []
@@ -327,7 +342,9 @@ async def test_idle_maintenance_writes_only_changes_and_checks_health_on_schedul
     runtime = Runtime(hass, runtime_entry, client)
     now = [100.0]
     runtime.clock = lambda: now[0]
-    client.health.return_value = True
+    from assist_live_client.models import HealthCapabilities
+
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     with (
         patch.object(
             runtime.store, "async_save", wraps=runtime.store.async_save
@@ -341,19 +358,19 @@ async def test_idle_maintenance_writes_only_changes_and_checks_health_on_schedul
             now[0] = instant
             await runtime._maintenance(None)
         assert save.await_count == 0
-        assert client.health.await_count == 1
+        assert client.health_capabilities.await_count == 1
         turn = runtime.ledger.open_voice("satellite-a")
         await runtime.ledger.connect(turn)
         assert save.await_count == 1
         now[0] = 130
         await runtime._maintenance(None)
         assert save.await_count == 1
-        assert client.health.await_count == 2
-        client.health.return_value = False
+        assert client.health_capabilities.await_count == 2
+        client.health_capabilities.return_value = HealthCapabilities(False)
         for instant in (160, 164.999, 165):
             now[0] = instant
             await runtime._maintenance(None)
-        assert client.health.await_count == 4
+        assert client.health_capabilities.await_count == 4
 
 
 async def test_event_cursors_are_debounced_and_resume_after_restart(
@@ -757,11 +774,12 @@ def test_real_store_file_failure_is_detected_and_raises_repair(tmp_path):
         from homeassistant.helpers import issue_registry as ir
         from homeassistant.helpers.storage import Store
         from homeassistant.util.file import WriteError
+        from assist_live_client.models import HealthCapabilities
         from custom_components.assist_live import Runtime
 
         class Client:
-            async def health(self, **kwargs):
-                return True
+            async def health_capabilities(self, **kwargs):
+                return HealthCapabilities(True, True, True)
             async def close(self):
                 pass
 

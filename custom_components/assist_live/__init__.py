@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import TypedDict
 
 from assist_live_client import AssistLiveClient
-from assist_live_client.models import TimingEvent
+from assist_live_client.models import HealthCapabilities, TimingEvent
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import assist_pipeline
 from homeassistant.config_entries import ConfigEntry
@@ -22,7 +22,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
+from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN
 from .ledger import TurnLedger
 from .repairs import (
     event_stream_issue,
@@ -49,13 +49,13 @@ class Runtime:
         self.entry = entry
         self.client = client
         self.ledger = TurnLedger(client)
-        self.update_options(entry)
         self.ledger.fallback_policy = self.fallback_destination
         self.ledger.speaker_event = self.speaker_metadata
         self.ledger.speaker_destination = self.speaker_destination
         self.speaker_policy_violations = 0
         self.stt: dict[str, object] = {}
         self.tts: dict[str, object] = {}
+        self.update_options(entry)
         self.tasks: list[asyncio.Task[None]] = []
         self.unsub: list[Callable[[], None]] = []
         self.store = Store[SavedState | list[dict[str, str]]](
@@ -75,9 +75,14 @@ class Runtime:
 
     @callback
     def update_options(self, entry: ConfigEntry) -> None:
+        from .tts import AssistLiveTTS
+
         settings = {**entry.data, **entry.options}
         self.ledger.record_transcripts = settings.get("record_transcripts", False)
         self.ledger.local_only = settings.get("local_only", False)
+        for entity in self.tts.values():
+            if isinstance(entity, AssistLiveTTS):
+                entity.fallback_voice = settings.get(CONF_FALLBACK_TTS_VOICE) or None
 
     async def fallback_destination(self, entity_id: str) -> str:
         from .config_flow import destination, entity_iot_class
@@ -272,6 +277,26 @@ class Runtime:
             event_stream_issue(self.hass, self.entry.entry_id, satellite, True)
         return delay
 
+    async def _refresh_health(self) -> None:
+        from .tts import AssistLiveTTS
+
+        if self.clock() < self._health_due:
+            return
+        try:
+            health = await self.client.health_capabilities(timeout=0.2)
+        except ProtocolError, TimeoutError, OSError:
+            self._healthy = False
+        else:
+            self._healthy = (
+                isinstance(health, HealthCapabilities) and health.healthy is True
+            )
+            if isinstance(health, HealthCapabilities):
+                self.ledger.last_health = health
+                for entity in self.tts.values():
+                    if isinstance(entity, AssistLiveTTS):
+                        entity.async_update_voices()
+        self._health_due = self.clock() + (30 if self._healthy else 5)
+
     async def _maintenance(self, _: object) -> None:
         for satellite in self.entry.data["satellites"].values():
             self.ledger.current(satellite)
@@ -286,9 +311,7 @@ class Runtime:
                 ]
                 self._store_retry_due = self.clock() + max(delays, default=30)
         await self.ledger.flush()
-        if self.clock() >= self._health_due:
-            self._healthy = await self.client.health(timeout=0.2)
-            self._health_due = self.clock() + (30 if self._healthy else 5)
+        await self._refresh_health()
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
         registry = er.async_get(self.hass)
         forwarding_names = {
@@ -343,6 +366,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     try:
         await runtime.start()
+        await runtime._refresh_health()
 
         async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
             runtime.update_options(updated)

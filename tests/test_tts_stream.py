@@ -117,13 +117,14 @@ async def test_health_failure_uses_fallback(client, ledger, error):
     assert b"".join([part async for part in response.data_gen]) == b"fallback"
 
 
-async def test_absent_voice_uses_advertised_default(client, ledger):
+async def test_absent_voice_sends_none_not_fallback_default(client, ledger):
     capable(client)
     fallback = Fallback()
     fallback._attr_default_options = {"voice": "voice-1"}
+    seen = []
 
     async def synth(turn, parts, voice, *, text_positions=False):
-        assert voice == "voice-1"
+        seen.append(voice)
         yield TTSFormat("pcm_s16le", 16000, 1, 2)
         yield TTSAudio(b"\x01\x00")
         yield TTSSentenceEnd(0)
@@ -133,6 +134,7 @@ async def test_absent_voice_uses_advertised_default(client, ledger):
         TTSAudioRequest("en", {}, text())
     )
     assert b"".join([part async for part in response.data_gen])[44:] == b"\x01\x00"
+    assert seen == [None]
 
 
 async def test_two_byte_text_at_character_limit_is_accepted(client, ledger):

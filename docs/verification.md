@@ -2640,3 +2640,39 @@ The [native-function procedure](testing/native-functions.md) gives the matrix an
 Use its P0 report procedure after held-out replay, playback calibration, and the two server-path observations are complete.
 Device replay, calibration, physical observations, and P0 acceptance are `NOT RUN: hardware not available`.
 No baseline report contains invented measurements.
+
+## Server TTS voices and isolated fallback selection
+
+Date: 2026-10-29 (UTC).
+
+The client source pin is `b3b1e16e933fb5e7567c059f80e16faf68ef7d35`.
+The entity reads voices and the default voice from the latest health state.
+The initial health read runs before entity and pipeline setup. The scheduled health read updates the same state.
+
+Voice-list callbacks make no network request. Primary language tags select regional voices.
+Full tags select that region or a generic voice.
+
+Requests without a voice send no voice field through the pinned client.
+Fake-server tests give server audio for this path, with and without a health voice list.
+Explicit voices do not change. A refused voice starts fallback with that engine's selected or default voice.
+The repair gives the voice ID and TTS entity, without reply text.
+A satisfactory request with that voice or a subsequent voice list that includes it clears the repair.
+
+The options flow lists only fallback-engine voices. An empty selection uses the fallback default.
+Entries without the new option keep that default. Diagnostics give the server voice count and default voice ID, without reply text.
+
+Command: `uv run --locked pytest tests/ -q`.
+Result before this record: `1027 passed`.
+An isolated base-source run with the regression tests gave `22 failed, 1 passed`.
+The missing-voice assertion gave `assert ['voice-1'] == [None]` before the change.
+The default-option assertion gave `assert None == {'voice': 'server-us'}`.
+
+Four temporary source changes gave satisfactory syntax checks and each caused a behavior assertion failure:
+
+1. Forward the fallback voice to the server: the missing-voice assertion gave a failure.
+2. Remove the server default option: the default-option assertion gave a failure.
+3. Remove the refused-voice repair: the repair-count assertion gave a failure.
+4. Use the fallback voice list: the language-specific server-list assertions gave failures.
+
+The unchanged-source control gave `22 passed`.
+These checks use synthetic text and audio. They do not include a device trial or cloud request.

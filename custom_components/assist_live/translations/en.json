@@ -45,22 +45,28 @@
   "options": {
     "step": {
       "init": {
-        "title": "Destination checks and transcript storage",
+        "title": "Destination checks, transcript storage, and fallback voice",
         "description": "With local only on, HA uses server STT or TTS only when health reports local_only on and a local destination for that part. If a check is unsatisfactory, HA uses the fallback. HA does not use an older server without these fields. HA also checks fallback destinations and speaker events. These configured-destination checks are not a firewall. These checks do not include the conversation agent.",
         "data": {
           "local_only": "Use local destinations only",
           "record_transcripts": "Permit transcript storage on the server",
           "fallback_stt_local": "Record an unknown fallback STT destination as local",
-          "fallback_tts_local": "Record an unknown fallback TTS destination as local"
+          "fallback_tts_local": "Record an unknown fallback TTS destination as local",
+          "fallback_tts_voice": "Fallback TTS voice (empty uses its default)"
         }
       }
     },
     "error": {
       "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
-      "cloud_destination": "A cloud fallback cannot use the local-only option."
+      "cloud_destination": "A cloud fallback cannot use the local-only option.",
+      "invalid_fallback_voice": "Select a voice from the fallback engine or its default."
     }
   },
   "issues": {
+    "unknown_tts_voice": {
+      "title": "The server refused a TTS voice",
+      "description": "The server refused voice {voice} for {entity}. Select an available server voice in the pipeline or TTS request. The fallback uses its own voice. This issue clears after a satisfactory request with that voice or when a subsequent server voice list includes it."
+    },
     "speaker_destination": {
       "title": "The server reported a cloud speaker destination",
       "description": "HA received a cloud speaker result with the local-only option on. Check the server local_only setting. HA cannot stop the server request. The transcript did not change."

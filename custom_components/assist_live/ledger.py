@@ -264,7 +264,7 @@ class TurnLedger:
             return
         if event["stage"] == "speaker_result":
             # The server records the wire result without part/provider fields
-            # (server revision f6ac2d6, app.py:631). Storage omits an empty name
+            # (server revision b3b1e16, app.py). Storage omits an empty name
             # (store.py:63-68), but its destination can still be cloud.
             data = event.get("data", {})
             if (
