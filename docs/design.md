@@ -68,7 +68,10 @@ HA 2026.10.3 exports `async_create_default_pipeline` and `async_update_pipeline`
 The integration uses them to make and update the pipeline of each satellite, with the TTS voice.
 If HA refuses the creation, the config flow gives manual instructions.
 
-The planned config flow selects the server, token, satellites, providers, turn settings, voices, and fallback entities.
+The config flow selects the server, token, satellites, fallback entities, and the fallback voice.
+The server configuration selects the providers and the turn values.
+The TTS entity shows the voices that the server health response gives.
+
 The server uses a versioned WebSocket protocol with JSON control messages and binary audio frames.
 The first message selects the protocol version and functions.
 Client and server contract tests must agree on that protocol.
@@ -88,6 +91,30 @@ It records entity events and public satellite state.
 Diagnostics show protocol version, provider destinations, and fallback counts.
 A repair issue reports an unavailable server.
 A sensor for each satellite shows `end_decision` to `playback_start` time and its quality.
+
+### Satellite pre-roll
+
+The stock firmware starts the turn audio after `micro_wake_word` finds the wake word.
+A word that the user speaks directly after the wake word is not in the turn audio.
+The optional `pre_roll` setting of the ESPHome component keeps this audio:
+
+- A virtual microphone reads the physical microphone and keeps a history of the most recent audio in RAM.
+  The history has the left and right microphone signals, because HA selects one signal from the STT settings.
+- Only `voice_assistant` uses the virtual microphone.
+  `micro_wake_word`, the stop word, and the mute switches stay on the physical microphone.
+- In a wake-word turn, the virtual microphone first sends the history and then the live audio.
+  No sample is missing, and the component does not send a sample two times.
+- The history before the start of the turn audio has a maximum of 1000 ms.
+  A device measurement sets the length, so that the history starts at about the end of the wake word.
+- The component sends the history only when the HA connection accepts data.
+  The estimate of the buffered audio that the history adds stays below 256 ms.
+  The component counts and logs each audio frame that it removes.
+- A turn from a button, a follow-up, or an announcement gets no history.
+  A turn with the wake sound on gets no history, because the echo cancellation does not remove the wake sound.
+- When the user mutes the microphone, the component clears the history.
+  The history stays in RAM, and the component sends it only in a wake-word turn.
+- The `mic_open` event data gives `pre_roll_ms`, the length of the history in the turn audio.
+- The setting is off by default until the device test is satisfactory.
 
 ## End-of-turn and STT fallback
 
