@@ -105,6 +105,20 @@ The `safe` and `fast` settings keep all three conditions.
 P1 selects their values with human recordings.
 If `safe` does not satisfy the executable-prefix test, it uses only the maximum time without voice.
 
+The turn audio can start with the end of the wake word, and the user can pause before the command.
+Thus the turn detector uses a start guard:
+
+- It ignores the first 400 ms of turn audio when it finds the start of voice and measures the time without voice.
+  The STT provider continues to decode all audio, so a command that starts in that time stays in the transcript.
+- The command starts only after 250 ms of continuous voice that starts after the guard.
+  Before the command starts, the three conditions above and the maximum time without voice do not end the turn.
+- If no command starts in 5 s, the turn ends, and the server sends the transcript of all the audio.
+  If voice continues at 5 s, the server waits until that voice becomes a command or stops.
+- The guard applies to all turns.
+  A turn without a wake word, for example a follow-up turn, waits a maximum of 400 ms more before its first end decision.
+
+P1 sets these three values with human recordings.
+
 The integration checks server health with a 200 ms limit at the start of each run.
 If unavailable, it owns turn termination with `pymicro-vad` and 0.7 s without voice.
 The pipeline VAD setting does not control this fallback path.
