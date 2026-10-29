@@ -97,6 +97,41 @@ def test_ci_rejects_previous_current_member(tmp_path):
     assert main(["--workflow", str(path)]) == 1
 
 
+@pytest.mark.parametrize("carrier", ["plugin", "task_description", "task_command"])
+def test_ci_rejects_stale_current_carriers(tmp_path, monkeypatch, carrier):
+    import shutil
+
+    from tools.check_ci import check_jobs
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        ".github/workflows/ci.yml",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    assert check_jobs(tmp_path / ".github/workflows/ci.yml")
+    if carrier == "plugin":
+        target = tmp_path / "pyproject.toml"
+        target.write_text(target.read_text().replace("0.13.375", "0.13.374"))
+        failure = "current plugin pyproject.toml"
+    else:
+        target = tmp_path / "Taskfile.yml"
+        taskfile = yaml.safe_load(target.read_text())
+        task = taskfile["tasks"]["check"]
+        if carrier == "task_description":
+            task["desc"] = task["desc"].replace("2026.10.4", "2026.10.3")
+        else:
+            task["cmds"].append("uv run --with homeassistant==2026.10.3 pytest")
+        target.write_text(yaml.safe_dump(taskfile))
+        failure = "current HA Taskfile.yml"
+    with pytest.raises(ValueError, match=failure):
+        check_jobs(tmp_path / ".github/workflows/ci.yml")
+
+
 def test_ci_has_required_jobs():
     from tools.check_ci import check_jobs
 

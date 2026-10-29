@@ -2751,3 +2751,23 @@ A scratch workflow kept the previous current HA version with the new test-packag
 The checker gave `FAIL CI HA matrix` and exit 1. The unchanged workflow gave `PASS CI`.
 The regression test writes only the scratch workflow, not the repository workflow.
 These checks do not include a device trial, cloud request, commit, or publication.
+
+### Current-version checks in project and task files
+
+Date: 2026-10-30 (UTC).
+
+The CI checker compares the development test-package pin with the current matrix member.
+It also checks the HA versions in the `check` task description and string commands.
+The description must state an HA version. Each stated version must agree with the current matrix member.
+The minimum task keeps its different HA version without a change.
+
+Three scratch mutations keep the previous plugin pin, state the previous HA version in the task description, or add the previous HA command pin.
+On the committed checker, the tests gave `3 failed` because none of those mutations caused a refusal.
+After the check, the CI test file gave `58 passed`.
+Each mutation causes a named failure for its project or task file.
+Each test first checks the unchanged scratch files, then changes only its selected field.
+
+This check does not read README and design prose.
+Their tested-version sentences have no structured version fields.
+A sentence-specific check can change with wording, not only with versions.
+The checker reads TOML and YAML fields. It checks versions after `HA` and `homeassistant==` in the current task.

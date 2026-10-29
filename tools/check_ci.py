@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -62,6 +63,14 @@ def check_jobs(path: str | Path) -> set[str]:
     workflow = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     failures = []
+    current = next(member for member in HA_MATRIX if member["member"] == "current")
+    plugin_pins = [
+        requirement
+        for requirement in project["dependency-groups"]["dev"]
+        if requirement.startswith("pytest-homeassistant-custom-component")
+    ]
+    if plugin_pins != [f"pytest-homeassistant-custom-component=={current['plugin']}"]:
+        failures.append("current plugin pyproject.toml")
     if set(jobs) != REQUIRED_JOBS:
         failures.append("required jobs")
     complete = jobs.get("ci-complete", {})
@@ -137,6 +146,21 @@ def check_jobs(path: str | Path) -> set[str]:
     ] != [client_requirement]:
         failures.append("client pin .github/workflows/ci.yml")
     taskfile = yaml.safe_load((root / "Taskfile.yml").read_text(encoding="utf-8"))
+    current_task = taskfile["tasks"]["check"]
+    description = current_task.get("desc", "")
+    version_pattern = r"\b(?:HA\s+|homeassistant==)(\d{4}\.\d+\.\d+)\b"
+    description_versions = re.findall(version_pattern, description)
+    command_versions = [
+        version
+        for cmd in current_task.get("cmds", [])
+        if isinstance(cmd, str)
+        for version in re.findall(version_pattern, cmd)
+    ]
+    if not description_versions or any(
+        version != current["ha"]
+        for version in [*description_versions, *command_versions]
+    ):
+        failures.append("current HA Taskfile.yml")
     task_pins = [
         part
         for task in taskfile["tasks"].values()
