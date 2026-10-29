@@ -2771,3 +2771,28 @@ This check does not read README and design prose.
 Their tested-version sentences have no structured version fields.
 A sentence-specific check can change with wording, not only with versions.
 The checker reads TOML and YAML fields. It checks versions after `HA` and `homeassistant==` in the current task.
+
+## Public documentation checks
+
+Date: 2026-10-29 (UTC).
+
+The public documents give the integration entity types, fallback voice rules, client publication requirement, and current CI commands.
+The design keeps the corrected command-start guard and identifies pre-roll as a firmware design that awaits review, off by default.
+The Deepgram record distinguishes the 90-day metadata retrieval window from longer summarized usage storage.
+The design distinguishes Apache-2.0 integration and server code from GPL-3.0-or-later firmware component code.
+Dated research findings and earlier verification entries keep their historical scope.
+No device result or release claim follows from this documentation check.
+
+The documentation contract checks ran from the repository root:
+
+```sh
+uv run --locked pytest tests/test_package.py tests/test_public_tree.py tests/test_pipeline_contract.py tests/test_marketplace.py tests/test_native_matrix.py tests/test_device_replay.py tests/test_test_environment.py -q
+```
+
+Result: `296 passed`.
+
+The full checks for these documents use `task check`, `task ha-minimum`, `task package-check`, and `task hassfest`.
+The current and minimum HA test runs each gave `1038 passed`. The packaging check gave `PASS packaging`.
+Hassfest gave `Invalid integrations: 0`.
+They also use the ASD-STE100 checker, the public-tree checker with an external private denylist, and `git diff --check`.
+These checks do not measure device playback or satisfy a P0 or P1 acceptance gate.

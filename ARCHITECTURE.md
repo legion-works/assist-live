@@ -2,19 +2,19 @@
 
 ## Current boundary
 
-The `assist_live` package has no import side effects.
-Its config flow aborts with `bootstrap_only` and does not make a config entry.
-No runtime service, entity, platform, client, or app is part of this bootstrap.
+The config flow connects satellite devices and pipeline selectors to provisioned server keys.
+Config-entry setup starts the client, turn ledger, event subscriptions, and STT, TTS, and sensor platforms.
+The HA app is in the server repository, not this integration package.
 
-## Intended components
+## Components
 
 The integration connects HA Assist to the server in a different repository through a versioned WebSocket protocol.
 Each satellite has its own STT entity, TTS entity, and pipeline.
-The integration keeps the turn ledger and the late-result service.
+The integration keeps the turn ledger. P2 will add the late-result service.
 The server supplies turn detection, voice providers, and timing storage.
 The ESPHome component sends timing events without replacing the native voice assistant.
 
-See [the frozen design](docs/design.md) for limits, fallback behavior, and phase gates.
+See [the design](docs/design.md) for limits, fallback behavior, and phase gates.
 
 ## Public data boundary
 

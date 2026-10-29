@@ -14,11 +14,10 @@ Run these commands from the repository root:
 
 ```sh
 uv sync --locked
-uv run pytest tests/test_package.py tests/test_public_tree.py -q
-uv run python tools/check_bootstrap.py
-uvx ruff format --check .
-uvx ruff check .
 task check
+task ha-minimum
+task package-check
+task hassfest
 ```
 
 Without `PRIVATE_DENYLIST`, `task check` prints `NOT CHECKED private denylist` and runs all other checks.

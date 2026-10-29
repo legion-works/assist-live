@@ -3,8 +3,9 @@
 ## Status and scope
 
 This is the public design for an experimental project. No release is available.
-The bootstrap package does not supply the functions below.
-P0 and P1 have no results at this time.
+The integration supplies forwarding entities, fallback, turn records, and latency sensors.
+The server supplies audio gateways, providers, and the turn detector. The ESPHome component sends authenticated timing events through UDP or WebSocket.
+No P0 or P1 acceptance result is available in this repository.
 
 The integration adds to the native Home Assistant (HA) Assist pipeline.
 It does not replace the pipeline or supply a conversation agent in version 1.
@@ -39,7 +40,7 @@ Contract tests pin their import paths and the fields that assist-live uses on ea
 |---|---|---|
 | `assist-live` | HA integration, HACS metadata, project documentation | Apache-2.0 |
 | `assist-live-server` | Server, PyPI client, containers, HA app | Apache-2.0 |
-| `assist-live-esphome` | ESPHome component and example configuration | GPL-3.0 |
+| `assist-live-esphome` | ESPHome component and example configuration | GPL-3.0-or-later |
 
 The HA app must not go into the HACS repository.
 The project selects `2026.10.1` as the HA minimum.
@@ -49,12 +50,12 @@ These versions are design targets, not a compatibility claim.
 
 The domain is `assist_live`.
 The project selects `integration_type: service` and `iot_class: local_push` for the manifest.
-The HA minimum and those manifest values are project design decisions, not requirements from the frozen spec.
-The initial manifest has `requirements: []` because the client has no PyPI release.
+The HA minimum and those manifest values are project design decisions.
+The manifest pins `assist-live-client==0.0.0`. That client has no PyPI release.
 
 The release manifest must pin `assist-live-client==<exact version>`.
 That version must be on PyPI before the integration release.
-No bootstrap test imports or installs the unpublished client.
+Local tests and CI install the client from the Git revision in `uv.lock`.
 
 ## Components and turn flow
 
@@ -66,7 +67,7 @@ A repair issue reports two satellites that select the same assist-live pipeline.
 
 HA 2026.10.3 exports `async_create_default_pipeline` and `async_update_pipeline` in `assist_pipeline`.
 The integration uses them to make and update the pipeline of each satellite, with the TTS voice.
-If HA refuses the creation, the config flow gives manual instructions.
+If HA refuses creation, use the manual instructions in [setup](setup.md#pipelines-and-voices).
 
 The config flow selects the server, token, satellites, fallback entities, and the fallback voice.
 The server configuration selects the providers and the turn values.
@@ -93,6 +94,8 @@ A repair issue reports an unavailable server.
 A sensor for each satellite shows `end_decision` to `playback_start` time and its quality.
 
 ### Satellite pre-roll
+
+This firmware design awaits review. The setting is off by default, not on in a release.
 
 The stock firmware starts the turn audio after `micro_wake_word` finds the wake word.
 A word that the user speaks directly after the wake word is not in the turn audio.
@@ -123,8 +126,8 @@ HA reads the value two times in a run, so server health must not change it.
 The server uses Silero VAD, Smart Turn v3.2, and a check for words that cannot end a command.
 The server ends a turn before the maximum time only with all three conditions:
 
-- The time without voice is more than the minimum (initial default: 400 ms).
-- The Smart Turn score is more than its limit.
+- The time without voice is equal to or more than the minimum (initial default: 400 ms).
+- The Smart Turn score is equal to or more than its limit (initial default: 0.8).
 - The transcript does not end with words that cannot complete a command.
 
 If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
@@ -161,7 +164,7 @@ It does not start fallback after it gets a complete transcript.
 Fallback has a 20 s limit from turn start. A second failure gives an empty result and records `stt_failed`.
 It does not retry or start device control.
 
-Configuration checks the fallback language, format, codec, sample rate, and `channels` count.
+The STT request checks the fallback language, format, codec, sample rate, bit depth, and `channel` count.
 An assist-live entity cannot be its own fallback.
 
 ## TTS and fallback
@@ -186,7 +189,9 @@ Deepgram Nova-3 live is the cloud STT candidate.
 
 Each request must set `mip_opt_out=true`.
 
-The provider keeps request metadata for 90 days.
+With `mip_opt_out=true`, Deepgram keeps audio and transcripts only for request processing, not after the response.
+Request metadata stays retrievable for 90 days. Summarized usage stays longer.
+See the [retention source record](https://github.com/legion-works/assist-live-server/blob/a888c3b5cc34e14f3ee9efb0bf76156df908de35/docs/providers/cloud.md#deepgram-retention-and-data-use).
 
 ElevenLabs `eleven_flash_v2_5` is the planned cloud TTS default.
 Its WebSocket path uses a minimum 50-character chunk schedule and an end-of-reply flush.
@@ -199,7 +204,8 @@ Full-file engines are fallback only.
 
 A license does not stop the selection of a model, voice, runtime, or library.
 Each component has a record with its pinned source, SHA-256, license, and attribution.
-The project code has the Apache-2.0 license.
+The integration and server code have the Apache-2.0 license.
+The ESPHome component code has the GPL-3.0-or-later license.
 Third-party components keep their own licenses, and `THIRD_PARTY_NOTICES.md` lists them.
 The Silero VAD repository owner states that the v6.2.3 model file has the MIT license.
 
@@ -304,7 +310,7 @@ Each rate has its denominator and 95% confidence interval.
 
 | Phase | Exit gate |
 |---|---|
-| P0: measurement | A minimum of 95% of replay voice turns have each event from wake to playback end. Calibrate playback proxies against an external microphone on a minimum of 50 replies. Report p50 and p90 error and baseline time for each step. A proxy is accepted when its p90 error plus the p90 of its measurement uncertainty is at most 100 ms. Replay includes device wake and timing events, not only a pipeline WebSocket call. |
+| P0: measurement | A minimum of 95% of replay voice turns have each event from wake to playback end. Calibrate playback proxies against an external microphone on a minimum of 50 replies. Report p50 and p90 error and baseline time for each step. Accept a proxy only when its p90 error plus the p90 of its measurement uncertainty is at most 100 ms. Replay includes device wake and timing events, not only a pipeline WebSocket call. |
 | P1: fast turns | On the same hardware, each reply group has a minimum of 40% less p50 last-voice-to-playback time than P0. Pause cuts are at most 3%. The high end of the 95% confidence interval is at most 6%. Correct transcript and intent are a minimum of 95%. Word error rate increases at most one point from P0. The safe setting has 0 executable-prefix cuts and causes 0 incorrect device operations. |
 | P1: faults | Test 10 server stops before a turn, during voice, during a pause, and after the complete transcript. Each gives the correct transcript or an empty result with no device operation. |
 | P2: conversation | Test 10 faults of each type. Types: restart in `queued`, restart in `delivering`, and restart after `notify`. Also test wake 0 to 500 ms before announce, busy satellite, server restart, `notify` failure, and stop word. Each test gives the specified states and no second announcement. The `notify` call starts in less than 5 s after expiry. Report commands stopped by announcements. |
@@ -320,7 +326,7 @@ It must check HA Marketplace rules on a released HA version before an acceptance
 Model cost on target hardware stays open.
 P1 must compare streaming STT candidates with Parakeet on human recordings.
 
-CI must subsequently include lint, type checks, HA tests, hassfest, HACS validation, protocol tests, and secret checks.
+Integration CI runs lint, type checks, HA tests, hassfest, HACS validation, and secret checks.
 ESPHome must have a compile check in its repository.
 A compiled firmware release must have a GPL source-obligation review.
 

@@ -2,6 +2,8 @@
 
 Date: 2026-10-24.
 
+This is a dated research record. See [setup](../setup.md) for current integration behavior.
+
 Decision: automatic setup can use the public in-process exports in HA `2026.10.3`.
 The public-interface criterion is the component `__all__` export.
 This criterion does not include the TTS fallback helper in the public interface.
@@ -194,18 +196,18 @@ Do not keep the token file in the repository. Do not put tokens in command argum
 
 Access date for all sources: 2026-10-24.
 The installed HA `2026.10.3` wheel supplied the source findings and line numbers.
-Developer documentation is not version-pinned. The source URLs below are version-pinned.
+Developer documentation is not version-pinned. The source URLs below pin the commit for HA `2026.10.3`.
 
-- [Pipeline exports, lines 48-69](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/__init__.py#L48-L69).
-- [Pipeline language resolver, lines 87-187](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/pipeline.py#L87-L187).
-- [Creation and update, lines 204-323](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/pipeline.py#L204-L323).
-- [Storage side effects, lines 341-421](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/pipeline.py#L341-L421).
-- [WebSocket fields, lines 70-84](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/pipeline.py#L70-L84).
-- [WebSocket item IDs and complete update schema, lines 584-658](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/helpers/collection.py#L584-L658).
-- [TTS voice interface, lines 36-103](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/tts/entity.py#L36-L103).
-- [Streaming request options, lines 1135-1137](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/tts/__init__.py#L1135-L1137).
-- [Pipeline voice option, lines 921-940](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/default_pipeline.py#L921-L940).
-- [Satellite name-to-ID resolution, lines 603-621](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_satellite/entity.py#L603-L621).
+- [Pipeline exports, lines 48-69](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/__init__.py#L48-L69).
+- [Pipeline language resolver, lines 87-187](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/pipeline.py#L87-L187).
+- [Creation and update, lines 204-323](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/pipeline.py#L204-L323).
+- [Storage side effects, lines 341-421](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/pipeline.py#L341-L421).
+- [WebSocket fields, lines 70-84](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/pipeline.py#L70-L84).
+- [WebSocket item IDs and complete update schema, lines 584-658](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/helpers/collection.py#L584-L658).
+- [TTS voice interface, lines 36-103](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/entity.py#L36-L103).
+- [Streaming request options, lines 1135-1137](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/__init__.py#L1135-L1137).
+- [Pipeline voice option, lines 921-940](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/default_pipeline.py#L921-L940).
+- [Satellite name-to-ID resolution, lines 603-621](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_satellite/entity.py#L603-L621).
 - [HA pipeline developer documentation](https://developers.home-assistant.io/docs/voice/pipelines/).
 - [HA satellite developer documentation](https://developers.home-assistant.io/docs/core/entity/assist-satellite/).
 - [TTS developer documentation](https://developers.home-assistant.io/docs/core/entity/tts/).

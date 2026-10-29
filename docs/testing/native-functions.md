@@ -1,6 +1,6 @@
 # Native voice functions and reports
 
-Device replay and physical observations are `NOT RUN: hardware not available`.
+Device replay and physical observations stay `NOT RUN` without observation records.
 No baseline or native-device report is available at this time.
 The [design](../design.md#phases-and-gates) gives the acceptance rules.
 
@@ -133,4 +133,4 @@ The alternative must have `empty_transcript: true` and an explicit empty `operat
 A missing trial, record that is not complete, incorrect result, or native-matrix failure causes a `--check` failure.
 CI and publication checks stay isolated from these measurement results.
 
-Hardware replay, calibration, native-device observations, and P1 acceptance stay `NOT RUN: hardware not available`.
+Hardware replay, calibration, native-device observations, and P1 acceptance stay `NOT RUN` without observation records.

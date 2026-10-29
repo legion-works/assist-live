@@ -56,4 +56,4 @@ Do not use an NC or SA license.
 Pin each source URL, revision, audio hash, and necessary attribution in the corpus records.
 Public dataset records use `consent_id: null`.
 They do not claim volunteer consent.
-This repository contains no imported dataset or human audio.
+This repository contains imported dataset records, but no human audio.

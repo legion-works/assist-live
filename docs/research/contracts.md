@@ -1,5 +1,7 @@
 # Upstream contracts
 
+This is a 2026-10-24 research record. See [configuration](../configuration.md) for current integration behavior.
+
 ## Design versions
 
 The frozen design targets HA `2026.10.x`, with stock `2026.10.3` as the baseline runtime.
@@ -18,10 +20,10 @@ These are design facts and prototype findings, not bootstrap compatibility resul
 
 Upstream source:
 
-- [STT entity and SpeechAudioProcessing](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/stt/__init__.py)
-- [Default pipeline](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_pipeline/default_pipeline.py)
-- [TTS entity](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/tts/__init__.py)
-- [TTS helper](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/tts/helper.py)
+- [STT entity and SpeechAudioProcessing](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/stt/__init__.py)
+- [Default pipeline](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_pipeline/default_pipeline.py)
+- [TTS entity](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/__init__.py)
+- [TTS helper](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/helper.py)
 
 The only non-public HA interface in the design is `tts.helper.get_engine_instance`.
 A subsequent contract test must examine its behavior and signature on each selected HA version.
@@ -30,12 +32,12 @@ The bootstrap does not call it or claim to supply that test.
 ## Satellite playback
 
 HA `assist_satellite.announce` and `ask_question` cancel an active pipeline before playback.
-See [the satellite entity](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/assist_satellite/entity.py).
+See [the satellite entity](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/assist_satellite/entity.py).
 
 ESPHome `voice_assistant` sends `AnnounceFinished` from a 2 s stall timer.
 Playback restarts that timer.
 If audio does not start in 2 s, HA can receive an incorrect end signal.
-See [the ESPHome implementation](https://github.com/esphome/esphome/blob/2026.10.0/esphome/components/voice_assistant/voice_assistant.cpp).
+See [the ESPHome 2026.10.0 implementation](https://github.com/esphome/esphome/blob/704551a6c93c29a311802f7ee97d67a9e9bce718/esphome/components/voice_assistant/voice_assistant.cpp).
 The end of the service call and `idle` must not give the late-result service proof of playback.
 
 ## Client release contract

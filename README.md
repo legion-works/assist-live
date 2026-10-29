@@ -2,9 +2,9 @@
 
 Realtime voice work on the native Home Assistant Assist pipeline.
 
-**Experimental. No release is available.** This repository contains the package boundary and design documents only.
-It does not supply STT entities, TTS entities, or a working voice pipeline.
-The config flow refuses setup until the runtime is available.
+**Experimental. No release is available.** The integration supplies STT, TTS, and latency sensor entities for each satellite.
+It forwards voice through the server and uses standard HA engines for fallback.
+A published client package is necessary for installation through HA. See [setup](docs/setup.md).
 
 ## Purpose
 
@@ -20,11 +20,11 @@ Run these commands from the repository root:
 
 ```sh
 uv sync --locked
-uv run pytest tests/test_package.py tests/test_public_tree.py -q
-uv run python tools/check_bootstrap.py
+task check
+task package-check
 ```
 
-Do not install this bootstrap package in a live HA instance.
+Use an isolated HA test instance, not a live household instance.
 HACS metadata gives the intended package layout, not an available release.
 The server and the HA app belong in the different `assist-live-server` repository.
 

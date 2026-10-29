@@ -42,8 +42,9 @@ It does not change an unrelated pipeline or the preferred pipeline.
 4. Select that pipeline in the pipeline selector of the same satellite.
 5. Do these steps again with a different pipeline for each satellite.
 
-The TTS entity supplies the standard engine voices as HA `Voice` objects.
-The selected pipeline voice goes unchanged to the server and fallback engine.
+The TTS entity supplies server voices as HA `Voice` objects.
+The selected pipeline voice goes unchanged to the server.
+Select `fallback_tts_voice` independently in the integration options, or use the fallback engine's default voice.
 Do not select one assist-live pipeline on two satellites.
 A repair issue shows when two selectors use the same owned pipeline.
 
@@ -150,4 +151,4 @@ The 10 s interval includes the parent-turn window and the server's 5 s reorder w
 The integration also removes the connected IDs and pending markers of those records.
 The server, not the local cache, keeps the historical records.
 
-Device trials have not run. No test hardware is available at this time.
+No P0 or P1 acceptance result is available in this repository. These procedures are not device-trial results.

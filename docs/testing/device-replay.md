@@ -1,7 +1,7 @@
 # Device replay and playback calibration
 
-The device trial, smoke run, and 50-reply calibration are `NOT RUN: hardware not available`.
-No calibration report contains hardware results at this time.
+The device trial, smoke run, and 50-reply calibration have no result record in this repository.
+The procedures below are not measurement results. Unobserved trials stay `NOT RUN`.
 The [design](../design.md#phases-and-gates) gives the latency gates.
 Synthetic tests check the code, not the device or its acoustic response.
 
@@ -197,5 +197,5 @@ A rejected proxy keeps latency gates blocked and makes `--check` give a failure.
 The tool prints `PASS calibration n>=50` only after satisfactory count and proxy checks.
 Fewer than 50 replies cause `CALIBRATION_TOO_FEW_REPLIES` and no count-success line.
 
-The hardware trial, smoke run, and 50-reply calibration stay `NOT RUN: hardware not available`.
+The hardware trial, smoke run, and 50-reply calibration stay `NOT RUN` without observation records.
 Do not make `docs/reports/p0-calibration.json` before those measurements are available.

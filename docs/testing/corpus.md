@@ -205,7 +205,7 @@ Timer-only results do not show precision for other HA domains.
 The source timer slots map directly to `hours`, `minutes`, and `seconds`, with `0` values unchanged.
 The pinned `home-assistant-intents==2026.10.6` package gives these slots in `home_assistant_intents/intents.json`.
 
-Its upstream source is [`intents.yaml`](https://github.com/home-assistant/intents/blob/main/intents.yaml).
+Its upstream source is [`intents.yaml` at the package release commit](https://github.com/OHF-Voice/intents/blob/997099a1cd9c7146b15a439806d20f0a877a1181/intents.yaml).
 `tools/corpus.py` sets the intent-name set to the 42 names in that package.
 It rejects source intent names such as `SetTimer`.
 

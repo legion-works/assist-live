@@ -3,11 +3,11 @@
 ## Status
 
 The project is experimental and has no production release.
-Do not use this bootstrap package in a live HA instance.
+Use an isolated HA test instance, not a live household instance.
 
 ## Report a problem
 
-Use GitHub private vulnerability reporting when the public repository is available.
+Use GitHub private vulnerability reporting for this repository.
 If private reporting is not available, use a private maintainer contact on the organization page.
 Do not open a public issue with credentials, audio, transcripts, or personal data.
 Give the version with the problem and synthetic steps that show it.
