@@ -135,14 +135,14 @@ If `safe` does not satisfy the executable-prefix test, it uses only the maximum 
 The turn audio can start with the end of the wake word, and the user can pause before the command.
 Thus the turn detector uses a start guard:
 
-- It ignores the first 400 ms of turn audio when it finds the start of voice and measures the time without voice.
-  The STT provider continues to decode all audio, so a command that starts in that time stays in the transcript.
-- The command starts only after 250 ms of continuous voice that starts after the guard.
-  Before the command starts, the three conditions above and the maximum time without voice do not end the turn.
+- The command starts with the first voice run that is 250 ms or longer and that ends after 400 ms of turn audio.
+  A voice run that ends in the first 400 ms is the end of the wake word, and the turn detector ignores it.
+  The STT provider continues to decode all audio.
+- Before the command starts, the three conditions above and the maximum time without voice do not end the turn.
+  The time without voice starts at the command start.
 - If no command starts in 5 s, the turn ends, and the server sends the transcript of all the audio.
   If voice continues at 5 s, the server waits until that voice becomes a command or stops.
-- The guard applies to all turns.
-  A turn without a wake word, for example a follow-up turn, waits a maximum of 400 ms more before its first end decision.
+- The guard applies to all turns, also to a follow-up turn.
 
 P1 sets these three values with human recordings.
 
