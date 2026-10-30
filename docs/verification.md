@@ -2796,3 +2796,55 @@ The current and minimum HA test runs each gave `1038 passed`. The packaging chec
 Hassfest gave `Invalid integrations: 0`.
 They also use the ASD-STE100 checker, the public-tree checker with an external private denylist, and `git diff --check`.
 These checks do not measure device playback or satisfy a P0 or P1 acceptance gate.
+
+## Turn-audio history in replay reports
+
+Date: 2026-10-30 (UTC).
+
+The report uses the microphone-open timestamp minus `data.pre_roll_ms` for the start of turn audio.
+The `mic_to_speech` step uses this audio start and keeps the event quality and uncertainty.
+The `wake_to_mic` step keeps the actual microphone-open timestamp.
+Replay waits for that event before command playback and keeps the history length in exported events.
+Acoustic command times come from external microphone capture, not this event.
+
+A missing history field means 0. Other values must be integers from 0 to 1000, only on `mic_open`.
+Invalid history causes refusal, also on trials that are not complete.
+Native matrix checks do not calculate the audio start.
+The integration ledger keeps event timestamps and does not calculate the audio start.
+The public sensor measures end-decision to playback-start latency and stays unchanged.
+
+The initial regression command was:
+
+```sh
+uv run --locked pytest tests/test_report.py tests/test_device_replay.py -q -k 'history or audio_start'
+```
+
+Result before the change: `20 failed, 6 passed`.
+History turns gave `NEGATIVE_TIMING_STEP: mic_to_speech`.
+Invalid history values did not cause refusal.
+
+The report and replay checks after the change were:
+
+```sh
+uv run --locked pytest tests/test_report.py tests/test_device_replay.py -q
+```
+
+Result: `215 passed`.
+Tests include 300 ms and 1000 ms of history, 0, and a missing field.
+A scratch mutation that ignores history gave `2 failed, 2 passed`.
+
+The full checks use these commands with the external private denylist:
+
+```sh
+task check
+task ha-minimum
+task package-check
+task hassfest
+git diff --check
+```
+
+The current and minimum HA test runs each gave `1065 passed`.
+The packaging check gave `PASS packaging`. Hassfest gave `Invalid integrations: 0`.
+The canonical public-tree privacy check gave `PASS public data matches=0`.
+The documents also use the ASD-STE100 checker.
+These synthetic checks do not measure device playback or satisfy a P0 or P1 acceptance gate.

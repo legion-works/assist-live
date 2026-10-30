@@ -121,6 +121,12 @@ def test_schema_accepts_complete_sample_and_explicit_empty_log():
     assert "INCOMPLETE_OPERATION_LOG" in sample_errors(row)
 
 
+def test_history_on_another_stage_is_invalid_evidence():
+    row = sample()
+    row["wake_detected"]["data"]["pre_roll_ms"] = 300
+    assert "INVALID_PRE_ROLL_MS" in sample_errors(row)
+
+
 @pytest.mark.parametrize("field", list(sample()))
 def test_schema_refuses_missing_fields(field):
     row = sample()
@@ -432,6 +438,52 @@ async def test_hash_mismatch_stops_before_any_playback(tmp_path):
             FakeEvents(),
         )
     assert output.played == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history", [None, 0, 300, 1000])
+async def test_runner_keeps_history_and_waits_for_microphone_open(tmp_path, history):
+    label, recording = bundle(tmp_path)
+    source = FakeEvents()
+    if history is not None:
+        source.events[1]["data"]["pre_roll_ms"] = history
+
+    class ReadyOutput(FakeOutput):
+        async def play(self, path):
+            if path.name == "command.wav":
+                assert next(source.queue)["stage"] == "playback_start"
+                source.queue = iter(source.events[2:])
+            await super().play(path)
+
+    row = await replay_sample(
+        label,
+        tmp_path,
+        tmp_path / "wake.wav",
+        ReadyOutput(),
+        FakeCapture(recording),
+        source,
+    )
+    assert row["mic_open"] == source.events[1]
+    assert row["mic_open"]["data"] == (
+        {} if history is None else {"pre_roll_ms": history}
+    )
+    assert row["alignment"]["reply_start_utc_ns"] == 10_900_000_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history", [-1, 1001, True, 1.5, "300", None])
+async def test_runner_refuses_invalid_history_before_command(tmp_path, history):
+    label, recording = bundle(tmp_path)
+    source = FakeEvents()
+    source.events[1]["data"]["pre_roll_ms"] = history
+    output, capture = FakeOutput(), FakeCapture(recording)
+    with pytest.raises(ReplayError, match="INVALID_PRE_ROLL_MS"):
+        await replay_sample(
+            label, tmp_path, tmp_path / "wake.wav", output, capture, source
+        )
+    assert output.played == ["wake.wav"]
+    assert not capture.started
+    assert capture.aborted and source.closed
 
 
 @pytest.mark.asyncio

@@ -104,6 +104,18 @@ An unavailable baseline end-decision event uses an explicitly named `stt_final` 
 Other missing internal events stay missing, with no invented timing value.
 Acoustic values keep their estimated quality and measurement uncertainty.
 
+The `mic_to_speech` step starts at the turn-audio start, not the microphone-open event.
+Its start is `mic_open.t_utc_ns - data.pre_roll_ms * 1000000` in nanoseconds.
+This includes voice in the audio history before the microphone-open event.
+The step keeps the microphone event's quality and uncertainty.
+For nonzero history, its method is `mic_open minus pre_roll_ms`.
+
+A missing history field means 0. Invalid history causes refusal before statistics.
+
+The `wake_to_mic` step ends at the actual microphone-open event.
+Native matrix observations do not calculate audio-start times.
+The integration latency sensor uses end-decision to playback-start time and stays unchanged.
+
 ## P1 report
 
 Replay `safe` and `fast` against the same baseline configuration and calibration revision.

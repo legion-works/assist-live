@@ -103,6 +103,22 @@ def finite(value: object) -> TypeGuard[int | float]:
     )
 
 
+def pre_roll_ms(event: Row) -> int:
+    data = event.get("data", {})
+    if not isinstance(data, dict):
+        raise ReplayError("INVALID_EVENT")
+    if "pre_roll_ms" not in data:
+        return 0
+    value = data["pre_roll_ms"]
+    if (
+        event.get("stage") != "mic_open"
+        or type(value) is not int
+        or not 0 <= value <= 1000
+    ):
+        raise ReplayError("INVALID_PRE_ROLL_MS")
+    return value
+
+
 def valid_server_clock(record: object) -> TypeGuard[Row]:
     return (
         isinstance(record, dict)
@@ -187,6 +203,13 @@ def sample_errors(
     row: Row, *, acceptance: bool = True, allow_incomplete: bool = False
 ) -> list[str]:
     errors = []
+    if isinstance(row.get("events"), list):
+        for event in row["events"]:
+            if isinstance(event, dict):
+                try:
+                    pre_roll_ms(event)
+                except ReplayError as error:
+                    errors.append(str(error))
     if "complete" in row and type(row["complete"]) is not bool:
         errors.append("INVALID_COMPLETION_FLAG")
     if row.get("complete") is True and row.get("failures"):
@@ -708,6 +731,8 @@ class ClientEvents:
 
 
 def check_events(events: list[Row], turn_id: str) -> None:
+    for event in events:
+        pre_roll_ms(event)
     if any(
         event.get("stage") == "unmatched" or event.get("turn_id") != turn_id
         for event in events

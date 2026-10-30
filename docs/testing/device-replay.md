@@ -101,6 +101,20 @@ It plays the wake word, waits for one device wake event and microphone-open even
 Duplicate wakes, unmatched turns, and missing device events cause an unsatisfactory sample result.
 Timing records come through the pinned client's public subscription, turn query, and export methods.
 
+### Turn audio history
+
+The `mic_open` event can include `data.pre_roll_ms`, an integer from 0 to 1000.
+A missing field means 0 for older firmware.
+The runner refuses other values as invalid test records, without a limit adjustment.
+It keeps the field in the event data and the exported microphone-open record.
+
+Turn audio starts `pre_roll_ms` before the `mic_open` timestamp.
+This audio start can be before the wake event.
+The runner waits for the actual microphone-open event before command playback.
+History is not proof that the device can receive a new command.
+The external microphone uses the captured command to align audio, not the microphone-open timestamp.
+The [report](native-functions.md#p0-report) uses the audio start for voice latency.
+
 Only smoke mode accepts `--limit`.
 An unfrozen smoke run prints `NOT FROZEN corpus` and sets `frozen: false`.
 All smoke rows have `mode: smoke`, also with a frozen corpus.

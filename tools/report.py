@@ -16,6 +16,7 @@ from tools.device_replay import (
     RUN_FIELDS,
     ReplayError,
     frozen_corpus,
+    pre_roll_ms,
     sample_errors,
 )
 from tools.native_matrix import validate_native_matrix
@@ -25,7 +26,7 @@ Row = dict[str, Any]
 REQUIRED = RUN_FIELDS
 STEPS = {
     "wake_to_mic": ("wake_detected", "mic_open"),
-    "mic_to_speech": ("mic_open", "speech_start"),
+    "mic_to_speech": ("turn_audio_start", "speech_start"),
     "speech_to_candidate": ("speech_start", "end_candidate"),
     "candidate_to_decision": ("end_candidate", "end_decision"),
     "decision_to_final": ("end_decision", "stt_final"),
@@ -156,6 +157,16 @@ def validate_rows(rows: list[Row], labels: list[Row], phase: str) -> None:
 
 
 def timing(row: Row, stage: str) -> Row | None:
+    if stage == "turn_audio_start":
+        mic = timing(row, "mic_open")
+        if mic is None:
+            return None
+        history = pre_roll_ms(mic)
+        return {
+            **mic,
+            "t_utc_ns": mic["t_utc_ns"] - history * 1_000_000,
+            "method": "mic_open minus pre_roll_ms" if history else "recorded-event",
+        }
     if stage == "last_voice":
         if row["alignment"] is None:
             return None

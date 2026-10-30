@@ -75,6 +75,45 @@ def calibration():
     }
 
 
+@pytest.mark.parametrize("history", [None, 0, 300, 1000])
+def test_report_speech_latency_uses_audio_start_without_changing_mic_open(history):
+    from tools.report import group_timings, timing
+
+    _, rows = dataset(1)
+    row = rows[0]
+    mic = row["mic_open"]
+    if history is not None:
+        mic["data"]["pre_roll_ms"] = history
+    speech = next(item for item in row["events"] if item["stage"] == "speech_start")
+    speech["t_utc_ns"] = mic["t_utc_ns"] + (100 - (history or 0)) * 1_000_000
+    before = copy.deepcopy(row)
+    steps = group_timings([row])["steps"]
+    assert steps["mic_to_speech"]["p50_ms"] == 100
+    assert steps["wake_to_mic"]["p50_ms"] == 1000
+    assert timing(row, "mic_open")["t_utc_ns"] == mic["t_utc_ns"]
+    assert steps["mic_to_speech"]["quality"] == {"estimate": 1}
+    assert steps["mic_to_speech"]["uncertainty_p90_ms"] == 4
+    if history:
+        assert steps["mic_to_speech"]["methods"] == {
+            "mic_open minus pre_roll_ms;recorded-event": 1
+        }
+    assert row == before
+    assert build(rows, dataset(1)[0])["sample_count"] == 1
+
+
+@pytest.mark.parametrize("history", [-1, 1001, True, 1.5, "300", None])
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_report_refuses_invalid_history_before_statistics(history, incomplete):
+    from tools.device_replay import ReplayError
+
+    labels, rows = dataset(1)
+    rows[0]["mic_open"]["data"]["pre_roll_ms"] = history
+    if incomplete:
+        rows[0].update(complete=False, failures=["MISSING_DEVICE_EVENT"])
+    with pytest.raises(ReplayError, match="INVALID_PRE_ROLL_MS"):
+        build(rows, labels)
+
+
 def build(rows, labels, **kwargs):
     from tools.report import build_report
 
