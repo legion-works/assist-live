@@ -178,6 +178,15 @@ Thus the turn detector uses a start guard:
 
 P1 sets these three values with human recordings.
 
+For the `final` transcript, the Parakeet provider uses the TDT beam search of the NeMo source (`default_beam_search`).
+The beam width is 16, and the provider uses the NeMo score normalization.
+It uses no language model, no word list, and no change to the audio.
+
+For `partial` transcripts, the provider uses the greedy search, because it makes them frequently during a turn.
+A device test showed that the greedy search can follow `blank` tokens through a full command and then give a short incorrect word.
+The model score of the command was better than the score of that word.
+The replacement rule below stays as a second guard.
+
 For STT sessions with `final_redecodes=True`, the server can replace an empty or incorrect short `final` with the last `partial` sent in that turn.
 Replacement occurs only with all these conditions:
 
