@@ -383,6 +383,7 @@ The rule changes letters to lowercase and removes punctuation.
 It changes English cardinal numbers from words to digits, from 0 through 999999.
 For example, `eight hundred ninety four` becomes `894`, and `twenty-five` becomes `25`.
 It accepts `a hundred` and `and` in a number.
+It also accepts `nineteen hundred` as `1900` and `twenty-two hundred` as `2200`.
 
 Ordinal words stay words: `first` does not equal `1st`.
 A different word, such as `the` for `a`, stays an error.

@@ -39,17 +39,16 @@ def _under_hundred(tokens: list[str], start: int) -> tuple[int, int]:
 
 
 def _under_thousand(tokens: list[str], start: int) -> tuple[int, int]:
-    if (
-        start + 1 < len(tokens)
-        and tokens[start + 1] == "hundred"
-        and (tokens[start] == "a" or 0 < VALUES.get(tokens[start], 0) < 10)
-    ):
-        value = (1 if tokens[start] == "a" else VALUES[tokens[start]]) * 100
-        end = start + 2
+    value, end = _under_hundred(tokens, start)
+    if tokens[start : start + 2] == ["a", "hundred"]:
+        value, end = 1, start + 1
+    if 0 < value < 100 and end < len(tokens) and tokens[end] == "hundred":
+        value *= 100
+        end += 1
         tail = end + (end < len(tokens) and tokens[end] == "and")
         remainder, final = _under_hundred(tokens, tail)
         return (value + remainder, final) if final > tail else (value, end)
-    return _under_hundred(tokens, start)
+    return value, end
 
 
 def words(text: str) -> list[str]:
@@ -62,7 +61,7 @@ def words(text: str) -> list[str]:
             value, end = 1, start + 1
         if (
             end > start
-            and value > 0
+            and 0 < value < 1000
             and end < len(tokens)
             and tokens[end] == "thousand"
         ):
@@ -70,7 +69,7 @@ def words(text: str) -> list[str]:
             end += 1
             tail = end + (end < len(tokens) and tokens[end] == "and")
             remainder, final = _under_thousand(tokens, tail)
-            if final > tail:
+            if final > tail and value + remainder <= 999999:
                 value += remainder
                 end = final
         if end == start:

@@ -114,6 +114,57 @@ def test_text_number_grammar(text, expected):
     assert words(text) == expected
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("eleven hundred", ["1100"]),
+        ("nineteen hundred", ["1900"]),
+        ("twenty two hundred", ["2200"]),
+        ("twenty-two hundred", ["2200"]),
+        ("fifteen hundred and five", ["1505"]),
+        ("ninety nine hundred ninety nine", ["9999"]),
+        ("one thousand nineteen hundred", ["2900"]),
+        ("twelve thousand twenty-two hundred and five", ["14205"]),
+        ("ninety nine thousand fifteen hundred", ["100500"]),
+        ("nineteen hundred thousand", ["1900", "thousand"]),
+        ("nine hundred ninety nine thousand eleven hundred", ["999000", "1100"]),
+    ],
+)
+def test_spoken_hundred_form_including_thousands(text, expected):
+    assert words(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("one hundred and five", ["105"]),
+        ("a hundred", ["100"]),
+        ("twenty five", ["25"]),
+        ("twenty-five", ["25"]),
+        ("nine nine nine", ["9", "9", "9"]),
+        ("zero", ["0"]),
+        ("oh", ["oh"]),
+        ("oh five", ["oh", "5"]),
+        ("a thousand and one", ["1001"]),
+        ("two thousand twenty six", ["2026"]),
+        ("first", ["first"]),
+        ("twenty first", ["twenty", "first"]),
+        ("one hundredth", ["one", "hundredth"]),
+        ("twenty two hundredth", ["twenty", "two", "hundredth"]),
+        ("one timer", ["1", "timer"]),
+        ("an hour", ["an", "hour"]),
+        ("ninety nine thousand nine hundred ninety nine", ["99999"]),
+        ("one hundred thousand and one", ["100001"]),
+        ("eight hundred and ninety four", ["894"]),
+        ("2:30", ["2", "30"]),
+        ("894", ["894"]),
+        ("one million", ["1", "million"]),
+    ],
+)
+def test_reviewer_adversarial_number_cases(text, expected):
+    assert words(text) == expected
+
+
 def spell_number(number):
     small = (
         "zero one two three four five six seven eight nine ten eleven twelve "
@@ -140,6 +191,20 @@ def spell_number(number):
 def test_all_cardinals_zero_through_999999():
     for number in range(1_000_000):
         assert words(spell_number(number)) == [str(number)], number
+
+
+def test_hundred_forms_share_only_the_expected_numeric_tokens():
+    for multiplier in range(1, 100):
+        for remainder in range(100):
+            value = multiplier * 100 + remainder
+            tail = " and " + spell_number(remainder) if remainder else ""
+            spoken = spell_number(multiplier) + " hundred" + tail
+            command = "start timer for " + spoken + " seconds"
+            canonical = "start timer for " + spell_number(value) + " seconds"
+            expected = ["start", "timer", "for", str(value), "seconds"]
+            assert words(command) == words(canonical) == expected
+            assert words(command) != words(f"start timer for {value + 1} seconds")
+            assert words(command) != words("start the timer for " + spoken + " seconds")
 
 
 @pytest.mark.parametrize(

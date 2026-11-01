@@ -143,6 +143,12 @@ Hyphens divide number words: `twenty-five` equals `25`.
 The rule accepts `and` after `hundred` or `thousand`, and `a hundred` equals `100`.
 It keeps `and` between different numbers, such as `one and two`.
 
+The rule accepts a cardinal number from 1 through 99 before `hundred`.
+For example, `fifteen hundred and five` equals `1505`.
+This rule also applies after `thousand`, if the result is in the stated range.
+The rule adds these groups only when their total is at most 999999.
+`nine nine nine` stays three numbers, not `999`.
+
 Ordinal words stay words. The rule does not equate `first` and `1st`, or `twenty-first` and `21st`.
 Other word differences stay errors: `a timer` does not equal `the timer`.
 A different number also stays an error.

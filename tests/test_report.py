@@ -438,6 +438,53 @@ def test_cli_check_writes_reports_only_after_validating(tmp_path, capsys):
     assert not paths["output"].exists()
 
 
+def test_p1_emitted_word_method_describes_shared_rule(tmp_path, acceptance):
+    import hashlib
+
+    from tools.report import main
+
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    paths = {
+        name: tmp_path / (name + ".json")
+        for name in (
+            "labels",
+            "runs",
+            "calibration",
+            "native",
+            "baseline",
+            "faults",
+            "output",
+        )
+    }
+    for name, records in (("labels", labels), ("runs", rows)):
+        paths[name].write_text("".join(json.dumps(row) + "\n" for row in records))
+    for name, value in (
+        ("calibration", calibration()),
+        ("native", observed_rows()),
+        ("baseline", baseline),
+        ("faults", faults),
+    ):
+        paths[name].write_text(json.dumps(value))
+    (tmp_path / "corpus.sha256").write_text(
+        hashlib.sha256(paths["labels"].read_bytes()).hexdigest()
+        + "  labels\n"
+        + "".join(
+            label["audio_sha256"] + "  audio/" + label["audio_path"] + "\n"
+            for label in labels
+        )
+    )
+    args = ["p1", "--split", "held_out", "--check"]
+    for key, path in paths.items():
+        args.extend(["--" + key, str(path)])
+    assert main(args) == 0
+    emitted = json.loads(paths["output"].read_text())
+    assert emitted["accepted"] is True
+    assert emitted["methods"]["words"] == (
+        "lowercase; punctuation removed; English number words to digits; "
+        "Levenshtein distance over those tokens"
+    )
+
+
 def test_explicit_failed_attempt_with_missing_operation_evidence_fails_both_gates(
     acceptance,
 ):

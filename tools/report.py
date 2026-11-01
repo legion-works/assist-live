@@ -386,7 +386,10 @@ def build_report(
         "methods": {
             "percentile": "linear-interpolation-(n-1)*p",
             "rate_interval": "two-sided Clopper-Pearson 95%",
-            "words": "casefold Unicode word tokens; Levenshtein distance",
+            "words": (
+                "lowercase; punctuation removed; English number words to digits; "
+                "Levenshtein distance over those tokens"
+            ),
         },
         "native_errors": native_errors,
     }

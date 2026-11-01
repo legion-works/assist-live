@@ -3001,3 +3001,17 @@ Four scratch mutations remove number conversion, compare HA context slots, use o
 Each mutation compiles and causes a named test failure.
 The same six tests give satisfactory results without those mutations.
 The necessary checks are Ruff format and lint, `task check`, `task ha-minimum`, packaging, hassfest, privacy, `git diff --check`, and STE.
+
+### Spoken hundred values and report methods
+
+The review regression tests gave 12 failures and 22 satisfactory controls before the repair.
+The number rule accepts `nineteen hundred`, `twenty-two hundred`, and `fifteen hundred and five`.
+It also accepts these values after `thousand` when the total is at most 999999.
+`nine nine nine` stays three numbers. Ordinal words and `an hour` stay words.
+
+The tests compare 9900 spoken timer values with their standard cardinal numbers.
+Each pair has the same numeric value.
+A different number or an added `the` stays different.
+The report gives lowercase, punctuation removal, English number words as digits, and Levenshtein distance on those tokens in `methods.words`.
+The CLI test reads this field from an accepted P1 JSON report.
+The related tests gave `253 passed` after the two repairs.
