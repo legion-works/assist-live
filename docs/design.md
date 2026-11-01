@@ -127,6 +127,8 @@ The optional `pre_roll` setting of the ESPHome component keeps this audio:
   That turn gets no history.
 - The history before the start of the turn audio has a maximum of 1000 ms.
   A device measurement sets the length, so that the history starts at about the end of the wake word.
+  The measured default is 200 ms, from a device test with one speaker and beam search for the `final` transcript.
+  With 450 ms, the end of the wake word became more words at the start of the transcript.
 - After the STT-start gate, replay can start only when the HA connection accepts data.
   The replay rate is at most two times the real-time rate.
   The design specifies a minimum of 256 ms of free space in each voice-assistant microphone buffer, measured through a public ESPHome interface.
