@@ -78,6 +78,15 @@ The first message selects the protocol version and functions.
 Client and server contract tests must agree on that protocol.
 The server uses no HA administrator credential. Its HA app does not request HA API access.
 
+The Python client library uses the HTTP session that HA supplies.
+If DNS prevents an HTTP request or WebSocket connection, the client makes one new system lookup without that session's DNS cache.
+It retries one time through the same session to the resolved address.
+The retry keeps the initial `Host` header and, for TLS, the server name and certificate-check name.
+
+The lookup and retry share the initial deadline. They do not extend it.
+Other connection errors do not cause this retry.
+If recovery is unsatisfactory, the client gives its usual error, and the integration can use its fallback engine.
+
 1. The satellite finds the wake word and sends a timing event.
 2. The STT entity opens a turn and sends audio to the server.
 3. The server runs STT and turn detection while the user speaks.
@@ -105,18 +114,38 @@ The optional `pre_roll` setting of the ESPHome component keeps this audio:
   The history has the left and right microphone signals, because HA selects one signal from the STT settings.
 - Only `voice_assistant` uses the virtual microphone.
   `micro_wake_word`, the stop word, and the mute switches stay on the physical microphone.
-- In a wake-word turn, the virtual microphone first sends the history and then the live audio.
-  No sample is missing, and the component does not send a sample two times.
+- The wake handler arms history only while `voice_assistant` is in `IDLE`, immediately before the stock `voice_assistant.start`.
+  Immediately after that start, `wake_started()` checks public `is_running()` and connects the history to that wake-word turn.
+  An arm without this paired call cannot give history to a different turn.
+- The component holds all historical and live frames from the arm until `on_listening`, the public STT-start signal.
+  At that point, the voice assistant has made and cleared its new-turn buffers.
+  No historical frame goes to the voice assistant before this gate.
+  Replay sends history, then live audio, in order, without missing or duplicate samples unless the queue overflows.
+  If the history and the audio from detection to the gate are together more than 1000 ms, the component removes the oldest history at the gate.
+- The detection-to-gate limit is 1000 ms, not a 32 ms arm window.
+  Above that limit, the component clears the queued audio and discards new frames until the gate or turn end.
+  That turn gets no history.
 - The history before the start of the turn audio has a maximum of 1000 ms.
   A device measurement sets the length, so that the history starts at about the end of the wake word.
-- The component sends the history only when the HA connection accepts data.
-  The estimate of the buffered audio that the history adds stays below 256 ms.
+- After the STT-start gate, replay can start only when the HA connection accepts data.
+  The replay rate is at most two times the real-time rate.
+  The design specifies a minimum of 256 ms of free space in each voice-assistant microphone buffer, measured through a public ESPHome interface.
+  This interface is a proposal for upstream ESPHome, not an available interface.
+  Until then, the component uses time since replay start as a conservative estimate.
+  It limits the estimated increase in backlog to 256 ms.
+  With this estimate, replay is not at live audio before turn end. The time to turn end increases by the unsent history.
   The component counts and logs each audio frame that it removes.
+- `on_stt_end` finishes the logical turn and clears its replay state.
+  Run end, public `IDLE` state, and an actual microphone stop are fallbacks that can safely do this operation again.
+  Between turns, current frames go directly to enabled sources immediately. Only bounded history stays in RAM.
 - A turn from a button, a follow-up, or an announcement gets no history.
   A turn with the wake sound on gets no history, because the echo cancellation does not remove the wake sound.
 - When the user mutes the microphone, the component clears the history.
   The history stays in RAM, and the component sends it only in a wake-word turn.
-- The `mic_open` event data gives `pre_roll_ms`, the length of the history in the turn audio.
+- The `mic_open` event data gives `pre_roll_ms`, an integer from 0 through 1000 ms.
+  It counts only historical audio actually sent to the voice assistant in that turn, not dropped history.
+  Each turn gets a new value, which is 0 for a turn without history.
+  For a history turn, the event waits until history replay ends or the turn stops.
 - The setting is off by default until the device test is satisfactory.
 
 ## End-of-turn and STT fallback
@@ -148,6 +177,18 @@ Thus the turn detector uses a start guard:
 - The guard applies to all turns, also to a follow-up turn.
 
 P1 sets these three values with human recordings.
+
+For STT sessions with `final_redecodes=True`, the server can replace an empty or incorrect short `final` with the last `partial` sent in that turn.
+Replacement occurs only with all these conditions:
+
+- The `partial` has two or more words.
+- The `final` has fewer words than the `partial`. An empty `final` has 0 words.
+- No word occurs in the `final` and the `partial`.
+
+The server uses Unicode `casefold`, removes punctuation separators, keeps internal apostrophes, and counts each word occurrence.
+In all other conditions, the `final` stays unchanged, also when a shorter `final` keeps some words but removes `not`.
+The server counts each replacement in `assist_live_stt_final_replaced_total` and adds `replaced: true` to the `stt_final` timing event.
+The mark and count store no transcript text. Transcript storage uses the explicit option only.
 
 The integration checks server health with a 200 ms limit at the start of each run.
 If unavailable, it owns turn termination with `pymicro-vad` and 0.7 s without voice.
