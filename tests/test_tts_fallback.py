@@ -175,7 +175,7 @@ async def test_oversized_position_from_client_reports_full_text(client, ledger, 
     import asyncio
     from types import SimpleNamespace
 
-    from aiohttp import WSMessage, WSMsgType
+    from aiohttp import ClientTimeout, WSMessage, WSMsgType
     from assist_live_client import AssistLiveClient
     from assist_live_client.protocol import encode_audio, encode_control
 
@@ -230,7 +230,9 @@ async def test_oversized_position_from_client_reports_full_text(client, ledger, 
     wire = AssistLiveClient(
         "https://server.invalid",
         "test",
-        session=SimpleNamespace(ws_connect=lambda *args, **kwargs: Socket()),
+        session=SimpleNamespace(
+            ws_connect=lambda *args, **kwargs: Socket(), timeout=ClientTimeout(total=20)
+        ),
     )
 
     async def stream(*args, **kwargs):

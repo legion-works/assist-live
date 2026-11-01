@@ -46,7 +46,7 @@ The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
 The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
 It does not find sentence boundaries itself.
-See the [server protocol](https://github.com/legion-works/assist-live-server/blob/b3b1e16e933fb5e7567c059f80e16faf68ef7d35/docs/protocol.md) at the pinned client revision `b3b1e16e933fb5e7567c059f80e16faf68ef7d35` for position rules.
+See the [server protocol](https://github.com/legion-works/assist-live-server/blob/c3aadd35f9f0e439508c1d62c31da3250a9d99f7/docs/protocol.md) at the pinned client revision `c3aadd35f9f0e439508c1d62c31da3250a9d99f7` for position rules.
 
 An older server without `text_positions` uses the failure path with the full text, not continuation.
 The same rule applies when no marker comes or the last marker has no `text_end`.

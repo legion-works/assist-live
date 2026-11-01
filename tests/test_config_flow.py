@@ -678,6 +678,95 @@ async def test_poison_event_retries_with_repair_backoff_and_no_cursor_skip(
         await runtime.stop()
 
 
+@pytest.mark.parametrize(
+    ("data", "valid"),
+    [
+        ({}, True),
+        ({"pre_roll_ms": 0}, True),
+        ({"pre_roll_ms": 300}, True),
+        ({"pre_roll_ms": 1000}, True),
+        ({"pre_roll_ms": -1}, False),
+        ({"pre_roll_ms": 1001}, False),
+        ({"pre_roll_ms": True}, False),
+        ([], False),
+    ],
+)
+async def test_client_timing_history_event_reaches_ledger_or_retries(
+    hass, client, runtime_entry, data, valid
+):
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    import aiohttp
+    from assist_live_client import AssistLiveClient
+
+    from custom_components.assist_live import Runtime
+
+    runtime = Runtime(hass, runtime_entry, client)
+    turn = runtime.ledger.open_voice("satellite-a")
+    reached = asyncio.Event()
+    delays = []
+    envelope = {
+        "version": 1,
+        "event_id": 7,
+        "event": {
+            "turn_id": turn.turn_id,
+            "satellite": "satellite-a",
+            "source": "device",
+            "stage": "mic_open",
+            "t_utc_ns": 123,
+            "quality": "measured",
+            "uncertainty_ms": None,
+            "data": data,
+        },
+    }
+
+    async def messages():
+        yield aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(envelope), "")
+        reached.set()
+        await asyncio.Event().wait()
+
+    async def sleep(delay):
+        delays.append(delay)
+        reached.set()
+        await asyncio.Event().wait()
+
+    ws = MagicMock()
+    ws.send_json = AsyncMock()
+    ws.__aiter__.side_effect = messages
+    connection = AsyncMock()
+    connection.__aenter__.return_value = ws
+    real_client = AssistLiveClient("http://server.invalid", "test-token")
+    runtime.client = real_client
+    runtime._save = AsyncMock()
+    runtime._sleep = sleep
+    with patch.object(real_client, "_connect", return_value=connection):
+        task = asyncio.create_task(runtime._events("satellite-a"))
+        try:
+            await asyncio.wait_for(reached.wait(), 1)
+            assert not task.done()
+            if valid:
+                assert runtime.cursors == {"satellite-a": 7}
+                assert runtime.failures == {"satellite-a": 0}
+                assert runtime.ledger.records[turn.turn_id].timings["mic_open"] == {
+                    "t_utc_ns": 123,
+                    "quality": "measured",
+                    "uncertainty_ms": None,
+                    "source": "device",
+                }
+                assert delays == []
+            else:
+                assert runtime.cursors == {}
+                assert runtime.failures == {"satellite-a": 1}
+                assert "mic_open" not in runtime.ledger.records[turn.turn_id].timings
+                assert delays == [1.0]
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await real_client.close()
+
+
 @pytest.mark.parametrize("silent", [False, True])
 async def test_store_failure_does_not_acknowledge_event(
     hass, client, runtime_entry, silent

@@ -40,7 +40,7 @@ See [privacy](privacy.md) for the limits of these checks.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/b3b1e16e933fb5e7567c059f80e16faf68ef7d35/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/c3aadd35f9f0e439508c1d62c31da3250a9d99f7/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 

@@ -2848,3 +2848,53 @@ The packaging check gave `PASS packaging`. Hassfest gave `Invalid integrations: 
 The canonical public-tree privacy check gave `PASS public data matches=0`.
 The documents also use the ASD-STE100 checker.
 These synthetic checks do not measure device playback or satisfy a P0 or P1 acceptance gate.
+
+## Client DNS recovery pin
+
+Date: 2026-11-01 (UTC).
+
+The client source pin is `c3aadd35f9f0e439508c1d62c31da3250a9d99f7`.
+The development source, lock, minimum-HA task, CI command, and pinned document URLs use this revision.
+The `uv lock` command made the lock.
+Earlier verification records and source-reference comments stay unchanged.
+
+The client export file and public `AssistLiveClient` signatures agree with the previous pin.
+The DNS recovery path uses the supplied HA session and retries one time.
+The request, event, export, and audio error handlers agree with the previous pin.
+An unsuccessful retry gives `ProtocolError` through these handlers.
+No integration runtime code change is necessary.
+
+The TTS position test supplies the session timeout field in its test double.
+Its assertions agree with the previous test.
+
+The timing check uses:
+
+```sh
+uv run --locked pytest tests/test_config_flow.py -q -k client_timing_history
+```
+
+Result: `8 passed`.
+The client event parser accepts microphone-open events with no history field and with 0, 300, or 1000 ms of history.
+Invalid history values use the same retry counter and interval as other invalid timing data.
+They do not change the event cursor or the ledger.
+
+The stale-pin check uses a scratch CI workflow with the previous client revision.
+It gives exit code 1 and identifies the CI client pin.
+The current workflow gives `PASS CI` and exit code 0.
+A scratch mutation that removes event validation gives `4 failed, 4 passed` in the timing check.
+The checks use the external private denylist and these commands:
+
+```sh
+uv run --locked ruff format --check .
+uv run --locked ruff check --no-cache .
+task check
+task ha-minimum
+task package-check
+task hassfest
+```
+
+The current and minimum HA test runs each gave `1073 passed`.
+The packaging check gave `PASS packaging`. Hassfest gave `Invalid integrations: 0`.
+The changed Markdown files also use the ASD-STE100 checker.
+The checks include the canonical public-tree privacy command and `git diff --check`.
+These checks do not measure physical device playback or satisfy a P0 or P1 acceptance gate.
