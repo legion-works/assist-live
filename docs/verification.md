@@ -2899,6 +2899,27 @@ The changed Markdown files also use the ASD-STE100 checker.
 The checks include the canonical public-tree privacy command and `git diff --check`.
 These checks do not measure physical device playback or satisfy a P0 or P1 acceptance gate.
 
+## Fault and native-function runner
+
+The fault classifier first gave a missing-module test failure.
+The classifier compares transcripts with labelled text and operation logs with `expected_operations`.
+It refuses truncated actionable text, unlabelled operations, missing observation records, and missed fault points.
+An empty result must have a selected-intent record and a complete empty operation log.
+
+The four fault points have driver tests for each point.
+Mutation tests include truncated text, trusted result flags, missing records accepted as empty, and voice-only stops.
+The M16 tests include numerical boundaries, stale and overlapping turn identifiers, matrix text, and the last-voice-to-first-TTS-byte step.
+Two concurrent simulated satellites use HA audio pipelines with different devices, contexts, turn IDs, and timer operations.
+
+The simulated runner uses the public HA WebSocket API and checked corpus audio.
+The optional temporary test pipeline has cleanup tests for usual and error exits.
+It does not replace a satellite's selected pipeline.
+The runner starts the test server after each fault and checks its health.
+Virtual matrix rows and unobserved device rows stay in different lists.
+
+Hardware faults, native-device observations, and P1 acceptance stay `NOT RUN` without hardware records.
+Simulated output stays external to this repository.
+
 ## Current server health in diagnostics
 
 Date: 2026-11-01 (UTC).

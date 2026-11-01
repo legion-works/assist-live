@@ -273,9 +273,14 @@ def acceptance_fixture():
                 "correct_transcript": True,
                 "operations_correct": True,
                 "action_trace_complete": True,
-                "recognized_transcript": "synthetic command",
-                "evaluated_intent": {"name": "HassTurnOn", "slots": {}},
-                "action_trace": [],
+                "recognized_transcript": baseline_rows[0]["recognized_transcript"],
+                "evaluated_intent": baseline_rows[0]["evaluated_intent"],
+                "action_trace": baseline_rows[0]["action_trace"],
+                "label": labels[0],
+                "fault_injected": True,
+                "failure_cause": "server_stopped",
+                "fallback_deadline_utc_ns": 20_000_000_000,
+                "completed_utc_ns": 19_000_000_000,
             }
             for stage in ("before", "speech", "pause", "after-final")
             for i in range(10)
@@ -454,6 +459,7 @@ def test_explicit_failed_attempt_with_missing_operation_evidence_fails_both_gate
     assert result["wrong_actions"]["unavailable"] == 1
     assert result["word_error_rate"]["rate"] is None
     assert not result["gates"]["completeness"]
+    assert result["gates"]["evidence_records"]
     assert not result["gates"]["wrong_actions"]
     assert not result["accepted"]
 
@@ -576,3 +582,117 @@ def test_duplicate_recording_profile_is_not_an_extra_sample():
     labels, rows = dataset()
     with pytest.raises(ReplayError, match="DUPLICATE_RECORDING_PROFILE"):
         build(rows + [rows[0]], labels)
+
+
+def test_forty_percent_integer_boundary_avoids_float_rounding():
+    from tools.report import latency_gate
+
+    baseline = {group: {"n": 1, "p50_ms": 115} for group in ("short", "long")}
+    profiles = {
+        profile: {group: {"n": 1, "p50_ms": 69} for group in baseline}
+        for profile in ("safe", "fast")
+    }
+    assert latency_gate(baseline, profiles)["passed"]
+    profiles["safe"]["long"]["p50_ms"] = 69.000001
+    assert not latency_gate(baseline, profiles)["passed"]
+
+
+def test_last_voice_to_tts_first_byte_keeps_uncertainty_and_missing_count():
+    from tools.report import group_timings
+
+    _, rows = dataset(2)
+    rows[1]["events"] = [
+        event for event in rows[1]["events"] if event["stage"] != "tts_first_byte"
+    ]
+    step = group_timings(rows)["steps"]["last_voice_to_tts_first_byte"]
+    assert step["n"] == step["missing"] == 1
+    assert step["p50_ms"] == step["p90_ms"] == 250
+    assert step["quality"] == {"estimate": 1}
+    assert step["uncertainty_p90_ms"] == 12
+
+
+@pytest.mark.parametrize("count,passed", [(49, False), (50, True)])
+def test_calibration_trial_threshold_is_inclusive(count, passed):
+    from tools.report import calibration_ok
+
+    cal = calibration()
+    cal["n"] = count
+    assert (
+        calibration_ok(cal, cal["baseline_config_id"], cal["calibration_revision"])
+        is passed
+    )
+
+
+@pytest.mark.parametrize("complete,passed", [(189, False), (190, True)])
+def test_completeness_threshold_is_inclusive(complete, passed):
+    labels, rows = dataset(200)
+    for row in rows[complete:]:
+        row.update(
+            complete=False,
+            failures=["MISSING_OPERATION_EVIDENCE"],
+            action_trace=None,
+            action_trace_complete=False,
+        )
+    report = build(rows, labels)
+    assert report["gates"]["completeness"] is passed
+    assert report["gates"]["evidence_records"]
+
+
+@pytest.mark.parametrize("count,passed", [(98, False), (100, True)])
+def test_reply_group_minimum_is_inclusive(count, passed):
+    labels, rows = dataset(count)
+    assert build(rows, labels)["gates"]["reply_groups"] is passed
+
+
+@pytest.mark.parametrize("count,passed", [(199, False), (200, True)])
+def test_replay_minimum_is_inclusive(count, passed):
+    labels, rows = dataset(count)
+    assert build(rows, labels)["gates"]["replay_samples"] is passed
+
+
+@pytest.mark.parametrize("count,passed", [(29, False), (30, True)])
+def test_executable_prefix_minimum_is_inclusive(acceptance, count, passed):
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    if count == 29:
+        labels[229]["executable_prefix"] = False
+    report = build(rows, labels, baseline=baseline, faults=faults)
+    assert report["gates"]["executable_prefix"] is passed
+
+
+@pytest.mark.parametrize("count,passed", [(299, False), (300, True)])
+def test_pause_minimum_is_inclusive(acceptance, count, passed):
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    if count == 299:
+        rows = [row for row in rows if row["clip_id"] != "clip-499"]
+    report = build(rows, labels, baseline=baseline, faults=faults)
+    assert report["gates"]["pause_samples"] is passed
+
+
+@pytest.mark.parametrize("correct,passed", [(189, False), (190, True)])
+def test_accuracy_threshold_is_inclusive(acceptance, correct, passed):
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    for row in rows[correct:200]:
+        row["recognized_transcript"] = "wrong command"
+    report = build(rows, labels, baseline=baseline, faults=faults)
+    assert report["gates"]["accuracy"] is passed
+
+
+@pytest.mark.parametrize("errors,passed", [(8, True), (9, False)])
+def test_word_error_one_percentage_point_boundary_is_inclusive(
+    acceptance, errors, passed
+):
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    for row in rows[:errors]:
+        row["recognized_transcript"] = "switch on test light"
+    report = build(rows, labels, baseline=baseline, faults=faults)
+    assert report["word_error_rate"]["words"] == 800
+    assert report["gates"]["word_error_rate"] is passed
+
+
+def test_pause_upper_confidence_boundary_rejects_six_cuts_in_two_hundred():
+    from tools.report import pause_gate
+
+    result = pause_gate(6, 200)
+    assert result["rate"] == 0.03
+    assert 0.06 < result["ci95"][1] < 0.065
+    assert not result["passed"]

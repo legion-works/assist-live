@@ -13,22 +13,22 @@ Keep the same pipeline, voice, device, volume, and virtual targets.
 
 | Function | Server present | Server absent | Observation | Observer |
 |---|---|---|---|---|
-| `announce` | Play the announcement without an STT turn. | Same behavior through fallback TTS. | Service result and device playback events. | Automated |
-| `start_conversation` | Play the prompt and open the microphone. | Same behavior through fallback engines. | Service result, playback, and microphone events. | Automated |
-| `ask_question` | Play the question and give the selected answer. | Same behavior through fallback engines. | Service response and follow-up turn events. | Automated |
-| `timers` | Start, finish, and cancel a native HA timer. | Same native timer behavior. | Timer callbacks and device alarm playback. | Automated |
-| `stop_word` | Stop the spoken reply on the selected stop word. | Same stop-word behavior. | Playback end after the stop word. | Operator |
-| `media_player` | Play and stop media through the native media player. | Same media-player behavior. | Public state and device playback. | Automated |
-| `ducking` | Decrease media volume during voice and then set the initial volume. | Same volume behavior. | Compare volume before, during, and after voice. | Operator |
-| `wake_selection` | Use the selected wake word, not the previous one. | Same wake-word behavior. | Selection state and device wake events. | Automated |
-| `mute` | Stop microphone input while mute is on. | Same physical mute behavior. | Check the physical control and microphone response. | Operator |
-| `leds` | Keep the native light patterns for each voice state. | Same physical LED behavior. | Monitor wake, voice, reply, and mute light patterns. | Operator |
-| `area` | Resolve an unnamed target in the satellite area. | Same area rules. | Intent and actual virtual-target operation log. | Automated |
-| `exposure` | Refuse a target that is not available to Assist. | Same exposure rules. | Intent error and completed empty operation log. | Automated |
-| `agent_selection` | Use the conversation agent selected by the pipeline. | Same selected agent. | Pipeline configuration and agent response. | Automated |
-| `follow_up` | Open a new voice turn for a continued conversation. | Same follow-up behavior. | Microphone event and parent turn identifier. | Automated |
-| `pipeline_selection` | Use the pipeline selected for the satellite. | Same selected pipeline. | Selection state and selected engine records. | Automated |
-| `debug_availability` | Keep the native HA pipeline debug view available. | Same debug view. | Open the native HA pipeline debug view. | Operator |
+| `announce` | Play the announcement without an STT turn. | Play the announcement without an STT turn. | HA service result and device playback events. | Automated |
+| `start_conversation` | Play the prompt and open the microphone. | Play the prompt and open the microphone. | HA service result, playback, and microphone events. | Automated |
+| `ask_question` | Play the question and give the selected answer. | Play the question and give the selected answer. | HA service response and follow-up turn events. | Automated |
+| `timers` | Start, finish, and cancel a native HA timer. | Start, finish, and cancel a native HA timer. | Native timer callbacks and device alarm playback. | Automated |
+| `stop_word` | Stop the spoken reply on the selected stop word. | Stop the spoken reply on the selected stop word. | Device playback end after the stop word. | Operator |
+| `media_player` | Play and stop media through the native media player. | Play and stop media through the native media player. | Public media-player state and device playback. | Automated |
+| `ducking` | Decrease media volume during voice and then set the initial volume. | Decrease media volume during voice and then set the initial volume. | Operator compares media volume before, during, and after voice. | Operator |
+| `wake_selection` | Use the selected wake word, not the previous one. | Use the selected wake word, not the previous one. | Public selection state and device wake events. | Automated |
+| `mute` | Stop microphone input while mute is on. | Stop microphone input while mute is on. | Operator checks the physical mute control and microphone response. | Operator |
+| `leds` | Keep the native light patterns for each voice state. | Keep the native light patterns for each voice state. | Operator monitors the physical LEDs during wake, voice, reply, and mute. | Operator |
+| `area` | Resolve an unnamed target in the satellite area. | Resolve an unnamed target in the satellite area. | Selected intent and actual virtual-target operation log. | Automated |
+| `exposure` | Refuse a target that is not available to Assist. | Refuse a target that is not available to Assist. | HA intent error and completed empty operation log. | Automated |
+| `agent_selection` | Use the conversation agent selected by the pipeline. | Use the conversation agent selected by the pipeline. | Public pipeline configuration and agent response. | Automated |
+| `follow_up` | Open a new voice turn for a continued conversation. | Open a new voice turn for a continued conversation. | Microphone event and parent turn identifier. | Automated |
+| `pipeline_selection` | Use the pipeline selected for the satellite. | Use the pipeline selected for the satellite. | Public selection state and selected engine records. | Automated |
+| `debug_availability` | Keep the native HA pipeline debug view available. | Keep the native HA pipeline debug view available. | Operator opens the native HA pipeline debug view. | Operator |
 
 A service response alone does not prove that the device played audio.
 An operator must check physical LED and mute behavior.
@@ -140,9 +140,46 @@ An unavailable expectation or missing operation test records cause an unsatisfac
 
 The fault file contains `trials`, with ten entries for each `stage`: `before`, `speech`, `pause`, and `after-final`.
 Each trial must have `turn_id`, `recognized_transcript`, `evaluated_intent`, `action_trace`, and `action_trace_complete: true`.
-The fault runner records `correct_transcript` and `operations_correct` for a checked correct result.
-The alternative must have `empty_transcript: true` and an explicit empty `operations` list.
+The fault gate compares the transcript with the labelled text and compares the operation log with `expected_operations`.
+It does not use `correct_transcript`, `operations_correct`, or `empty_transcript` flags as proof.
+The alternative has an explicit empty transcript and a complete empty operation log.
+
+Each trial also records the fault point, server stop result, fallback deadline, end time, and failure cause.
 A missing trial, record that is not complete, incorrect result, or native-matrix failure causes a `--check` failure.
 CI and publication checks stay isolated from these measurement results.
+
+## Simulated fault runs
+
+`tools/fault_runner.py --simulate` sends SHA-256-checked corpus audio through the public HA WebSocket pipeline API.
+It starts at STT and stops only the isolated test server container.
+It starts that container after each trial and at exit, and checks for `running` and `healthy` states.
+The four fault points are before the turn, during voice, during the labelled pause, and after the complete transcript.
+Use `--each 10` for ten trials for each point, or `--each 2` for a short test.
+
+The runner checks the selected audio and fault boundaries before it changes the bench.
+Without labelled pause recordings, select `--stages before,speech,after-final` for a short test.
+The output records `pause` as `NOT RUN` with the cause.
+Do not make replacement pause recordings for this test.
+All four fault points with ten satisfactory trials for each point are necessary for acceptance.
+
+Simulated output cannot satisfy that acceptance check.
+
+```sh
+uv run --locked python tools/fault_runner.py --simulate --each 2 --token-file "$ASSIST_LIVE_TEST_TOKEN_FILE" --pipeline "$TEST_PIPELINE" --audio-root "$AUDIO_ROOT" --native-matrix docs/testing/native-functions.md --output "$RUNROOT/simulated-faults.json" --check
+```
+
+The selected pipeline must use the isolated test agent to supply a selected intent and a complete operation log.
+With explicit bench approval, add `--temporary-agent-pipeline` to make a temporary copy with the test agent.
+This option keeps the same STT and TTS engines and does not set the copy as a satellite's pipeline.
+It records the pipeline list and select states before and after the test, deletes the copy at exit, and checks equality.
+The temporary path uses the virtual timer receiver and a new turn ID from the STT device's public sensor.
+
+Without that record, the trial is unsatisfactory, also when the transcript is empty.
+The output uses the M14 fields with `scope: simulated` and `mode: smoke`.
+Missing device events stay `null`. Simulated trials cannot satisfy the hardware fault gate.
+
+Native device rows and virtual rows have different lists for the two server states.
+Do not put simulated output in `docs/reports/`.
+Two-satellite concurrency runs in the HA test harness, not on a second physical device.
 
 Hardware replay, calibration, native-device observations, and P1 acceptance stay `NOT RUN` without observation records.

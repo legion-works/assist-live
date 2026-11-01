@@ -5,6 +5,7 @@ from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
+from homeassistant.util.ulid import ulid_to_bytes_or_none
 
 from . import ACTIVE_RECORD, DEVICE_ID
 
@@ -56,6 +57,9 @@ class TestAgent(conversation.ConversationEntity):
             "operations": [],
         }
         registry = er.async_get(self.hass)
+        context_bytes = ulid_to_bytes_or_none(user_input.context.id)
+        context_ms = int.from_bytes(context_bytes[:6]) if context_bytes else None
+        claims = self.hass.data.setdefault("assist_live_test_turn_claims", {})
         sensors = (
             [
                 entity
@@ -74,9 +78,15 @@ class TestAgent(conversation.ConversationEntity):
             and state.attributes.get("turn_type") == "voice"
             and state.attributes.get("turn_id")
         ]
-        if len(links) == 1:
+        if (
+            len(links) == 1
+            and context_ms is not None
+            and int(links[0].last_updated.timestamp() * 1000) >= context_ms
+            and links[0].attributes["turn_id"] not in claims
+        ):
             record["turn_id"] = links[0].attributes["turn_id"]
             record["turn_type"] = links[0].attributes["turn_type"]
+            claims[record["turn_id"]] = user_input.context.id
 
         @callback
         def service_event(event):

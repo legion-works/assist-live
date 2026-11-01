@@ -107,7 +107,13 @@ def test_external_observations_and_cli_never_invent_values(
     assert run_native_matrix() == observed_rows()
     output = tmp_path / "native.json"
     document = tmp_path / "matrix.md"
-    document.write_text(" ".join(f"`{row['function']}`" for row in observed_rows()))
+    from pathlib import Path
+
+    document.write_text(
+        (
+            Path(__file__).resolve().parents[1] / "docs/testing/native-functions.md"
+        ).read_text()
+    )
     assert main(["--matrix", str(document), "--output", str(output), "--check"]) == 0
     assert "PASS native matrix" in capsys.readouterr().out
     monkeypatch.delenv("ASSIST_LIVE_NATIVE_OBSERVATIONS")

@@ -27,7 +27,7 @@ CONTRACT = {
         "automated",
     ),
     "ask_question": (
-        "Play the question and return the selected answer.",
+        "Play the question and give the selected answer.",
         "HA service response and follow-up turn events.",
         "automated",
     ),
@@ -47,7 +47,7 @@ CONTRACT = {
         "automated",
     ),
     "ducking": (
-        "Reduce media volume during voice and restore it after voice.",
+        "Decrease media volume during voice and then set the initial volume.",
         "Operator compares media volume before, during, and after voice.",
         "operator",
     ),
@@ -57,22 +57,22 @@ CONTRACT = {
         "automated",
     ),
     "mute": (
-        "Block microphone input while mute is on.",
+        "Stop microphone input while mute is on.",
         "Operator checks the physical mute control and microphone response.",
         "operator",
     ),
     "leds": (
         "Keep the native light patterns for each voice state.",
-        "Operator observes the physical LEDs during wake, voice, reply, and mute.",
+        "Operator monitors the physical LEDs during wake, voice, reply, and mute.",
         "operator",
     ),
     "area": (
         "Resolve an unnamed target in the satellite area.",
-        "Selected intent and exact virtual-target operation log.",
+        "Selected intent and actual virtual-target operation log.",
         "automated",
     ),
     "exposure": (
-        "Refuse a target that Assist does not expose.",
+        "Refuse a target that is not available to Assist.",
         "HA intent error and completed empty operation log.",
         "automated",
     ),
@@ -98,6 +98,21 @@ CONTRACT = {
     ),
 }
 PATHS = ("server_present", "server_absent")
+
+
+def validate_matrix_document(document: str) -> None:
+    lines = document.splitlines()
+    for function, (expected, method, observer) in CONTRACT.items():
+        rows = [line for line in lines if line.startswith(f"| `{function}` |")]
+        if len(rows) != 1:
+            raise ValueError("native matrix document is incomplete or duplicated")
+        cells = [cell.strip() for cell in rows[0].split("|")[1:-1]]
+        if (
+            len(cells) != 5
+            or cells[1:4] != [expected, expected, method]
+            or cells[4].casefold() != observer
+        ):
+            raise ValueError("native matrix document differs from the contract")
 
 
 def validate_native_matrix(rows: list[dict[str, Any]]) -> list[str]:
@@ -287,8 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         document = args.matrix.read_text()
-        if any(f"`{function}`" not in document for function in CONTRACT):
-            raise ValueError("native matrix document is incomplete")
+        validate_matrix_document(document)
         if args.virtual:
             if args.token_file is None or args.labels is None:
                 raise ValueError("virtual checks require --token-file and --labels")

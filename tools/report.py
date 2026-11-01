@@ -37,6 +37,7 @@ STEPS = {
     "end_decision_to_playback": ("end_decision", "playback_start"),
     "speech_start_to_playback": ("speech_start", "playback_start"),
     "last_voice_to_playback": ("last_voice", "playback_start"),
+    "last_voice_to_tts_first_byte": ("last_voice", "tts_first_byte"),
 }
 
 
@@ -82,7 +83,7 @@ def latency_gate(baseline: Row, profiles: Row) -> Row:
             reduction = 1 - after["p50_ms"] / before["p50_ms"] if valid else None
             groups[group] = {
                 "reduction": reduction,
-                "passed": bool(valid and after["p50_ms"] <= 0.6 * before["p50_ms"]),
+                "passed": bool(valid and after["p50_ms"] * 5 <= before["p50_ms"] * 3),
             }
         results[profile] = {
             "groups": groups,
@@ -255,6 +256,17 @@ def group_timings(rows: list[Row]) -> Row:
     return {"n": len(rows), "steps": result}
 
 
+def observation_complete(row: Row) -> bool:
+    return (
+        row.get("complete") is not False
+        and all(timing(row, stage) is not None for stage in DEVICE_STAGES)
+        and not any(
+            event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
+            for event in row["events"]
+        )
+    )
+
+
 def summarize(rows: list[Row]) -> Row:
     missing: Counter[str] = Counter()
     for row in rows:
@@ -265,15 +277,7 @@ def summarize(rows: list[Row]) -> Row:
             event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
             for event in row["events"]
         )
-    complete = sum(
-        row.get("complete") is not False
-        and all(timing(row, stage) is not None for stage in DEVICE_STAGES)
-        and not any(
-            event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
-            for event in row["events"]
-        )
-        for row in rows
-    )
+    complete = sum(observation_complete(row) for row in rows)
     groups = {
         group: group_timings(
             [
@@ -327,31 +331,9 @@ def calibration_ok(calibration: Row, config: str, revision: str) -> bool:
 
 
 def fault_gate(faults: Row) -> Row:
-    trials = faults.get("trials", [])
-    counts = Counter(trial.get("stage") for trial in trials)
-    passed = sum(
-        trial.get("correct_transcript") is True
-        and bool(trial.get("recognized_transcript"))
-        and trial.get("operations_correct") is True
-        or trial.get("empty_transcript") is True
-        and trial.get("recognized_transcript") == ""
-        and trial.get("operations") == []
-        and trial.get("action_trace") == []
-        for trial in trials
-        if trial.get("action_trace_complete") is True
-        and trial.get("turn_id")
-        and isinstance(trial.get("recognized_transcript"), str)
-        and isinstance(trial.get("evaluated_intent"), dict)
-        and isinstance(trial.get("action_trace"), list)
-    )
-    return {
-        **rate(passed, len(trials)),
-        "passed": len(trials) == 40
-        and len({trial.get("turn_id") for trial in trials}) == 40
-        and passed == 40
-        and counts
-        == {stage: 10 for stage in ("before", "speech", "pause", "after-final")},
-    }
+    from tools.fault_runner import fault_gate as classify_faults
+
+    return classify_faults(faults)
 
 
 def operation_matches(row: Row, label: Row) -> bool | None:
@@ -461,7 +443,7 @@ def build_report(
     )
     gates["replay_samples"] = len(expected) >= 200
     gates["evidence_records"] = bool(primary) and all(
-        evidence_complete(row) for row in primary
+        evidence_complete(row) for row in primary if observation_complete(row)
     )
     if phase == "p1":
         if (
