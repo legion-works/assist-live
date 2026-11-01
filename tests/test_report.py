@@ -480,18 +480,19 @@ def test_failed_attempt_requires_present_fields_and_named_reasons():
 
 
 def test_fault_empty_path_cannot_hide_operations_and_duplicate_trials(acceptance):
+    from tests.test_fault_runner import empty_trial
     from tools.report import fault_gate
 
     _, _, _, faults = copy.deepcopy(acceptance)
     assert fault_gate(faults)["passed"]
-    trial = faults["trials"][0]
+    previous = faults["trials"][0]
+    trial = empty_trial()
     trial.update(
-        correct_transcript=False,
-        empty_transcript=True,
-        recognized_transcript="",
-        operations=[],
+        stage=previous["stage"],
+        turn_id=previous["turn_id"],
         action_trace=[{"service": "light.turn_on"}],
     )
+    faults["trials"][0] = trial
     assert not fault_gate(faults)["passed"]
     trial["action_trace"] = []
     assert fault_gate(faults)["passed"]

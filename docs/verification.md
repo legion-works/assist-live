@@ -2939,3 +2939,21 @@ The reader tests use the new paths with unchanged assertions.
 The necessary checks are Ruff format and lint, `task check`, `task ha-minimum`, `task package-check`, and `task hassfest`.
 They also include the ASD-STE100 checker, the canonical public-tree privacy command with history, and `git diff --check`.
 These checks do not measure physical device playback or satisfy a P0 or P1 acceptance gate.
+
+## Fault-runner record correction
+
+The earlier sentence that an empty result must have a selected-intent record is incorrect.
+HA 2026.10.3 `default_pipeline.py:472-475` reports `stt-no-text-recognized` before `stt-end` and before the conversation agent runs.
+The fixture uses the error and end events from `run.py:255-273`, not an invented intent.
+
+An empty-safe trial has this same-run error and a recorded turn ID.
+It has no agent record and complete empty operation lists.
+Its end time is at or before the fallback deadline.
+Without that cause, missing transcript, intent, or operation records give an unsatisfactory result.
+
+`acceptable(trial)` has one parameter, the trial record.
+The truncated-action test uses an actual transcript and one operation, not the plan's flag-only example.
+Cleanup tests include cancellation during the run and delete, delete timeouts, and a temporary pipeline in the initial list.
+Only non-simulated commands with `--check` can write repository JSON reports.
+The shared `tools.metrics.rate` function has one owner for report and fault counts.
+No live bench trial is part of these repair checks.

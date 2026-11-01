@@ -24,7 +24,20 @@ def trial():
 def test_partial_transcript_action_fails_gate():
     from tools.fault_runner import acceptable
 
-    assert not acceptable(correct=False, empty=False, action_count=1)
+    row = trial()
+    row["recognized_transcript"] = "turn on"
+    assert len(row["action_trace"]) == 1
+    assert not acceptable(row)
+
+
+def test_acceptable_requires_only_a_trial_record():
+    import inspect
+
+    from tools.fault_runner import acceptable
+
+    parameters = inspect.signature(acceptable).parameters
+    assert list(parameters) == ["trial"]
+    assert parameters["trial"].default is inspect.Parameter.empty
 
 
 def test_classifier_recomputes_transcript_and_operations():
@@ -73,13 +86,113 @@ def test_missing_evidence_is_never_empty_safe(field, value):
     assert not acceptable(row)
 
 
-def test_empty_requires_explicit_complete_zero_operations():
+def empty_trial():
+    row = trial()
+    row.update(
+        recognized_transcript=None,
+        evaluated_intent=None,
+        action_trace=[],
+        operations=[],
+        agent_records=[],
+        pipeline_run_id=3,
+    )
+    # HA 2026.10.3 default_pipeline.py:422-431,472-486 and run.py:255-273.
+    row["events"] = [
+        {"run_id": 3, "stage": stage, "source": "ha", "data": data}
+        for stage, data in (
+            ("run-start", {}),
+            ("stt-start", {"engine": "stt.test"}),
+            (
+                "error",
+                {"code": "stt-no-text-recognized", "message": "No text recognized"},
+            ),
+            ("run-end", {}),
+        )
+    ]
+    return row
+
+
+def test_pinned_ha_empty_error_is_safe_without_a_fabricated_intent():
+    from tools.fault_runner import acceptable
+
+    row = empty_trial()
+    assert acceptable(row)
+    row["action_trace"] = trial()["action_trace"]
+    assert not acceptable(row)
+
+
+def test_empty_transcript_with_invented_intent_is_not_evidence():
     from tools.fault_runner import acceptable
 
     row = trial()
     row.update(recognized_transcript="", action_trace=[])
-    assert acceptable(row)
-    row["action_trace"] = trial()["action_trace"]
+    assert not acceptable(row)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "other-run",
+        "other-error",
+        "no-end",
+        "agent",
+        "trace",
+        "operations",
+        "deadline",
+        "missing-operations",
+        "final",
+        "intent",
+        "turn",
+        "transcript",
+        "intent-record",
+        "event-source",
+        "missing-agent-log",
+        "missing-transcript-field",
+        "missing-intent-field",
+    ],
+)
+def test_empty_error_requires_complete_same_run_evidence(change):
+    from tools.fault_runner import acceptable
+
+    row = empty_trial()
+    if change == "other-run":
+        row["events"][2]["run_id"] = 99
+    elif change == "other-error":
+        row["events"][2]["data"]["code"] = "stt-stream-failed"
+    elif change == "no-end":
+        row["events"].pop()
+    elif change == "agent":
+        row["agent_records"] = [{"turn_id": row["turn_id"]}]
+    elif change == "trace":
+        row["action_trace_complete"] = False
+    elif change == "operations":
+        row["operations"] = [{"service": "light.turn_on"}]
+    elif change == "missing-operations":
+        del row["operations"]
+    elif change == "final":
+        row["events"].insert(
+            2, {"run_id": 3, "stage": "stt-end", "source": "ha", "data": {}}
+        )
+    elif change == "intent":
+        row["events"].insert(
+            2, {"run_id": 3, "stage": "intent-start", "source": "ha", "data": {}}
+        )
+    elif change == "turn":
+        row["turn_id"] = None
+    elif change == "transcript":
+        row["recognized_transcript"] = "turn on"
+    elif change == "intent-record":
+        row["evaluated_intent"] = trial()["evaluated_intent"]
+    elif change == "event-source":
+        row["events"][2]["source"] = "other"
+    elif change == "missing-agent-log":
+        del row["agent_records"]
+    elif change == "missing-transcript-field":
+        del row["recognized_transcript"]
+    elif change == "missing-intent-field":
+        del row["evaluated_intent"]
+    else:
+        row["completed_utc_ns"] = row["fallback_deadline_utc_ns"] + 1
     assert not acceptable(row)
 
 
@@ -441,6 +554,8 @@ async def test_missing_pause_boundaries_refuse_before_any_live_mutation(
         lambda: pytest.fail("live mutation before preflight"),
     )
     args = argparse.Namespace(
+        simulate=True,
+        check=True,
         output=tmp_path / "result.json",
         labels=tmp_path / "unused.jsonl",
         native_matrix=None,
@@ -526,3 +641,336 @@ def test_result_denominators_never_substitute_virtual_for_device_rows(
         "denominator": 2,
         "measure": "satisfactory rows",
     }
+
+
+async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations(
+    monkeypatch,
+):
+    from pathlib import Path
+
+    from tools import fault_runner
+
+    expected = empty_trial()
+
+    class Server:
+        async def stop(self):
+            pass
+
+        async def restore(self):
+            pass
+
+    class Socket:
+        def __init__(self):
+            self.messages = iter(
+                [
+                    {
+                        "success": True,
+                        "result": [
+                            {
+                                "entity_id": "sensor.latency",
+                                "attributes": {"turn_id": "previous"},
+                            }
+                        ],
+                    },
+                    {"success": True},
+                    *[
+                        {
+                            "id": 3,
+                            "type": "event",
+                            "event": {
+                                "type": item["stage"],
+                                "data": {
+                                    **item["data"],
+                                    **(
+                                        {"runner_data": {"stt_binary_handler_id": 7}}
+                                        if item["stage"] == "run-start"
+                                        else {}
+                                    ),
+                                },
+                            },
+                        }
+                        for item in expected["events"]
+                    ],
+                    {
+                        "id": 4,
+                        "type": "result",
+                        "success": True,
+                        "result": [
+                            {
+                                "entity_id": "sensor.latency",
+                                "attributes": {
+                                    "turn_id": expected["turn_id"],
+                                    "turn_type": "voice",
+                                },
+                            }
+                        ],
+                    },
+                ]
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def send_json(self, message):
+            pass
+
+        async def send_bytes(self, message):
+            pass
+
+        async def receive_json(self):
+            return next(self.messages)
+
+    async def connect(*args):
+        return Socket()
+
+    monkeypatch.setattr(fault_runner, "connect", connect)
+    label = {
+        **expected["label"],
+        "id": "test",
+        "audio_sha256": "a" * 64,
+        "split": "held_out",
+    }
+    row = await fault_runner.pipeline_trial(
+        None,
+        Path("unused"),
+        "pipeline",
+        label,
+        bytes(640),
+        "before",
+        Server(),
+        30,
+        turn_sensor="sensor.latency",
+    )
+    assert row["acceptable"]
+    assert row["recognized_transcript"] is row["evaluated_intent"] is None
+    assert row["action_trace_complete"] is True
+    assert row["action_trace"] == row["operations"] == row["agent_records"] == []
+    assert all(item["run_id"] == row["pipeline_run_id"] for item in row["events"])
+
+
+@pytest.fixture
+def cleanup_bench():
+    from tools.probe_pipelines import pipeline_fields
+
+    bench = {
+        "pipelines": [{"id": "existing", **pipeline_fields("stt.test", "tts.test")}],
+        "calls": [],
+        "delete_attempts": 0,
+        "delete": None,
+    }
+
+    async def command(kind, **fields):
+        bench["calls"].append((kind, fields))
+        if kind == "assist_pipeline/pipeline/list":
+            return copy.deepcopy(
+                {"pipelines": bench["pipelines"], "preferred_pipeline": "existing"}
+            )
+        if kind == "get_states":
+            return [
+                {
+                    "entity_id": "conversation.assist_live_short",
+                    "attributes": {"virtual_device_id": "virtual"},
+                },
+                {"entity_id": "sensor.latency", "attributes": {"turn_type": "voice"}},
+            ]
+        if kind == "config/entity_registry/list":
+            return [
+                {"entity_id": "stt.test", "device_id": "device"},
+                {
+                    "entity_id": "sensor.latency",
+                    "device_id": "device",
+                    "platform": "assist_live",
+                },
+            ]
+        if kind == "assist_pipeline/pipeline/create":
+            created = {"id": "temporary", **fields}
+            bench["pipelines"].append(created)
+            return created
+        if kind == "assist_pipeline/pipeline/delete":
+            bench["delete_attempts"] += 1
+            if bench["delete"]:
+                await bench["delete"]()
+            bench["pipelines"][:] = [
+                row for row in bench["pipelines"] if row["id"] != fields["pipeline_id"]
+            ]
+            return None
+        pytest.fail(kind)
+
+    bench["command"] = command
+    return bench
+
+
+async def test_cancel_during_run_and_delete_waits_for_shielded_cleanup(cleanup_bench):
+    import asyncio
+
+    from tools.fault_runner import temporary_pipeline
+
+    running, deleting, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    result = {}
+
+    async def delete():
+        deleting.set()
+        await release.wait()
+
+    cleanup_bench["delete"] = delete
+
+    async def run():
+        async with temporary_pipeline(cleanup_bench["command"], result, "existing"):
+            running.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(run())
+    await asyncio.wait_for(running.wait(), 1)
+    task.cancel()
+    await asyncio.wait_for(deleting.wait(), 1)
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleanup_bench["delete_attempts"] == 1
+    assert result["bench_restored"] is True
+    assert result["bench_before"] == result["bench_after"]
+    assert [row["id"] for row in cleanup_bench["pipelines"]] == ["existing"]
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_delete_timeout_has_own_deadline_one_retry_and_named_failure(
+    cleanup_bench, monkeypatch, persistent
+):
+    import asyncio
+
+    from tools import fault_runner
+
+    monkeypatch.setattr(fault_runner, "PIPELINE_CLEANUP_TIMEOUT", 0.01, raising=False)
+
+    async def delete():
+        if persistent or cleanup_bench["delete_attempts"] == 1:
+            await asyncio.sleep(0.05)
+
+    cleanup_bench["delete"] = delete
+    result = {}
+    if persistent:
+        with pytest.raises(
+            ValueError, match="TEMPORARY_PIPELINE_DELETE_FAILED: temporary"
+        ):
+            async with fault_runner.temporary_pipeline(
+                cleanup_bench["command"], result, "existing"
+            ):
+                pass
+        assert "temporary" in result["cleanup_error"]
+        assert result["bench_restored"] is False
+        assert "bench_after" in result
+    else:
+        async with fault_runner.temporary_pipeline(
+            cleanup_bench["command"], result, "existing"
+        ):
+            pass
+        assert result["bench_restored"] is True
+    assert cleanup_bench["delete_attempts"] == 2
+
+
+async def test_leftover_temporary_pipeline_is_named_and_not_deleted(cleanup_bench):
+    from tools.fault_runner import temporary_pipeline
+
+    cleanup_bench["pipelines"].append(
+        {"id": "leftover", "name": "assist-live f11-smoke"}
+    )
+    with pytest.raises(ValueError, match="TEMPORARY_PIPELINE_EXISTS: leftover"):
+        async with temporary_pipeline(cleanup_bench["command"], {}, "existing"):
+            pytest.fail("ran with a leftover pipeline")
+    assert not any(
+        kind.endswith(("/create", "/delete")) for kind, _ in cleanup_bench["calls"]
+    )
+
+
+def test_native_checked_output_can_be_in_repo_reports_but_simulation_cannot(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from tools import fault_runner
+
+    monkeypatch.setattr(fault_runner, "ROOT", tmp_path, raising=False)
+    reports = tmp_path / "docs/reports"
+    reports.mkdir(parents=True)
+    matrix = Path(__file__).resolve().parents[1] / "docs/testing/native-functions.md"
+    output = reports / "native.json"
+    base = ["--native-matrix", str(matrix), "--output", str(output)]
+    assert fault_runner.main([*base, "--simulate", "--check"]) == 1
+    assert not output.exists()
+    assert fault_runner.main(base) == 1
+    assert not output.exists()
+    assert fault_runner.main([*base, "--check"]) == 1
+    assert output.exists()
+
+
+def test_report_and_fault_runner_share_one_rate_owner():
+    from tools import fault_runner, report
+    from tools.metrics import rate
+
+    assert report.rate is fault_runner.rate is rate
+    assert report.fault_gate is fault_runner.fault_gate
+    assert rate.__module__ == "tools.metrics"
+    assert rate(1, 2)["rate"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "code", ["TEMPORARY_PIPELINE_DELETE_FAILED", "TEMPORARY_PIPELINE_EXISTS"]
+)
+def test_cleanup_and_leftover_errors_print_pipeline_id_and_exit_nonzero(
+    tmp_path, monkeypatch, capsys, code
+):
+    from tools import fault_runner
+
+    async def run(args):
+        raise fault_runner.TemporaryPipelineError(code + ": temporary-id")
+
+    monkeypatch.setattr(fault_runner, "run", run)
+    assert (
+        fault_runner.main(
+            [
+                "--simulate",
+                "--token-file",
+                "unused",
+                "--pipeline",
+                "test",
+                "--audio-root",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "result.json"),
+            ]
+        )
+        == 1
+    )
+    assert code + ": temporary-id" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "simulated,check,location,allowed",
+    [
+        (False, True, "docs/reports/trial.json", True),
+        (False, False, "docs/reports/trial.json", False),
+        (True, True, "docs/reports/trial.json", False),
+        (True, False, "docs/reports/trial.json", False),
+        (False, True, "tools/trial.json", False),
+    ],
+)
+def test_in_repo_output_policy_is_explicit(
+    tmp_path, monkeypatch, simulated, check, location, allowed
+):
+    from tools import fault_runner
+
+    monkeypatch.setattr(fault_runner, "ROOT", tmp_path)
+    if allowed:
+        fault_runner.validate_output(
+            tmp_path / location, simulated=simulated, check=check
+        )
+    else:
+        with pytest.raises(ValueError):
+            fault_runner.validate_output(
+                tmp_path / location, simulated=simulated, check=check
+            )

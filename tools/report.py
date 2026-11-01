@@ -10,7 +10,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.calibrate_playback import percentile
-from tools.corpus import clopper_pearson, load_corpus
+from tools.corpus import load_corpus
 from tools.device_replay import (
     DEVICE_STAGES,
     RUN_FIELDS,
@@ -19,6 +19,8 @@ from tools.device_replay import (
     pre_roll_ms,
     sample_errors,
 )
+from tools.fault_runner import fault_gate
+from tools.metrics import rate
 from tools.native_matrix import validate_native_matrix
 from tools.test_environment import validate_intent_action_evidence
 
@@ -39,20 +41,6 @@ STEPS = {
     "last_voice_to_playback": ("last_voice", "playback_start"),
     "last_voice_to_tts_first_byte": ("last_voice", "tts_first_byte"),
 }
-
-
-def rate(successes: int, samples: int) -> Row:
-    if type(successes) is not int or type(samples) is not int:
-        raise ReplayError("INVALID_RATE_COUNTS")
-    if samples == 0 and successes == 0:
-        return {"count": 0, "denominator": 0, "rate": None, "ci95": None}
-    low, high = clopper_pearson(successes, samples)
-    return {
-        "count": successes,
-        "denominator": samples,
-        "rate": successes / samples,
-        "ci95": [low, high],
-    }
 
 
 def completeness(complete: int, voice_turns: int) -> Row:
@@ -328,12 +316,6 @@ def calibration_ok(calibration: Row, config: str, revision: str) -> bool:
             for boundary in ("start", "end")
         )
     )
-
-
-def fault_gate(faults: Row) -> Row:
-    from tools.fault_runner import fault_gate as classify_faults
-
-    return classify_faults(faults)
 
 
 def operation_matches(row: Row, label: Row) -> bool | None:

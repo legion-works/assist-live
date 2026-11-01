@@ -21,6 +21,7 @@ if __package__ in (None, ""):
 
 from tools.corpus import load_corpus, resolve_audio
 from tools.device_replay import BRIDGE_OPERATION_MAP, RUN_FIELDS
+from tools.metrics import rate
 from tools.native_matrix import (
     main as native_main,
 )
@@ -36,17 +37,52 @@ from tools.test_environment import FIXTURES, URL, expected_operations
 Row = dict[str, Any]
 STAGES = ("before", "speech", "pause", "after-final")
 CONTAINER = "assist-live-server-q1"
+ROOT = Path(__file__).resolve().parents[1]
+TEMPORARY_PIPELINE_NAME = "assist-live f11-smoke"
+PIPELINE_CLEANUP_TIMEOUT = 30.0
 
 
-def acceptable(
-    trial: Row | None = None,
-    *,
-    correct: bool = False,
-    empty: bool = False,
-    action_count: int = 0,
-) -> bool:
-    # Flags alone cannot prove transcript or operation correctness.
-    if trial is None:
+class TemporaryPipelineError(ValueError):
+    pass
+
+
+def no_text_error(trial: Row) -> bool:
+    run_id = trial.get("pipeline_run_id")
+    events = trial.get("events")
+    if (
+        type(run_id) is not int
+        or run_id <= 0
+        or not isinstance(events, list)
+        or trial.get("recognized_transcript") not in (None, "")
+        or trial.get("evaluated_intent") is not None
+        or trial.get("agent_records") != []
+        or not all(
+            isinstance(event, dict)
+            and event.get("run_id") == run_id
+            and event.get("source") == "ha"
+            for event in events
+        )
+    ):
+        return False
+    stages = [event.get("stage") for event in events]
+    errors = [event for event in events if event.get("stage") == "error"]
+    return (
+        stages[:2] == ["run-start", "stt-start"]
+        and stages[-2:] == ["error", "run-end"]
+        and not any(
+            stage in ("stt-end", "intent-start", "intent-end") for stage in stages
+        )
+        and len(errors) == 1
+        and isinstance(errors[0].get("data"), dict)
+        and errors[0].get("data", {}).get("code") == "stt-no-text-recognized"
+    )
+
+
+def acceptable(trial: Row) -> bool:
+    if not all(
+        key in trial
+        for key in ("recognized_transcript", "evaluated_intent", "action_trace")
+    ):
         return False
     transcript = trial.get("recognized_transcript")
     selected = trial.get("evaluated_intent")
@@ -55,12 +91,7 @@ def acceptable(
     deadline = trial.get("fallback_deadline_utc_ns")
     completed = trial.get("completed_utc_ns")
     if not (
-        isinstance(transcript, str)
-        and isinstance(selected, dict)
-        and isinstance(selected.get("name"), str)
-        and selected["name"]
-        and isinstance(selected.get("slots"), dict)
-        and isinstance(trace, list)
+        isinstance(trace, list)
         and all(
             isinstance(operation, dict)
             and type(operation.get("monotonic_ns")) is int
@@ -82,8 +113,17 @@ def acceptable(
         and 0 < completed <= deadline
     ):
         return False
-    if transcript == "":
-        return trace == [] and trial.get("operations", []) == []
+    if no_text_error(trial):
+        return trace == [] and trial.get("operations") == []
+    if not (
+        isinstance(transcript, str)
+        and bool(transcript.strip())
+        and isinstance(selected, dict)
+        and isinstance(selected.get("name"), str)
+        and selected["name"]
+        and isinstance(selected.get("slots"), dict)
+    ):
+        return False
     if re.findall(r"\w+", transcript.casefold()) != re.findall(
         r"\w+", label["transcript"].casefold()
     ):
@@ -121,8 +161,6 @@ def acceptable(
 
 
 def fault_gate(faults: Row) -> Row:
-    from tools.report import rate
-
     trials = faults.get("trials", [])
     passed = sum(acceptable(trial) for trial in trials)
     counts = Counter(trial.get("stage") for trial in trials)
@@ -265,6 +303,8 @@ async def pipeline_trial(
         label=label,
         stage=stage,
         events=[],
+        pipeline_run_id=3,
+        agent_records=[],
         action_trace_complete=False,
         complete=False,
         failures=[],
@@ -391,6 +431,7 @@ async def pipeline_trial(
                             "data": event.get("data", {}),
                             "t_utc_ns": time.time_ns(),
                             "source": "ha",
+                            "run_id": message["id"],
                             "quality": "measured",
                         }
                     )
@@ -435,11 +476,14 @@ async def pipeline_trial(
                         }
                         for operation in record["operations"]
                     ]
+            empty = no_text_error(row)
+            if empty:
+                row.update(action_trace=[], action_trace_complete=True, operations=[])
             if not row["action_trace_complete"]:
                 row["failures"].append("MISSING_COMPLETE_OPERATION_RECORD")
-            if not isinstance(row["recognized_transcript"], str):
+            if not empty and not isinstance(row["recognized_transcript"], str):
                 row["failures"].append("MISSING_TRANSCRIPT")
-            if not isinstance(row["evaluated_intent"], dict):
+            if not empty and not isinstance(row["evaluated_intent"], dict):
                 row["failures"].append("MISSING_SELECTED_INTENT")
             if not row["turn_id"]:
                 row["failures"].append("MISSING_TURN_ID")
@@ -490,6 +534,19 @@ async def temporary_pipeline(
 
     result["bench_before"] = await snapshot()
     result["bench_restored"] = False
+    leftovers = [
+        pipeline["id"]
+        for pipeline in result["bench_before"]["pipelines"]["pipelines"]
+        if pipeline.get("name") == TEMPORARY_PIPELINE_NAME
+    ]
+    if leftovers:
+        raise TemporaryPipelineError(
+            "TEMPORARY_PIPELINE_EXISTS: "
+            + ",".join(leftovers)
+            + " ("
+            + TEMPORARY_PIPELINE_NAME
+            + ")"
+        )
     created = None
     try:
         source = next(
@@ -525,7 +582,7 @@ async def temporary_pipeline(
             raise ValueError("unique pipeline STT turn sensor unavailable")
         fields = {key: source[key] for key in pipeline_fields("", "")}
         fields.update(
-            name="assist-live f11-smoke",
+            name=TEMPORARY_PIPELINE_NAME,
             conversation_engine="conversation.assist_live_short",
             prefer_local_intents=False,
         )
@@ -533,17 +590,70 @@ async def temporary_pipeline(
         result["temporary_pipeline"] = created["id"]
         yield created["id"], device_id, sensors[0]
     finally:
-        if created is not None:
-            await command("assist_pipeline/pipeline/delete", pipeline_id=created["id"])
-        result["bench_after"] = await snapshot()
-        result["bench_restored"] = result["bench_before"] == result["bench_after"]
-        if not result["bench_restored"]:
-            raise ValueError("pipeline list or satellite select changed")
+
+        async def cleanup() -> None:
+            error = None
+            pipeline_id = created["id"] if created is not None else source_id
+            if created is not None:
+                for _ in range(2):
+                    try:
+                        async with asyncio.timeout(PIPELINE_CLEANUP_TIMEOUT):
+                            await command(
+                                "assist_pipeline/pipeline/delete",
+                                pipeline_id=pipeline_id,
+                            )
+                        break
+                    except TimeoutError, ValueError, OSError, aiohttp.ClientError:
+                        continue
+                else:
+                    error = TemporaryPipelineError(
+                        "TEMPORARY_PIPELINE_DELETE_FAILED: " + pipeline_id
+                    )
+            try:
+                async with asyncio.timeout(PIPELINE_CLEANUP_TIMEOUT):
+                    result["bench_after"] = await snapshot()
+            except TimeoutError, ValueError, OSError, aiohttp.ClientError:
+                result["bench_after"] = None
+                error = error or TemporaryPipelineError(
+                    "TEMPORARY_PIPELINE_SNAPSHOT_FAILED: " + pipeline_id
+                )
+            result["bench_restored"] = result["bench_before"] == result["bench_after"]
+            if not result["bench_restored"]:
+                error = error or TemporaryPipelineError(
+                    "TEMPORARY_PIPELINE_SNAPSHOT_MISMATCH: " + pipeline_id
+                )
+            if error is not None:
+                result["cleanup_error"] = str(error)
+                raise error
+
+        task = asyncio.create_task(cleanup())
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+
+def validate_output(path: Path, *, simulated: bool, check: bool) -> None:
+    resolved = path.resolve()
+    if not resolved.is_relative_to(ROOT):
+        return
+    if simulated:
+        raise ValueError("SIMULATED_OUTPUT_IN_REPOSITORY")
+    if (
+        not check
+        or resolved.parent != ROOT / "docs/reports"
+        or resolved.suffix != ".json"
+    ):
+        raise ValueError("CHECKED_REPORT_OUTPUT_REQUIRED")
 
 
 async def run(args: argparse.Namespace) -> Row:
-    if args.output.resolve().is_relative_to(Path(__file__).resolve().parents[1]):
-        raise ValueError("simulated results must stay external to the repository")
+    validate_output(args.output, simulated=args.simulate, check=args.check)
     labels = load_corpus(args.labels)
     if args.native_matrix:
         validate_matrix_document(args.native_matrix.read_text())
@@ -650,7 +760,10 @@ async def run(args: argparse.Namespace) -> Row:
                             await control.send_json(
                                 {"id": counter, "type": kind, **fields}
                             )
-                            response = await control.receive_json()
+                            while True:
+                                response = await control.receive_json()
+                                if response.get("id") == counter:
+                                    break
                         if (
                             response.get("id") != counter
                             or response.get("success") is not True
@@ -730,6 +843,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-matrix", type=Path)
     parser.add_argument("--temporary-agent-pipeline", action="store_true")
     args = parser.parse_args(argv)
+    try:
+        validate_output(args.output, simulated=args.simulate, check=args.check)
+    except ValueError as error:
+        print("FAIL " + str(error))
+        return 1
     if args.native_matrix and not args.simulate:
         return native_main(
             [
@@ -773,6 +891,9 @@ def main(argv: list[str] | None = None) -> int:
             or args.check
             and (not fault_gate(result)["passed"] or bool(result.get("native_errors")))
         )
+    except TemporaryPipelineError as error:
+        print("FAIL " + str(error))
+        return 1
     except OSError, ValueError, aiohttp.ClientError, TimeoutError:
         print("FAIL isolated fault run; inspect the private trial records")
         return 1
