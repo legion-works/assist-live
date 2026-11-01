@@ -1,11 +1,12 @@
 from uuid import UUID
 
 
-def test_voice_overlap_announcement_followup_and_idle(ledger):
+async def test_voice_overlap_announcement_followup_and_idle(ledger):
     a = ledger.open_voice("satellite-a")
     b = ledger.open_voice("satellite-b")
     assert UUID(a.turn_id).version == 7
     assert a.conversation_id is None
+    assert await ledger.connect(a)
     ledger.satellite_state("satellite-a", "idle")
     assert ledger.current("satellite-a") == a
     ledger.device_event("satellite-a", b.turn_id, "playback_end")
@@ -33,11 +34,13 @@ def test_deadline_and_parent_window(client):
     now = [0.0]
     ledger = TurnLedger(client, clock=lambda: now[0])
     first = ledger.open_voice("satellite-a")
+    record = ledger.records[first.turn_id]
     now[0] = 119.999
     assert ledger.current("satellite-a") == first
     now[0] = 120
     assert ledger.current("satellite-a") is None
-    assert ledger.records[first.turn_id].status == "incomplete"
+    assert record.status == "incomplete"
+    assert record.closed == 0.0
     now[0] = 131
     assert ledger.open_voice("satellite-a").parent_turn_id is None
 
@@ -105,12 +108,13 @@ async def test_ten_thousand_turn_cache_is_bounded(client):
     assert not ledger._pending
 
 
-def test_closed_record_retention_covers_parent_window(client):
+async def test_closed_record_retention_covers_parent_window(client):
     from custom_components.assist_live.ledger import TurnLedger
 
     now = [0.0]
     ledger = TurnLedger(client, clock=lambda: now[0])
     first = ledger.open_voice("satellite-a")
+    assert await ledger.connect(first)
     ledger.device_event("satellite-a", first.turn_id, "playback_end")
     now[0] = 9.999
     ledger.prune()
@@ -121,8 +125,9 @@ def test_closed_record_retention_covers_parent_window(client):
     assert first.turn_id not in ledger.records
 
 
-def test_cache_pressure_preserves_other_satellite_parent(ledger):
+async def test_cache_pressure_preserves_other_satellite_parent(ledger):
     first = ledger.open_voice("satellite-b")
+    assert await ledger.connect(first)
     ledger.device_event("satellite-b", first.turn_id, "playback_end")
     for _ in range(1000):
         turn = ledger.open_voice("satellite-a")

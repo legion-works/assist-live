@@ -1,8 +1,9 @@
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import uuid7
 
 from assist_live_client import AssistLiveClient
@@ -15,6 +16,39 @@ from .const import (
     MAX_SPEAKER_READS_PER_SATELLITE,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
+type FallbackReason = Literal[
+    "health_timeout",
+    "health_error",
+    "server_unhealthy",
+    "stt_unsupported",
+    "tts_unsupported",
+    "not_local_only",
+    "destination_not_local",
+    "open_refused",
+    "open_error",
+    "stream_refused",
+    "stream_closed",
+    "stream_error",
+    "message_timeout",
+]
+
+
+def stream_failure_reason(error: Exception) -> FallbackReason:
+    if isinstance(error, TimeoutError):
+        return "message_timeout"
+    if isinstance(error, StopAsyncIteration):
+        return "stream_closed"
+    if isinstance(error, ProtocolError):
+        if error.kind == "timeout":
+            return "message_timeout"
+        if error.kind == "refused":
+            return "stream_refused"
+        if error.kind == "closed":
+            return "stream_closed"
+    return "stream_error"
+
 
 @dataclass
 class Record:
@@ -22,6 +56,7 @@ class Record:
     opened: float
     status: str = "open"
     closed: float | None = None
+    closed_by: str | None = None
     stages: set[str] = field(default_factory=set)
     timings: dict[str, dict[str, Any]] = field(default_factory=dict)
     destinations: list[dict[str, str]] = field(default_factory=list)
@@ -29,6 +64,10 @@ class Record:
     voice: str | None = None
     audio_format: dict[str, Any] | None = None
     server_refusals: dict[str, str] = field(default_factory=dict)
+    fallback_reasons: dict[str, FallbackReason] = field(default_factory=dict)
+    open_failure: FallbackReason = "open_error"
+    open_error_class: str = "None"
+    last_activity: float | None = None
 
 
 @dataclass
@@ -50,6 +89,9 @@ class TurnLedger:
         self._pending: list[TimingEvent] = []
         self._connected: set[str] = set()
         self.failures: dict[str, int] = {}
+        self.fallback_reasons = {
+            reason: 0 for reason in get_args(FallbackReason.__value__)
+        }
         self.late_server_failures = 0
         self.save: Callable[[], Awaitable[None]] | None = None
         self.record_transcripts = False
@@ -73,17 +115,25 @@ class TurnLedger:
         self.last_health = health
         record = self.records[turn_id]
         record.server_refusals.pop(part, None)
-        if health.healthy is not True or getattr(health, part) is not True:
+        if health.healthy is not True:
+            record.fallback_reasons[part] = "server_unhealthy"
+            return False
+        if getattr(health, part) is not True:
+            record.fallback_reasons[part] = (
+                "stt_unsupported" if part == "stt" else "tts_unsupported"
+            )
             return False
         if self.local_only:
             if health.local_only is not True:
                 record.server_refusals[part] = "server_not_local_only"
+                record.fallback_reasons[part] = "not_local_only"
                 return False
             if (
                 not isinstance(health.destinations, Mapping)
                 or health.destinations.get(part) != "local"
             ):
                 record.server_refusals[part] = "server_destination_not_local"
+                record.fallback_reasons[part] = "destination_not_local"
                 return False
         return True
 
@@ -137,12 +187,15 @@ class TurnLedger:
             record = self.records[turn_id]
             if self.clock() - record.opened < 120:
                 return record.turn
-            self._close(record, "incomplete")
+            self._close(record, "turn_limit")
         return None
 
-    def _close(self, record: Record, status: str) -> None:
-        record.status = status
-        record.closed = self.clock()
+    def _close(self, record: Record, stage: str) -> None:
+        record.status = "complete" if stage == "playback_end" else "incomplete"
+        record.closed_by = stage
+        record.closed = (
+            record.last_activity if record.last_activity is not None else record.opened
+        )
         self._active.pop(record.turn.satellite, None)
         self._previous[record.turn.satellite] = record
         self.prune()
@@ -181,12 +234,14 @@ class TurnLedger:
         self.prune()
         if current := self.current(satellite):
             self.mark(current.turn_id, "turn_superseded")
-            self._close(self.records[current.turn_id], "incomplete")
+            self._close(self.records[current.turn_id], "turn_superseded")
         previous = self._previous.get(satellite)
         parent = (
             previous.turn.turn_id
             if previous is not None
             and previous.closed is not None
+            and previous.turn.turn_id in self._connected
+            and previous.closed_by == "playback_end"
             and self.clock() - previous.closed < 10
             else None
         )
@@ -203,12 +258,24 @@ class TurnLedger:
         for listener in tuple(self.listeners):
             listener()
 
-    async def use_fallback(self, turn_id: str, part: str, entity_id: str) -> None:
+    async def use_fallback(
+        self,
+        turn_id: str,
+        part: str,
+        entity_id: str,
+        *,
+        reason: FallbackReason,
+        error_class: str = "None",
+    ) -> None:
         entity_id = entity_id or "unknown"
         mode = (
             await self.fallback_policy(entity_id) if self.fallback_policy else "unknown"
         )
         self.used(turn_id, part, entity_id, mode)
+        if record := self.records.get(turn_id):
+            record.fallback_reasons[part.removesuffix("_fallback")] = reason
+        self.mark(turn_id, "fallback_used", reason=reason)
+        _LOGGER.debug("fallback_used reason=%s error=%s", reason, error_class)
 
     def used(self, turn_id: str, part: str, provider: str, mode: str) -> None:
         if record := self.records.get(turn_id):
@@ -335,26 +402,37 @@ class TurnLedger:
         return self._open(satellite, "tts_only")
 
     def mark(
-        self, turn_id: str, stage: str, *, decision_source: str | None = None
+        self,
+        turn_id: str,
+        stage: str,
+        *,
+        decision_source: str | None = None,
+        reason: FallbackReason | None = None,
     ) -> None:
         record = self.records.get(turn_id)
         if record is None:
             return
+        if stage == "fallback_used":
+            if reason is None:
+                raise ValueError("fallback reason required")
+            self.fallback_reasons[reason] += 1
+        # An administrative close must not use the next turn's open time.
+        if stage != "turn_superseded":
+            record.last_activity = self.clock()
         if stage in {"stt_failed", "tts_failed", "fallback_used"}:
             self.failures[stage] = self.failures.get(stage, 0) + 1
         record.stages.add(stage)
         data: dict[str, object] = {}
         if decision_source is not None:
             data["decision_source"] = decision_source
+        if reason is not None:
+            data["reason"] = reason
         if (
             stage == "fallback_used"
             and record.destinations
             and record.destinations[-1]["part"].endswith("_fallback")
         ):
             data.update(record.destinations[-1])
-            part = record.destinations[-1]["part"].removesuffix("_fallback")
-            if reason := record.server_refusals.get(part):
-                data["reason"] = reason
         self._pending.append(
             TimingEvent(
                 turn_id,
@@ -384,6 +462,7 @@ class TurnLedger:
 
     def satellite_state(self, satellite: str, state: str) -> None:
         if turn := self.current(satellite):
+            self.records[turn.turn_id].last_activity = self.clock()
             self.records[turn.turn_id].stages.add("satellite_state")
             self._pending.append(
                 TimingEvent(
@@ -403,23 +482,34 @@ class TurnLedger:
         if turn is None or turn.turn_id != turn_id:
             return
         self.records[turn.turn_id].stages.add(stage)
+        self.records[turn.turn_id].last_activity = self.clock()
         if stage == "playback_end":
-            self._close(self.records[turn.turn_id], "complete")
+            # docs/design.md: use monotonic receipt time, not the device clock.
+            self._close(self.records[turn.turn_id], "playback_end")
 
     async def connect(self, turn: TurnOpen) -> bool:
+        record = self.records.get(turn.turn_id)
         if self.save is not None:
             await self.save()
+        if record is None or self.current(turn.satellite) != turn:
+            return False
         if turn.turn_id in self._connected:
             return True
         try:
             async with asyncio.timeout(10):
                 await self.client.open_turn(turn)
-            if turn.turn_id not in self.records:
+            if self.current(turn.satellite) != turn:
                 return False
             self._connected.add(turn.turn_id)
             await self.flush()
             return True
-        except ProtocolError, TimeoutError:
+        except (ProtocolError, TimeoutError, OSError) as error:
+            record.open_failure = (
+                "open_refused"
+                if isinstance(error, ProtocolError) and error.kind == "refused"
+                else "open_error"
+            )
+            record.open_error_class = type(error).__name__
             return False
 
     async def flush(self) -> None:

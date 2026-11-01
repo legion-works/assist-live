@@ -20,7 +20,7 @@ from .const import (
     MESSAGE_DEADLINE,
     SPEAKER_RESULT_DEADLINE,
 )
-from .ledger import SpeakerRead, TurnLedger
+from .ledger import FallbackReason, SpeakerRead, TurnLedger, stream_failure_reason
 from .stt_fallback import FallbackAudio
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,6 +198,8 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
             await self.ledger.flush()
             return failed
         audio = FallbackAudio(stream, started=started, cancelled=asyncio.Event())
+        reason: FallbackReason = "server_unhealthy"
+        error_class = "None"
         try:
             async with asyncio.timeout_at(started + 20):
                 if self.ledger.save is not None:
@@ -208,9 +210,31 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                         healthy = self.ledger.server_selected(
                             health, "stt", turn.turn_id
                         )
-                except ProtocolError, TimeoutError, OSError:
+                        if not healthy:
+                            reason = self.ledger.records[turn.turn_id].fallback_reasons[
+                                "stt"
+                            ]
+                except (ProtocolError, TimeoutError, OSError) as error:
+                    reason = (
+                        "health_timeout"
+                        if isinstance(error, TimeoutError)
+                        or isinstance(error, ProtocolError)
+                        and error.kind == "timeout"
+                        else "health_error"
+                    )
+                    error_class = type(error).__name__
                     healthy = False
-                if healthy and await self.ledger.connect(turn):
+                if healthy:
+                    connected = await self.ledger.connect(turn)
+                    if self.ledger.current(self.satellite) != turn:
+                        _LOGGER.debug("turn superseded during open")
+                        return failed
+                    if not connected:
+                        record = self.ledger.records[turn.turn_id]
+                        reason = record.open_failure
+                        error_class = record.open_error_class
+                        healthy = False
+                if healthy:
                     self.ledger.used(turn.turn_id, "stt", "server", "unknown")
                     background = False
                     try:
@@ -246,8 +270,14 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                 # A close error cannot invalidate a complete transcript.
                                 with suppress(ProtocolError, TimeoutError, OSError):
                                     await messages.aclose()
-                    except ProtocolError, TimeoutError, StopAsyncIteration, OSError:
-                        pass
+                    except (
+                        ProtocolError,
+                        TimeoutError,
+                        StopAsyncIteration,
+                        OSError,
+                    ) as error:
+                        reason = stream_failure_reason(error)
+                        error_class = type(error).__name__
                 if not self._fallback_compatible(metadata):
                     self.ledger.mark(turn.turn_id, "stt_failed")
                     return failed
@@ -255,8 +285,9 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                     turn.turn_id,
                     "stt_fallback",
                     getattr(self.fallback, "entity_id", "unknown"),
+                    reason=reason,
+                    error_class=error_class,
                 )
-                self.ledger.mark(turn.turn_id, "fallback_used")
 
                 async def local_audio() -> AsyncGenerator[bytes]:
                     async for chunk in audio.local_audio(MicroVad()):

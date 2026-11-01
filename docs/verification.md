@@ -2920,6 +2920,25 @@ Virtual matrix rows and unobserved device rows stay in different lists.
 Hardware faults, native-device observations, and P1 acceptance stay `NOT RUN` without hardware records.
 Simulated output stays external to this repository.
 
+## Turn parents and fallback causes
+
+The current client source pin is `5ac300bca5b4d49984411dcd468a3a44d6296473`.
+The source declaration, lock, minimum-HA task, CI command, and current protocol URLs use this revision.
+The manifest keeps `assist-live-client==0.0.0` because the client version did not change.
+
+The parent tests include server acceptance, `playback_end`, the strict 10 s limit, superseded turns, restart, and `tts_only` follow-ups.
+The close time uses the last event of the turn, not the next turn's open time.
+The fallback tests use error fakes and the pinned HTTP/WebSocket client.
+They check the event `reason`, per-value diagnostic counts, and logs without content.
+The diagnostic destination rows use the same `reason` values as the events.
+
+The internal `server_refusals` policy records keep their earlier names. Those names are not event `reason` values.
+
+The supersede tests hold a server-open request while a new turn opens.
+The superseded STT request gives an empty result. The superseded TTS request stops with `HomeAssistantError`.
+These requests do not start a fallback.
+Scratch mutations check the close time, parent eligibility, playback-end condition, `reason` mapping, and the two supersede guards.
+
 ## Current server health in diagnostics
 
 Date: 2026-11-01 (UTC).

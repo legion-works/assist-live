@@ -40,7 +40,7 @@ See [privacy](privacy.md) for the limits of these checks.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/c3aadd35f9f0e439508c1d62c31da3250a9d99f7/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -68,6 +68,29 @@ A streaming fallback can start audio before HA gets all text.
 A non-streaming fallback buffers the full text. Diagnostics show this path as `full_file`.
 
 Mid-turn continuation must also use the same audio format. See the [TTS rules](troubleshooting/tts.md).
+
+Each `fallback_used` event has a `reason`. Diagnostics count each value in `fallback_reasons`.
+A debug log gives that value and the error class, or `None` when no error occurred.
+The log does not contain error messages, addresses, tokens, transcripts, or reply text.
+
+| Reason | Cause |
+|---|---|
+| `health_timeout` | The health deadline expired. |
+| `health_error` | The health request did not complete correctly. |
+| `server_unhealthy` | Health reports an unhealthy server. |
+| `stt_unsupported` | The server does not report an STT function. |
+| `tts_unsupported` | The server does not report a TTS function. |
+| `not_local_only` | The server does not report local-only mode. |
+| `destination_not_local` | The selected server part does not report a local destination. |
+| `open_refused` | The server refused to open the turn. |
+| `open_error` | A different error prevented the turn from opening. |
+| `stream_refused` | The server refused the stream request. |
+| `stream_closed` | The stream ended before a usable result. |
+| `stream_error` | The stream data or audio is not usable. |
+| `message_timeout` | The message deadline expired. |
+
+The policy records keep the names `server_not_local_only` and `server_destination_not_local`.
+Their event `reason` values are `not_local_only` and `destination_not_local` in the same order.
 
 Each satellite has one last-turn latency sensor, in milliseconds.
 Its attributes show quality, uncertainty, and the end-decision source.

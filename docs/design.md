@@ -292,7 +292,16 @@ Reports give the quality of playback markers.
 - TTS with no eligible voice turn opens a `tts_only` turn.
 - A cancelled voice turn without `stt_final` closes as `turn_superseded` before a TTS-only turn.
 - A new STT stream supersedes an open turn. One satellite has at most one open turn.
-- A follow-up less than 10 s after the previous turn connects to that turn.
+  If a turn becomes superseded while its server-open request waits, it cannot start a fallback.
+  STT gives an empty result. TTS stops with `HomeAssistantError` and no playback.
+  The integration writes a debug line without turn data.
+- A voice turn uses the previous turn as its parent only if the server opened that turn and it closed with `playback_end`.
+  The new turn must open less than 10 s after that event. At 10 s, it has no parent.
+  The integration measures this interval from monotonic receipt time, not device time.
+  The time to receive the event can change the interval relative to device time.
+  An answer to `ask_question` uses its `tts_only` parent with the same rule.
+- A superseded turn, a turn closed by the 120 s limit, and a turn from before HA restart cannot be parents.
+  An administrative close keeps the time of the turn's last event, not the open time of the next turn.
 - A turn closes at `playback_end` or after 120 s, not merely when the satellite reports `idle`.
 - Device events wait for a turn of the same satellite for 5 s, then become `unmatched`.
 - HA restart does not keep open turns. Their records stay not completed.

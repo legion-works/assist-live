@@ -340,15 +340,19 @@ async def test_diagnostics_drop_unrecognized_health_destination_values(
 
 
 @pytest.mark.parametrize(
-    "reason",
+    "reason,expected",
     [
-        "server_not_local_only",
-        "server_destination_not_local",
-        "synthetic-secret-content",
+        ("not_local_only", "not_local_only"),
+        ("destination_not_local", "destination_not_local"),
+        ("health_error", "health_error"),
+        ("stream_error", "stream_error"),
+        ("server_not_local_only", "unknown"),
+        ("server_destination_not_local", "unknown"),
+        ("synthetic-secret-content", "unknown"),
     ],
 )
 async def test_fallback_reason_is_visible_per_turn_and_allowlisted(
-    hass, client, reason
+    hass, client, reason, expected
 ):
     from custom_components.assist_live import Runtime
     from custom_components.assist_live.diagnostics import (
@@ -358,11 +362,10 @@ async def test_fallback_reason_is_visible_per_turn_and_allowlisted(
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
     turn = runtime.ledger.open_voice("satellite-a")
-    runtime.ledger.records[turn.turn_id].server_refusals["stt"] = reason
+    runtime.ledger.records[turn.turn_id].fallback_reasons["stt"] = reason
     runtime.ledger.used(turn.turn_id, "stt_fallback", "stt.standard", "local")
-    runtime.ledger.mark(turn.turn_id, "fallback_used")
+    runtime.ledger.mark(turn.turn_id, "fallback_used", reason="server_unhealthy")
     hass.data["assist_live"] = {entry.entry_id: runtime}
     result = await async_get_config_entry_diagnostics(hass, entry)
-    expected = reason if reason != "synthetic-secret-content" else "unknown"
     assert result["turns"][0]["destinations"][0]["fallback_reason"] == expected
     assert "synthetic-secret-content" not in json.dumps(result)

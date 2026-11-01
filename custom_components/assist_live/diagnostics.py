@@ -110,21 +110,18 @@ async def async_get_config_entry_diagnostics(
                         else "unknown",
                         **(
                             {
-                                "fallback_reason": record.server_refusals[
+                                "fallback_reason": record.fallback_reasons[
                                     row["part"].removesuffix("_fallback")
                                 ]
-                                if record.server_refusals[
+                                if record.fallback_reasons[
                                     row["part"].removesuffix("_fallback")
                                 ]
-                                in {
-                                    "server_not_local_only",
-                                    "server_destination_not_local",
-                                }
+                                in runtime.ledger.fallback_reasons
                                 else "unknown"
                             }
                             if row["part"].endswith("_fallback")
                             and row["part"].removesuffix("_fallback")
-                            in record.server_refusals
+                            in record.fallback_reasons
                             else {}
                         ),
                     }
@@ -168,6 +165,7 @@ async def async_get_config_entry_diagnostics(
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
         "fallback_count": runtime.ledger.failures.get("fallback_used", 0),
+        "fallback_reasons": dict(runtime.ledger.fallback_reasons),
         "speaker_metadata_missing": runtime.ledger.speaker_missing,
         "speaker_not_identified": runtime.ledger.speaker_not_identified,
         "speaker_superseded": runtime.ledger.speaker_superseded,

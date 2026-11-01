@@ -579,6 +579,7 @@ async def test_midturn_stt_records_provider_and_fallback(client, ledger):
         "part": "stt_fallback",
         "provider": "unknown",
         "destination": "unknown",
+        "reason": "stream_error",
     }
     decision = next(event for event in events if event.stage == "end_decision")
     assert decision.source == "integration"

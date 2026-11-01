@@ -24,7 +24,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
-from .ledger import TurnLedger
+from .ledger import FallbackReason, TurnLedger, stream_failure_reason
 from .tts_fallback import compatible_pcm
 
 _LOGGER = logging.getLogger(__name__)
@@ -211,14 +211,36 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         self.ledger.records[turn.turn_id].voice = voice
         if self.ledger.save is not None:
             await self.ledger.save()
+        reason: FallbackReason = "server_unhealthy"
+        error_class = "None"
         try:
             async with asyncio.timeout(0.2):
                 health = await self.client.health_capabilities(timeout=0.2)
                 healthy = self.ledger.server_selected(health, "tts", turn.turn_id)
+                if not healthy:
+                    reason = self.ledger.records[turn.turn_id].fallback_reasons["tts"]
                 self.async_update_voices()
-        except ProtocolError, TimeoutError, OSError:
+        except (ProtocolError, TimeoutError, OSError) as error:
+            reason = (
+                "health_timeout"
+                if isinstance(error, TimeoutError)
+                or isinstance(error, ProtocolError)
+                and error.kind == "timeout"
+                else "health_error"
+            )
+            error_class = type(error).__name__
             healthy = False
-        healthy = healthy and await self.ledger.connect(turn)
+        if healthy:
+            connected = await self.ledger.connect(turn)
+            if self.ledger.current(self.satellite) != turn:
+                _LOGGER.debug("turn superseded during open")
+                await self.ledger.flush()
+                raise HomeAssistantError("turn superseded during open")
+            if not connected:
+                record = self.ledger.records[turn.turn_id]
+                reason = record.open_failure
+                error_class = record.open_error_class
+                healthy = False
         buffer: list[str] = []
         changed = asyncio.Condition()
         done = False
@@ -302,8 +324,9 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 turn.turn_id,
                 "tts_fallback",
                 getattr(self.fallback, "entity_id", "unknown"),
+                reason=reason,
+                error_class=error_class,
             )
-            self.ledger.mark(turn.turn_id, "fallback_used")
             return await self.fallback.async_stream_tts_audio(
                 TTSAudioRequest(
                     fallback_language,
@@ -329,6 +352,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         completed = 0
         text_end: int | None = None
         if server is not None:
+            reason = "stream_closed"
+            error_class = "None"
             try:
                 async for item in server:
                     if isinstance(item, TTSFormat):
@@ -367,6 +392,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     else:
                         raise ProtocolError("invalid TTS stream item")
             except (ProtocolError, TimeoutError) as error:
+                reason = stream_failure_reason(error)
+                error_class = type(error).__name__
                 if (
                     isinstance(error, ProtocolError)
                     and str(error) == "unknown_tts_voice"
@@ -376,6 +403,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except Exception as error:
+                reason = stream_failure_reason(error)
+                error_class = type(error).__name__
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except BaseException:
@@ -403,13 +432,15 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                         0xFFFFFFFF,
                     )
                 except Exception as error:
+                    reason = "stream_error"
+                    error_class = type(error).__name__
                     _LOGGER.warning("TTS header failed: %s", type(error).__name__)
                     healthy = False
             if not healthy and isinstance(server, AsyncGenerator):
                 await server.aclose()
 
         async def output() -> AsyncGenerator[bytes]:
-            nonlocal completed, text_end
+            nonlocal completed, text_end, reason, error_class
             assert server is not None and wav_header is not None
             invalid = False
             try:
@@ -435,6 +466,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                 if voice is not None:
                     self._voice_issue(voice, False)
             except Exception as error:
+                reason = stream_failure_reason(error)
+                error_class = type(error).__name__
                 if (
                     isinstance(error, ProtocolError)
                     and str(error) == "unknown_tts_voice"

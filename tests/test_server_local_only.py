@@ -172,7 +172,14 @@ async def test_selection_through_pinned_health_decoder(
         record = runtime.ledger.latest["satellite-a"]
         assert ("fallback_used" in record.stages) is (not selected)
         if not selected:
-            assert record.timings["fallback_used"]["reason"] == reason
+            assert record.server_refusals[part] == reason
+            assert (
+                record.timings["fallback_used"]["reason"]
+                == {
+                    "server_not_local_only": "not_local_only",
+                    "server_destination_not_local": "destination_not_local",
+                }[reason]
+            )
         diagnostics = await async_get_config_entry_diagnostics(hass, entry)
         assert diagnostics["server_last_known"]["local_only"] == (
             policy["local_only"]

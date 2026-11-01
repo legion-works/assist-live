@@ -30,15 +30,17 @@ An unknown fallback must have an explicit local decision before use with `local_
 The options flow stores that decision and its UTC time.
 Diagnostics show the audit record, without the entity name.
 
-Per-turn fallback destination rows show `fallback_reason` when a server destination check refused use.
-The named values are `server_not_local_only` and `server_destination_not_local`.
+Per-turn fallback destination rows show `fallback_reason` with the same value as the event's `reason`.
+The destination-check values are `not_local_only` and `destination_not_local`.
 Other values show as `unknown`, without content disclosure.
+Diagnostics count each known value in `fallback_reasons`. See the [cause table](configuration.md#fallback-and-timing).
+
 A known cloud fallback cannot use that decision.
 HA checks the current destination again before each fallback call and each mid-turn TTS continuation.
 
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/c3aadd35f9f0e439508c1d62c31da3250a9d99f7/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.

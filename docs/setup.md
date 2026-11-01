@@ -106,7 +106,11 @@ The integration does not run the conversation again.
 Each STT request opens a UUIDv7 voice turn for its bound key.
 TTS uses a finalized voice turn or opens a `tts_only` turn.
 A new STT request or announcement supersedes an unfinished turn of the same satellite only.
-A follow-up in less than 10 s uses the previous turn as its parent.
+
+A follow-up uses the previous turn as its parent only if the server opened that turn and it closed with `playback_end`.
+The new turn must open less than 10 s after HA received that event.
+At 10 s, it has no parent. A superseded turn cannot become a parent.
+The 120 s limit and HA restart also prevent a turn from becoming a parent.
 Unavailable conversation IDs stay null.
 
 The integration starts one event subscription for each key before the forwarding entities become available.
