@@ -379,17 +379,20 @@ async def test_diagnostics_report_server_voice_metadata(hass, client):
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    runtime.ledger.last_health = health(
+    client.health_capabilities.return_value = health(
         ("server-us", "US", "en-US"), default="server-us"
     )
+    await runtime.refresh_health()
     hass.data["assist_live"] = {entry.entry_id: runtime}
     result = await async_get_config_entry_diagnostics(hass, entry)
-    assert result["server_tts_voice_count"] == 1
-    assert result["server_tts_default_voice"] == "server-us"
-    runtime.ledger.last_health = HealthCapabilities(True, True, True)
+    assert result["server_last_known"]["tts_voice_count"] == 1
+    assert result["server_last_known"]["tts_default_voice"] == "server-us"
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+    runtime._health_due = 0
+    await runtime.refresh_health()
     result = await async_get_config_entry_diagnostics(hass, entry)
-    assert result["server_tts_voice_count"] == 0
-    assert result["server_tts_default_voice"] is None
+    assert result["server_last_known"]["tts_voice_count"] == 0
+    assert result["server_last_known"]["tts_default_voice"] is None
 
 
 async def test_health_maintenance_refreshes_entity_and_fallback_option(hass, client):

@@ -140,7 +140,28 @@ async def async_get_config_entry_diagnostics(
                 else "unknown",
             }
         )
-    health = runtime.ledger.last_health
+    health = runtime.last_healthy_health
+    last_known = (
+        {
+            "local_only": health.local_only
+            if health.local_only is not None
+            else "not_reported",
+            "tts_voice_count": len(health.tts_voices),
+            "tts_default_voice": safe_label(health.tts_default_voice)
+            if health.tts_default_voice is not None
+            else None,
+            "destinations": {
+                part: value
+                for part, value in health.destinations.items()
+                if part in {"stt", "tts", "speaker"}
+                and value in {"local", "cloud", "unknown"}
+            }
+            if health.destinations is not None
+            else "not_reported",
+        }
+        if health is not None
+        else None
+    )
     return {
         "protocol_version": 1,
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
@@ -151,21 +172,11 @@ async def async_get_config_entry_diagnostics(
         "speaker_not_identified": runtime.ledger.speaker_not_identified,
         "speaker_superseded": runtime.ledger.speaker_superseded,
         "speaker_policy_violations": getattr(runtime, "speaker_policy_violations", 0),
-        "server_local_only": health.local_only
-        if health is not None and health.local_only is not None
-        else "not_reported",
-        "server_tts_voice_count": len(health.tts_voices) if health is not None else 0,
-        "server_tts_default_voice": safe_label(health.tts_default_voice)
-        if health is not None and health.tts_default_voice is not None
+        "server_healthy": runtime.server_healthy,
+        "server_last_healthy": runtime.last_healthy.isoformat()
+        if runtime.last_healthy is not None
         else None,
-        "server_destinations": {
-            part: value
-            for part, value in health.destinations.items()
-            if part in {"stt", "tts", "speaker"}
-            and value in {"local", "cloud", "unknown"}
-        }
-        if health is not None and health.destinations is not None
-        else "not_reported",
+        "server_last_known": last_known,
         "local_only": settings.get("local_only", False),
         "record_transcripts": settings.get("record_transcripts", False),
         "fallbacks": fallbacks,

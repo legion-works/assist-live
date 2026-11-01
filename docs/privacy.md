@@ -12,8 +12,13 @@ With this option on, HA uses server STT or TTS only when health reports `local_o
 If a check is unsatisfactory, HA uses the fallback. With local only on, HA does not use an older server without these fields.
 Set `local_only` on the server to check server providers and speaker addresses.
 
-Diagnostics show the last health values as `server_local_only` and `server_destinations`.
-Missing values show as `not_reported`. Unknown server destinations stay `unknown`.
+Diagnostics show current server health as `server_healthy` and the last satisfactory check time as `server_last_healthy` (UTC ISO time).
+Before a satisfactory check, the time and `server_last_known` are `null`.
+The group `server_last_known` contains the last satisfactory health values, not current server state.
+Its fields are `local_only`, `destinations`, `tts_voice_count`, and `tts_default_voice`.
+
+Missing local-only or destination fields show as `not_reported`. Unknown server destinations stay `unknown`.
+The destination map includes only `stt`, `tts`, and `speaker`, with values `local`, `cloud`, or `unknown`.
 The health speaker destination does not select STT or TTS. The server checks speaker addresses before use.
 
 These checks are not a network firewall.

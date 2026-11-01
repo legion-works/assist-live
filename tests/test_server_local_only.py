@@ -138,6 +138,7 @@ async def test_selection_through_pinned_health_decoder(
             options={"local_only": local_only},
         )
         runtime = Runtime(hass, entry, client)
+        await runtime.refresh_health()
         hass.data["assist_live"] = {entry.entry_id: runtime}
         runtime.ledger.save = None
 
@@ -173,12 +174,12 @@ async def test_selection_through_pinned_health_decoder(
         if not selected:
             assert record.timings["fallback_used"]["reason"] == reason
         diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-        assert diagnostics["server_local_only"] == (
+        assert diagnostics["server_last_known"]["local_only"] == (
             policy["local_only"]
             if policy.get("local_only") is not None
             else "not_reported"
         )
-        assert diagnostics["server_destinations"] == (
+        assert diagnostics["server_last_known"]["destinations"] == (
             policy["destinations"]
             if policy.get("destinations") is not None
             else "not_reported"
@@ -192,5 +193,5 @@ async def test_health_not_reported_before_first_request(hass, client):
     runtime = Runtime(hass, entry, client)
     hass.data["assist_live"] = {entry.entry_id: runtime}
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-    assert diagnostics["server_local_only"] == "not_reported"
-    assert diagnostics["server_destinations"] == "not_reported"
+    assert diagnostics["server_last_known"] is None
+    assert diagnostics["server_last_healthy"] is None

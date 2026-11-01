@@ -366,7 +366,13 @@ async def test_complete_reply_counts_only_late_server_errors(
     hass.services.async_register("persistent_notification", "create", notification)
     entry = SimpleNamespace(entry_id="entry")
     hass.data["assist_live"] = {
-        "entry": SimpleNamespace(ledger=ledger, tts={"device": forward})
+        "entry": SimpleNamespace(
+            ledger=ledger,
+            tts={"device": forward},
+            server_healthy=False,
+            last_healthy=None,
+            last_healthy_health=None,
+        )
     }
     for count in (1, 2):
         response = await forward.async_stream_tts_audio(
@@ -414,7 +420,13 @@ async def test_diagnostics_has_counts_and_buffering_without_content(
     assert [part async for part in response.data_gen]
     entry = SimpleNamespace(entry_id="entry", data={"token": "planted-sensitive-value"})
     hass.data["assist_live"] = {
-        "entry": SimpleNamespace(ledger=ledger, tts={"device": forward})
+        "entry": SimpleNamespace(
+            ledger=ledger,
+            tts={"device": forward},
+            server_healthy=False,
+            last_healthy=None,
+            last_healthy_health=None,
+        )
     }
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["failures"]["tts_failed"] == 1
@@ -450,7 +462,13 @@ async def test_full_file_fallback_is_reported(client, ledger, hass):
     )
     entry = SimpleNamespace(entry_id="entry")
     hass.data["assist_live"] = {
-        "entry": SimpleNamespace(ledger=ledger, tts={"d": forward})
+        "entry": SimpleNamespace(
+            ledger=ledger,
+            tts={"d": forward},
+            server_healthy=False,
+            last_healthy=None,
+            last_healthy_health=None,
+        )
     }
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["tts_fallback"] == {"streaming": 0, "full_file": 1}

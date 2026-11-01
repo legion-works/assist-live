@@ -2898,3 +2898,23 @@ The packaging check gave `PASS packaging`. Hassfest gave `Invalid integrations: 
 The changed Markdown files also use the ASD-STE100 checker.
 The checks include the canonical public-tree privacy command and `git diff --check`.
 These checks do not measure physical device playback or satisfy a P0 or P1 acceptance gate.
+
+## Current server health in diagnostics
+
+Date: 2026-11-01 (UTC).
+
+Diagnostics show current server health and last known server values in different fields.
+The lifecycle tests include an outage after success, no satisfactory check, and recovery.
+The failure conditions include timeout, socket error, and an unhealthy response.
+They check the UTC time and the response values from the last satisfactory check.
+The last known values use a different snapshot because per-turn checks also change the ledger cache.
+
+The new tests gave `5 failed` before the repair because `server_healthy` was missing.
+The diagnostics, local-only, and voice tests then gave `86 passed`.
+The mutation checks gave failures for cached health, an unchanged recovery time, and destination allowlist bypasses.
+The response fields are only in `server_last_known`, not top-level fields.
+The reader tests use the new paths with unchanged assertions.
+
+The necessary checks are Ruff format and lint, `task check`, `task ha-minimum`, `task package-check`, and `task hassfest`.
+They also include the ASD-STE100 checker, the canonical public-tree privacy command with history, and `git diff --check`.
+These checks do not measure physical device playback or satisfy a P0 or P1 acceptance gate.

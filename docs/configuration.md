@@ -49,11 +49,16 @@ It does not make audio for each text token.
 
 The pinned protocol does not show the server turn `profile` through health.
 HA cannot read or select a server turn `profile` through this protocol.
-HA diagnostics show the last health values as `server_local_only` and `server_destinations`.
-Missing health fields show as `not_reported`. The destination map also includes the configured speaker plug-in.
+
+HA diagnostics show current server health as `server_healthy`.
+The field `server_last_healthy` gives the UTC ISO time of the last satisfactory health check, or `null` before one succeeds.
+The group `server_last_known` contains `local_only`, `destinations`, `tts_voice_count`, and `tts_default_voice` from that check.
+It is `null` before a satisfactory check. Its values stay unchanged during an outage.
+
+Missing local-only or destination fields show as `not_reported`. The destination map also includes the configured speaker plug-in.
 Diagnostics show the actual voice and audio format when HA has them.
 
-Diagnostics also show `server_tts_voice_count` and `server_tts_default_voice`, without reply text.
+The voice count and default voice contain no reply text.
 
 ## Fallback and timing
 

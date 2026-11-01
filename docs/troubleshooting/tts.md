@@ -96,6 +96,14 @@ The modes are `streaming` and `full_file`.
 The counts start at integration setup and include `fallback_used`, `stt_failed`, and `tts_failed`.
 The `late_server_failures` counter also starts at integration setup.
 
-The fields `server_tts_voice_count` and `server_tts_default_voice` show the latest server voice metadata.
+The field `server_healthy` shows the result of the last health check, not the cached server response.
+It is `false` before a satisfactory check and during a server outage.
+The field `server_last_healthy` gives the UTC ISO time of the last satisfactory check, or `null` before one succeeds.
+
+The group `server_last_known` contains the last known `local_only`, `destinations`, `tts_voice_count`, and `tts_default_voice` values.
+It is `null` before a satisfactory check. An unsuccessful check does not change these values or the time.
+Recovery changes `server_healthy` to `true` and updates the time and last known values.
+
+Diagnostics do not include the top-level fields `server_local_only`, `server_destinations`, `server_tts_voice_count`, and `server_tts_default_voice`.
 Diagnostics contain no text, transcript, token, URL, or audio.
 Failure logs contain the error type only, not its message or traceback.

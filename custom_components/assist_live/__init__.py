@@ -3,7 +3,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TypedDict
 
 from assist_live_client import AssistLiveClient
@@ -21,6 +21,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN
 from .ledger import TurnLedger
@@ -71,7 +72,13 @@ class Runtime:
         self._save_lock = asyncio.Lock()
         self._health_due = 0.0
         self._healthy = False
+        self.last_healthy: datetime | None = None
+        self.last_healthy_health: HealthCapabilities | None = None
         self._store_retry_due = 0.0
+
+    @property
+    def server_healthy(self) -> bool:
+        return self._healthy
 
     @callback
     def update_options(self, entry: ConfigEntry) -> None:
@@ -290,6 +297,9 @@ class Runtime:
             self._healthy = (
                 isinstance(health, HealthCapabilities) and health.healthy is True
             )
+            if self._healthy:
+                self.last_healthy = dt_util.utcnow()
+                self.last_healthy_health = health
             if isinstance(health, HealthCapabilities):
                 self.ledger.last_health = health
                 for entity in self.tts.values():

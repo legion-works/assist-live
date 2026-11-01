@@ -1,10 +1,108 @@
 import ipaddress
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+
+@pytest.mark.parametrize("failure", [TimeoutError(), OSError(), "unhealthy"])
+async def test_diagnostics_health_outage_and_recovery(hass, client, failure):
+    from assist_live_client.models import HealthCapabilities, TTSVoice
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+    runtime = Runtime(hass, entry, client)
+    hass.data["assist_live"] = {entry.entry_id: runtime}
+    now = [100.0]
+    runtime.clock = lambda: now[0]
+    first = datetime(2026, 1, 1, tzinfo=UTC)
+    recovered = datetime(2026, 1, 1, 0, 3, tzinfo=UTC)
+    client.health_capabilities.side_effect = [
+        HealthCapabilities(
+            True,
+            local_only=True,
+            destinations={"tts": "local"},
+            tts_voices=(TTSVoice("server-us", "US", "en-US"),),
+            tts_default_voice="server-us",
+        ),
+        HealthCapabilities(False, local_only=False)
+        if failure == "unhealthy"
+        else failure,
+        HealthCapabilities(True, local_only=False, destinations={"tts": "cloud"}),
+    ]
+    with patch("homeassistant.util.dt.utcnow", side_effect=[first, recovered]):
+        await runtime.refresh_health()
+        healthy = await async_get_config_entry_diagnostics(hass, entry)
+        assert healthy["server_healthy"] is True, "current_health_success"
+        assert healthy["server_last_healthy"] == first.isoformat(), "success_timestamp"
+        expected = {
+            "local_only": True,
+            "destinations": {"tts": "local"},
+            "tts_voice_count": 1,
+            "tts_default_voice": "server-us",
+        }
+        assert healthy["server_last_known"] == expected
+        now[0] = 130.0
+        await runtime.refresh_health()
+        failed = await async_get_config_entry_diagnostics(hass, entry)
+        assert failed["server_healthy"] is False, "current_health_not_cached_health"
+        assert failed["server_last_healthy"] == first.isoformat(), (
+            "outage_keeps_timestamp"
+        )
+        assert failed["server_last_known"] == expected, "outage_keeps_last_known"
+        now[0] = 280.0
+        await runtime.refresh_health()
+        result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["server_healthy"] is True, "recovery_health"
+    assert result["server_last_healthy"] == recovered.isoformat(), (
+        "recovery_updates_time"
+    )
+    assert result["server_last_known"]["local_only"] is False
+    assert result["server_last_known"]["destinations"] == {"tts": "cloud"}
+    assert (
+        not {
+            "server_local_only",
+            "server_destinations",
+            "server_tts_voice_count",
+            "server_tts_default_voice",
+        }
+        & result.keys()
+    ), "no_unmarked_response_values"
+
+
+@pytest.mark.parametrize("failure", [TimeoutError(), "unhealthy"])
+async def test_diagnostics_never_healthy_has_no_last_known_values(
+    hass, client, failure
+):
+    from assist_live_client.models import HealthCapabilities
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+    runtime = Runtime(hass, entry, client)
+    hass.data["assist_live"] = {entry.entry_id: runtime}
+    for checked in (False, True):
+        if checked:
+            client.health_capabilities.side_effect = [
+                HealthCapabilities(False, local_only=True)
+                if failure == "unhealthy"
+                else failure
+            ]
+            await runtime.refresh_health()
+        result = await async_get_config_entry_diagnostics(hass, entry)
+        assert result["server_healthy"] is False, "never_healthy"
+        assert result["server_last_healthy"] is None, "never_healthy_timestamp"
+        assert result["server_last_known"] is None, "never_healthy_values_not_reported"
 
 
 async def test_diagnostics_exclude_all_content_and_private_configuration(hass, client):
@@ -202,13 +300,15 @@ async def test_health_destination_keys_do_not_disclose_content(hass, socket_enab
     ):
         entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
         runtime = Runtime(hass, entry, client)
-        runtime.ledger.last_health = await client.health_capabilities()
+        await runtime.refresh_health()
         hass.data["assist_live"] = {entry.entry_id: runtime}
         result = await async_get_config_entry_diagnostics(hass, entry)
     serialized = json.dumps(result)
     for value in planted:
         assert value not in serialized
-    assert result["server_destinations"] == permitted
+    assert result["server_last_known"]["destinations"] == permitted, (
+        "destination_key_allowlist"
+    )
 
 
 @pytest.mark.parametrize("part", ["stt", "tts", "speaker"])
@@ -224,12 +324,19 @@ async def test_diagnostics_drop_unrecognized_health_destination_values(
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    runtime.ledger.last_health = HealthCapabilities(
-        True, destinations={part: "synthetic-unrecognized-destination"}
+    client.health_capabilities.return_value = HealthCapabilities(
+        True,
+        destinations={
+            part: "synthetic-unrecognized-destination",
+            "synthetic-token-content": "local",
+        },
     )
+    await runtime.refresh_health()
     hass.data["assist_live"] = {entry.entry_id: runtime}
     result = await async_get_config_entry_diagnostics(hass, entry)
-    assert result["server_destinations"] == {}
+    assert result["server_last_known"]["destinations"] == {}, (
+        "destination_value_allowlist"
+    )
 
 
 @pytest.mark.parametrize(
