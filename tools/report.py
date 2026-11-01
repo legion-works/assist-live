@@ -1,6 +1,5 @@
 import argparse
 import json
-import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -22,7 +21,8 @@ from tools.device_replay import (
 from tools.fault_runner import fault_gate
 from tools.metrics import rate
 from tools.native_matrix import validate_native_matrix
-from tools.test_environment import validate_intent_action_evidence
+from tools.result_text import words
+from tools.test_environment import intent_matches, validate_intent_action_evidence
 
 Row = dict[str, Any]
 REQUIRED = RUN_FIELDS
@@ -78,10 +78,6 @@ def latency_gate(baseline: Row, profiles: Row) -> Row:
             "passed": all(item["passed"] for item in groups.values()),
         }
     return {"profiles": results, "profile": "safe", "passed": results["safe"]["passed"]}
-
-
-def words(text: str) -> list[str]:
-    return re.findall(r"\w+", text.casefold())
 
 
 def word_errors(reference: str, hypothesis: str) -> tuple[int, int]:
@@ -463,7 +459,7 @@ def build_report(
             evidence_complete(row)
             and words(row["recognized_transcript"])
             == words(by_id[row["clip_id"]]["transcript"])
-            and row["evaluated_intent"] == by_id[row["clip_id"]]["intent"]
+            and intent_matches(row["evaluated_intent"], by_id[row["clip_id"]]["intent"])
             for row in replay
         )
         accuracy = rate(correct, len(replay))

@@ -2976,3 +2976,28 @@ Cleanup tests include cancellation during the run and delete, delete timeouts, a
 Only non-simulated commands with `--check` can write repository JSON reports.
 The shared `tools.metrics.rate` function has one owner for report and fault counts.
 No live bench trial is part of these repair checks.
+
+## Shared rules to compare results and fault cleanup
+
+The P1 `accuracy` gate, word error rate, and fault classifier share `tools/result_text.py:words`.
+The `accuracy` gate and fault classifier share `tools/test_environment.py:intent_matches`.
+The text rule changes English cardinal numbers to digits but keeps different words as errors.
+The intent rule compares labelled slots, ignores HA area and floor context, and gives omitted parts of a time the value 0.
+The wrong-operation gate compares operations without a change to their values.
+The 250 corpus records have 0 changed token lists with the new text rule.
+
+Before implementation, the regression tests for text and cleanup gave 17 failures and 3 satisfactory controls.
+The text tests include all cardinal values from 0 through 999999, hyphens, `and`, ordinal words, and mixed text.
+Smoke-derived fixtures include numbers in words, HA context slots, and omitted time parts with value 0.
+The recorded `a` versus `the` difference stays an error.
+
+The cleanup tests use a local fake HA with a short WebSocket heartbeat.
+They check a continuous control reader, new authenticated cleanup connections, and recorded errors for each unsatisfactory delete.
+Two unsatisfactory deletes give an error with the pipeline ID.
+Cancellation and read-back checks stay active.
+These checks do not include a live bench run or a hardware acceptance result.
+
+Four scratch mutations remove number conversion, compare HA context slots, use only the control socket, or discard delete errors.
+Each mutation compiles and causes a named test failure.
+The same six tests give satisfactory results without those mutations.
+The necessary checks are Ruff format and lint, `task check`, `task ha-minimum`, packaging, hassfest, privacy, `git diff --check`, and STE.

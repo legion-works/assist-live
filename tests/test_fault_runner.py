@@ -509,7 +509,9 @@ async def test_temporary_pipeline_is_unassigned_and_deleted_on_every_exit(fail):
 
     result = {}
     try:
-        async with temporary_pipeline(command, result, "existing") as values:
+        async with temporary_pipeline(
+            command, result, "existing", cleanup_command=command
+        ) as values:
             assert values == ("temporary", "virtual-device", "sensor.latency")
             assert (
                 pipelines[-1]["conversation_engine"] == "conversation.assist_live_short"
@@ -818,7 +820,12 @@ async def test_cancel_during_run_and_delete_waits_for_shielded_cleanup(cleanup_b
     cleanup_bench["delete"] = delete
 
     async def run():
-        async with temporary_pipeline(cleanup_bench["command"], result, "existing"):
+        async with temporary_pipeline(
+            cleanup_bench["command"],
+            result,
+            "existing",
+            cleanup_command=cleanup_bench["command"],
+        ):
             running.set()
             await asyncio.Event().wait()
 
@@ -858,7 +865,10 @@ async def test_delete_timeout_has_own_deadline_one_retry_and_named_failure(
             ValueError, match="TEMPORARY_PIPELINE_DELETE_FAILED: temporary"
         ):
             async with fault_runner.temporary_pipeline(
-                cleanup_bench["command"], result, "existing"
+                cleanup_bench["command"],
+                result,
+                "existing",
+                cleanup_command=cleanup_bench["command"],
             ):
                 pass
         assert "temporary" in result["cleanup_error"]
@@ -866,7 +876,10 @@ async def test_delete_timeout_has_own_deadline_one_retry_and_named_failure(
         assert "bench_after" in result
     else:
         async with fault_runner.temporary_pipeline(
-            cleanup_bench["command"], result, "existing"
+            cleanup_bench["command"],
+            result,
+            "existing",
+            cleanup_command=cleanup_bench["command"],
         ):
             pass
         assert result["bench_restored"] is True
@@ -880,7 +893,12 @@ async def test_leftover_temporary_pipeline_is_named_and_not_deleted(cleanup_benc
         {"id": "leftover", "name": "assist-live f11-smoke"}
     )
     with pytest.raises(ValueError, match="TEMPORARY_PIPELINE_EXISTS: leftover"):
-        async with temporary_pipeline(cleanup_bench["command"], {}, "existing"):
+        async with temporary_pipeline(
+            cleanup_bench["command"],
+            {},
+            "existing",
+            cleanup_command=cleanup_bench["command"],
+        ):
             pytest.fail("ran with a leftover pipeline")
     assert not any(
         kind.endswith(("/create", "/delete")) for kind, _ in cleanup_bench["calls"]

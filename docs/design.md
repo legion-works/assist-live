@@ -378,6 +378,20 @@ Each rate has its denominator and 95% confidence interval.
 | P3: barge-in | Complete the firmware design before the hardware test. Find a minimum of 9 of 10 interruptions in less than 500 ms. Keep the first command word and conversation ID. Cause 0 incorrect device operations and at most one incorrect interruption in 10 minutes. Keep wake, stop, timers, announce, and mute functional. If results are unsatisfactory, keep barge-in off and document the stop-word method. |
 | P4: upstream | Use `partial` transcripts only after HA releases the interface. Propose public run context, idle-only announce, public TTS lookup, and barge-in interfaces. |
 
+P1 correct-command results, word error rate, and fault results use one text rule.
+The rule changes letters to lowercase and removes punctuation.
+It changes English cardinal numbers from words to digits, from 0 through 999999.
+For example, `eight hundred ninety four` becomes `894`, and `twenty-five` becomes `25`.
+It accepts `a hundred` and `and` in a number.
+
+Ordinal words stay words: `first` does not equal `1st`.
+A different word, such as `the` for `a`, stays an error.
+
+The intent name and each labelled slot value must agree.
+The rule does not compare `preferred_area_id` or `preferred_floor_id` from HA context.
+A missing part of a time (`hours`, `minutes`, or `seconds`) has the value 0.
+The wrong-operation gate compares operations without a change to their values.
+
 The P3 firmware design must specify the echo-cancelled microphone path and the use of interruption audio and unheard reply text.
 
 ## Open checks and quality limits

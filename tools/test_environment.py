@@ -270,6 +270,22 @@ def expected_operations(
     ]
 
 
+def intent_matches(selected: Any, expected: dict[str, Any]) -> bool:
+    if (
+        not isinstance(selected, dict)
+        or selected.get("name") != expected.get("name")
+        or not isinstance(selected.get("slots"), dict)
+        or not isinstance(expected.get("slots"), dict)
+    ):
+        return False
+    return all(
+        (key in selected["slots"] or key in ("hours", "minutes", "seconds"))
+        and selected["slots"].get(key, 0) == value
+        for key, value in expected["slots"].items()
+        if key not in ("preferred_area_id", "preferred_floor_id")
+    )
+
+
 def validate_intent_action_evidence(
     record: dict[str, Any], label: dict[str, Any]
 ) -> list[str]:

@@ -32,7 +32,8 @@ from tools.native_matrix import (
     validate_native_matrix,
 )
 from tools.probe_pipelines import Command, pipeline_fields
-from tools.test_environment import FIXTURES, URL, expected_operations
+from tools.result_text import words
+from tools.test_environment import FIXTURES, URL, expected_operations, intent_matches
 
 Row = dict[str, Any]
 STAGES = ("before", "speech", "pause", "after-final")
@@ -124,9 +125,7 @@ def acceptable(trial: Row) -> bool:
         and isinstance(selected.get("slots"), dict)
     ):
         return False
-    if re.findall(r"\w+", transcript.casefold()) != re.findall(
-        r"\w+", label["transcript"].casefold()
-    ):
+    if words(transcript) != words(label["transcript"]):
         return False
     inventory = json.loads((FIXTURES / "intents.json").read_text())
     try:
@@ -141,7 +140,7 @@ def acceptable(trial: Row) -> bool:
         ]
         return (
             expected is not None
-            and selected == label["intent"]
+            and intent_matches(selected, label["intent"])
             and Counter(json.dumps(item, sort_keys=True) for item in actual)
             == Counter(json.dumps(item, sort_keys=True) for item in expected)
             and (
@@ -260,7 +259,7 @@ async def connect(
     token = json.loads(token_file.read_text())["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("test authentication unavailable")
-    ws = await session.ws_connect(URL + "/api/websocket")
+    ws = await session.ws_connect(URL + "/api/websocket", heartbeat=20)
     try:
         async with asyncio.timeout(15):
             if (await ws.receive_json()).get("ha_version") != "2026.10.3":
@@ -272,6 +271,65 @@ async def connect(
         await ws.close()
         raise
     return ws
+
+
+@asynccontextmanager
+async def control_command(
+    session: aiohttp.ClientSession, token_file: Path
+) -> AsyncIterator[Command]:
+    async with await connect(session, token_file) as control:
+        responses: asyncio.Queue[Any] = asyncio.Queue()
+        counter = 0
+
+        async def receive() -> None:
+            try:
+                while True:
+                    await responses.put(await control.receive_json())
+            except Exception as error:
+                await responses.put(error)
+
+        # aiohttp answers HA PING frames only while a receive call runs.
+        reader = asyncio.create_task(receive())
+
+        async def command(kind: str, **fields: Any) -> Any:
+            nonlocal counter
+            counter += 1
+            async with asyncio.timeout(30):
+                await control.send_json({"id": counter, "type": kind, **fields})
+                while True:
+                    response = await responses.get()
+                    if isinstance(response, Exception):
+                        raise response
+                    if response.get("id") == counter:
+                        break
+            if response.get("success") is not True:
+                message = str(response.get("error", {}).get("message", "unknown error"))
+                raise ValueError("isolated bench control command failed: " + message)
+            return response.get("result")
+
+        try:
+            yield command
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+
+
+def scrub_cleanup_error(error: Exception, redactions: tuple[str, ...] = ()) -> str:
+    message = str(error)
+    for value in redactions:
+        if value:
+            message = message.replace(value, "[token]")
+    message = re.sub(r"(?i)\b(?:https?|wss?)://\S+", "[url]", message)
+    message = re.sub(
+        r"(?i)(?:bearer\s+|(?:access_token|token|authorization)\s*[=:]\s*)[^\s,;]+",
+        "[token]",
+        message,
+    )
+    message = re.sub(r"\b[A-Za-z0-9_.=-]{20,}\b", "[token]", message)
+    message = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b", "[address]", message)
+    message = re.sub(r"\b[\w.-]+\.[a-zA-Z]{2,}(?::\d+)?\b", "[address]", message)
+    message = re.sub(r"[\da-fA-F]*:[\da-fA-F:]+(?::\d+)?", "[address]", message)
+    return message[:1000]
 
 
 async def pipeline_trial(
@@ -515,11 +573,16 @@ async def pipeline_trial(
 
 @asynccontextmanager
 async def temporary_pipeline(
-    command: Command, result: Row, source_id: str
+    command: Command,
+    result: Row,
+    source_id: str,
+    *,
+    cleanup_command: Command,
+    redactions: tuple[str, ...] = (),
 ) -> AsyncIterator[tuple[str, str, str]]:
-    async def snapshot() -> Row:
-        pipelines = await command("assist_pipeline/pipeline/list")
-        states = await command("get_states")
+    async def snapshot(call: Command) -> Row:
+        pipelines = await call("assist_pipeline/pipeline/list")
+        states = await call("get_states")
         return {
             "pipelines": pipelines,
             "selects": sorted(
@@ -532,7 +595,7 @@ async def temporary_pipeline(
             ),
         }
 
-    result["bench_before"] = await snapshot()
+    result["bench_before"] = await snapshot(command)
     result["bench_restored"] = False
     leftovers = [
         pipeline["id"]
@@ -593,27 +656,38 @@ async def temporary_pipeline(
 
         async def cleanup() -> None:
             error = None
+            result["cleanup_attempt_errors"] = []
             pipeline_id = created["id"] if created is not None else source_id
             if created is not None:
-                for _ in range(2):
+                for attempt in range(1, 3):
                     try:
                         async with asyncio.timeout(PIPELINE_CLEANUP_TIMEOUT):
-                            await command(
+                            await cleanup_command(
                                 "assist_pipeline/pipeline/delete",
                                 pipeline_id=pipeline_id,
                             )
                         break
-                    except TimeoutError, ValueError, OSError, aiohttp.ClientError:
-                        continue
+                    except Exception as failure:
+                        result["cleanup_attempt_errors"].append(
+                            {
+                                "attempt": attempt,
+                                "class": type(failure).__name__,
+                                "message": scrub_cleanup_error(failure, redactions),
+                            }
+                        )
                 else:
                     error = TemporaryPipelineError(
                         "TEMPORARY_PIPELINE_DELETE_FAILED: " + pipeline_id
                     )
             try:
                 async with asyncio.timeout(PIPELINE_CLEANUP_TIMEOUT):
-                    result["bench_after"] = await snapshot()
-            except TimeoutError, ValueError, OSError, aiohttp.ClientError:
+                    result["bench_after"] = await snapshot(cleanup_command)
+            except Exception as failure:
                 result["bench_after"] = None
+                result["cleanup_snapshot_error"] = {
+                    "class": type(failure).__name__,
+                    "message": scrub_cleanup_error(failure, redactions),
+                }
                 error = error or TemporaryPipelineError(
                     "TEMPORARY_PIPELINE_SNAPSHOT_FAILED: " + pipeline_id
                 )
@@ -750,28 +824,19 @@ async def run(args: argparse.Namespace) -> Row:
                         )
 
             if args.temporary_agent_pipeline:
-                async with await connect(session, args.token_file) as control:
-                    counter = 0
 
-                    async def command(kind: str, **fields: Any) -> Any:
-                        nonlocal counter
-                        counter += 1
-                        async with asyncio.timeout(30):
-                            await control.send_json(
-                                {"id": counter, "type": kind, **fields}
-                            )
-                            while True:
-                                response = await control.receive_json()
-                                if response.get("id") == counter:
-                                    break
-                        if (
-                            response.get("id") != counter
-                            or response.get("success") is not True
-                        ):
-                            raise ValueError("isolated bench control command failed")
-                        return response.get("result")
+                async def fresh_command(kind: str, **fields: Any) -> Any:
+                    async with control_command(session, args.token_file) as fresh:
+                        return await fresh(kind, **fields)
 
-                    async with temporary_pipeline(command, result, args.pipeline) as (
+                async with control_command(session, args.token_file) as command:
+                    async with temporary_pipeline(
+                        command,
+                        result,
+                        args.pipeline,
+                        cleanup_command=fresh_command,
+                        redactions=(json.loads(args.token_file.read_text())["token"],),
+                    ) as (
                         pipeline,
                         device_id,
                         sensor,

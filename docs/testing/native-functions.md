@@ -134,6 +134,25 @@ A minimum of 30 executable-prefix commands must have no cuts.
 Safe replay must have a minimum of 95% correct transcript and intent together.
 Word error rate can be at most one percentage point more than the paired baseline rate.
 
+### Rules to compare results
+
+`tools/result_text.py:words` owns the text rule for correct commands, word error rate, and faults.
+It changes letters to lowercase, removes punctuation, and changes English cardinal numbers to digits.
+The range is 0 through 999999.
+Hyphens divide number words: `twenty-five` equals `25`.
+The rule accepts `and` after `hundred` or `thousand`, and `a hundred` equals `100`.
+It keeps `and` between different numbers, such as `one and two`.
+
+Ordinal words stay words. The rule does not equate `first` and `1st`, or `twenty-first` and `21st`.
+Other word differences stay errors: `a timer` does not equal `the timer`.
+A different number also stays an error.
+
+`tools/test_environment.py:intent_matches` owns the intent rule.
+The intent name must agree, and each labelled slot must have the same value.
+The rule does not compare `preferred_area_id` and `preferred_floor_id`.
+An omitted part of a time (`hours`, `minutes`, or `seconds`) has the value 0.
+More HA slots do not replace a missing labelled slot.
+
 The two human sets must cause no incorrect operation.
 The validator compares actual operations with the virtual intent inventory and the labelled slots.
 An unavailable expectation or missing operation test records cause an unsatisfactory acceptance result.
@@ -180,6 +199,14 @@ The temporary path uses the virtual timer receiver and a new turn ID from the ST
 
 If the pipeline list has `assist-live f11-smoke`, the runner refuses to start and prints its ID. It does not delete that pipeline.
 Cleanup waits through cancellation. Each delete call has a different 30-second timeout, with a maximum of two calls.
+
+Each delete call opens a new authenticated WebSocket connection, also when the control connection has closed.
+The control connection has an aiohttp heartbeat and a continuous reader.
+The reader answers HA heartbeat frames during trials.
+
+`cleanup_attempt_errors` records each unsatisfactory call number, error class, and message.
+The message removes authentication tokens, URLs, and addresses.
+`cleanup_snapshot_error` records an unsatisfactory read-back with the same fields.
 If deletion is unsatisfactory, `TEMPORARY_PIPELINE_DELETE_FAILED` identifies the pipeline for operator cleanup, and the command exits with an error.
 
 Without that record, the trial is unsatisfactory unless the same-run empty-safe error gives the necessary proof.
