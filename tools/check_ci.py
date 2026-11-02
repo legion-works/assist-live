@@ -20,6 +20,7 @@ REQUIRED_JOBS = {
     "ci-complete",
 }
 RESULT_COMMAND = 'uv run --locked python tools/check_ci.py --results "$NEEDS_JSON"'
+RECORDS_COMMAND = "uv run --locked python tools/check_records.py"
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
     {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
@@ -88,6 +89,20 @@ def check_jobs(path: str | Path) -> set[str]:
             failures.append(f"job result {name}")
         if any(step.get("continue-on-error") or "if" in step for step in job["steps"]):
             failures.append(f"step result {name}")
+    lint_steps = jobs.get("lint", {}).get("steps", [])
+    if sum(step.get("run") == RECORDS_COMMAND for step in lint_steps) != 1:
+        failures.append("records guard lint command")
+    checkout_depths = [
+        step.get("with", {}).get("fetch-depth")
+        for step in lint_steps
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    if (
+        len(checkout_depths) != 1
+        or type(checkout_depths[0]) is not int
+        or checkout_depths[0] != 0
+    ):
+        failures.append("records guard lint checkout")
     ha = jobs.get("ha", {})
     for name in ("unit", "ha"):
         installs = [
@@ -147,6 +162,11 @@ def check_jobs(path: str | Path) -> set[str]:
         failures.append("client pin .github/workflows/ci.yml")
     taskfile = yaml.safe_load((root / "Taskfile.yml").read_text(encoding="utf-8"))
     current_task = taskfile["tasks"]["check"]
+    if not any(
+        isinstance(command, dict) and command.get("task") == "records-check"
+        for command in current_task.get("cmds", [])
+    ):
+        failures.append("records guard Taskfile.yml")
     description = current_task.get("desc", "")
     version_pattern = r"\b(?:HA\s+|homeassistant==)(\d{4}\.\d+\.\d+)\b"
     description_versions = re.findall(version_pattern, description)

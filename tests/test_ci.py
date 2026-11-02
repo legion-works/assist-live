@@ -97,6 +97,61 @@ def test_ci_rejects_previous_current_member(tmp_path):
     assert main(["--workflow", str(path)]) == 1
 
 
+@pytest.mark.parametrize(
+    "mutation,failure",
+    [
+        ("workflow-step", "records guard lint command"),
+        ("checkout-depth", "records guard lint checkout"),
+        ("task-call", "records guard Taskfile.yml"),
+    ],
+)
+def test_ci_records_guard_wiring_has_named_failures(
+    tmp_path, monkeypatch, mutation, failure
+):
+    import shutil
+
+    from tools.check_ci import check_jobs
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        ".github/workflows/ci.yml",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    path = tmp_path / ".github/workflows/ci.yml"
+    assert check_jobs(path)
+    workflow = yaml.safe_load(path.read_text())
+    steps = workflow["jobs"]["lint"]["steps"]
+    if mutation == "workflow-step":
+        steps.remove(
+            next(
+                step
+                for step in steps
+                if step.get("run") == "uv run --locked python tools/check_records.py"
+            )
+        )
+    elif mutation == "checkout-depth":
+        checkout = next(
+            step
+            for step in steps
+            if step.get("uses", "").startswith("actions/checkout@")
+        )
+        del checkout["with"]["fetch-depth"]
+    else:
+        task_path = tmp_path / "Taskfile.yml"
+        taskfile = yaml.safe_load(task_path.read_text())
+        taskfile["tasks"]["check"]["cmds"].remove({"task": "records-check"})
+        task_path.write_text(yaml.safe_dump(taskfile))
+    path.write_text(yaml.safe_dump(workflow))
+    with pytest.raises(ValueError, match=failure) as error:
+        check_jobs(path)
+    assert str(error.value) == failure
+
+
 @pytest.mark.parametrize("carrier", ["plugin", "task_description", "task_command"])
 def test_ci_rejects_stale_current_carriers(tmp_path, monkeypatch, carrier):
     import shutil
