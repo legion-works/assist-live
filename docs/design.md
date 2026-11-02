@@ -273,8 +273,17 @@ Thus the names cannot remove all the hypotheses that have no name. With an empty
 The transcripts during the turn do not use the list.
 Cloud STT providers do not get the list.
 
+The model writes the first word of a sentence with a capital letter.
+Thus the server makes token paths for three spellings of each name: "test light", "Test light", and "Test Light".
+If more than one spelling gets to the same token position, the server gives the bonus one time only.
+The list that the integration sends and its digest stay in lower case.
+
+The server keeps one name tree for each different list, and satellites with the same list use the same tree.
+The tree keeps only the token steps that the names have, not a table for each token of the vocabulary.
+
 Acceptance with 500 names: the 250 replay recordings get no name that the speaker did not say, and no more word errors than without names.
 On the recorded device turns, the errors in names do not increase.
+The tree uses a maximum of 4 MB.
 
 ## TTS and fallback
 
