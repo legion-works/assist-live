@@ -246,6 +246,36 @@ It does not retry or start device control.
 The STT request checks the fallback language, format, codec, sample rate, bit depth, and `channel` count.
 An assist-live entity cannot be its own fallback.
 
+### STT name hints
+
+The integration makes a list of the names that Assist can use.
+The list has the names and aliases of the entities that HA makes available to Assist, and the area names.
+Each name has 1 to 64 characters and a minimum of one letter.
+The integration changes names to lower case, removes spaces at the two ends, and removes duplicates.
+A list has a maximum of 500 names in a stable order. Diagnostics record the number of names that the integration did not send.
+
+The integration sends the list for each satellite with `PUT /v1/satellites/{satellite}/hints`.
+It sends the list at setup and 5 s after a change in the entity registry, the area registry, or the Assist entity list.
+It also sends the list when the health response gives a different list digest for the satellite, for example after a server restart.
+The server refuses a list that does not obey these rules with `invalid_hints`.
+
+The server keeps each list in memory only. The integration and the server do not write the names to logs or to the turn store.
+Diagnostics and the health response give only the number of names and the SHA-256 digest of the list.
+The health response gives `stt_hints`, which shows if the STT provider uses the list.
+
+The local Parakeet provider uses the list in the beam search of the last transcript (context biasing).
+Each token that continues a name gets a bonus of 1.0 by default.
+If a hypothesis stops a name before the end of the name, the server removes the bonus that the tokens of that name gave.
+
+The beam keeps 16 hypotheses. 8 positions go to the best hypotheses by the score with the bonus.
+The other 8 positions go to the best hypotheses by the score without the bonus that are not in the first 8.
+Thus the names cannot remove all the hypotheses that have no name. With an empty list, the search is the same as without names.
+The transcripts during the turn do not use the list.
+Cloud STT providers do not get the list.
+
+Acceptance with 500 names: the 250 replay recordings get no name that the speaker did not say, and no more word errors than without names.
+On the recorded device turns, the errors in names do not increase.
+
 ## TTS and fallback
 
 The TTS entity sends each text part immediately and keeps a copy.
