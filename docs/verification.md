@@ -3118,3 +3118,35 @@ Missing counters or unknown times when a counter went back to 0 make completenes
 The fault runner ends at intent and marks its pipeline observations as test-only.
 Its TTS start value is `not_run`.
 No live bench call or hardware acceptance result is part of this change.
+
+## Spoken reply prompt
+
+Date: 2026-11-02 (UTC).
+
+The [spoken reply design](design.md#spoken-replies) gives the rules for a prompt part for satellite requests through the Assist API.
+Installed HA 2026.10.1 and 2026.10.4 source gives the same public interfaces:
+
+- `components/llm/__init__.py:39-44` gives `LLMTools` with `tools` and `prompt`.
+- `components/llm/__init__.py:47-57` gives the callback platform protocol.
+- `components/llm/__init__.py:78-99` gets platform results and puts their prompt parts together.
+- `components/llm/__init__.py:145-155` puts the prompt into the Assist API instance.
+- `helpers/llm.py:97-120` gets the API instance through `async_get_api`.
+
+Tests call HA's `async_get_api` and use HA loader discovery without an `llm` manifest dependency.
+They check requests from two loaded entries, entries that are not loaded, other devices, requests without a device, and a different API.
+The platform uses the public device and entity registries and adds no tools.
+The contract test checks the prompt result type and callback signature on the two HA versions in CI.
+
+Before the platform was available, the new tests gave `3 failed, 5 passed` on unchanged implementation code.
+The failures named `satellite_prompt_missing`, `loaded_entry_prompt_missing`, and the missing platform import.
+The initial eight tests then gave satisfactory results on each HA version.
+
+Four changes in disposable copies each gave a named assertion failure:
+
+- A prompt for all devices: `non_satellite_prompt_leak`.
+- No API check: `other_api_prompt_leak`.
+- No entry load-state check: `unloaded_entry_prompt_leak`.
+- No question rule: `question_rule_missing`.
+
+These checks do not show that an agent follows the prompt.
+No live agent, device, or bench test is part of this record.

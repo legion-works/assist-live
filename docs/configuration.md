@@ -38,6 +38,18 @@ Set `local_only` on the server too. These configured-destination checks are not 
 These checks do not include the conversation agent.
 See [privacy](privacy.md) for the limits of these checks.
 
+## Conversation agents
+
+Enable the Assist API ("Device control") on the conversation agent.
+For a satellite of a loaded integration entry, the integration gives this API a prompt part and no tools.
+The prompt tells the agent to use plain spoken replies and end with a question when an answer is necessary.
+See the [spoken reply rules](design.md#spoken-replies).
+
+Agents that do not use the Assist API do not get this prompt part.
+This includes an integration that builds its own LLM API or an external agent behind a bridge.
+For these agents, use `extra_system_prompt` or the agent's own prompt settings to set the same rules.
+The [server text rules](design.md#spoken-text) apply to all agents.
+
 ## Server providers
 
 The [server configuration](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/configuration.md) gives the provider selection rules.

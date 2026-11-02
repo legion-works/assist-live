@@ -479,6 +479,7 @@ def test_package_file_set_is_explicit():
         "const.py",
         "diagnostics.py",
         "ledger.py",
+        "llm.py",
         "manifest.json",
         "repairs.py",
         "sensor.py",

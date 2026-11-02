@@ -21,6 +21,7 @@ PACKAGE_FILES = {
     "const.py",
     "diagnostics.py",
     "ledger.py",
+    "llm.py",
     "manifest.json",
     "repairs.py",
     "sensor.py",
