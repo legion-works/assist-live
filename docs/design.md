@@ -108,6 +108,11 @@ One background sender for each integration entry sends timing events in order fo
 STT results, TTS streams, and turn opens do not wait for timing events.
 An outer timeout gives each event request a 2 s limit.
 The integration sends a turn open before its events.
+
+The turn open request is safe to send again.
+The server compares a second request with the turn that has the same identifier: satellite, type, parent, conversation identifier, transcript permission, and open time.
+If these values are the same, the server gives the response of a new turn and changes nothing.
+If one value is different, the server refuses the request with `turn_conflict` (`409`).
 After a refused late open, the server checks each event independently.
 
 After a send failure, pending events wait for the next satisfactory maintenance health check.
@@ -115,6 +120,9 @@ The pending list holds at most 512 events, with the event in flight.
 When the list is full, a new event removes the oldest event.
 Diagnostics count these removals and refused-event removals in `timing_events_dropped`.
 The counter `turn_opens_dropped` counts removed refused opens, not events.
+
+Diagnostics give `counters_since_utc_ns`, the time when these counters started.
+If this time changes, the integration started its counters again, and a report does not compare the two values.
 Pending events can stay after their short-lived local turn records expire.
 
 At integration shutdown, the integration cancels the sender and waits for cancellation.
