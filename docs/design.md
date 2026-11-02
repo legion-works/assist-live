@@ -70,6 +70,8 @@ The integration uses them to make and update the pipeline of each satellite, wit
 If HA refuses creation, use the manual instructions in [setup](setup.md#pipelines-and-voices).
 
 The config flow selects the server, token, satellites, fallback entities, and the fallback voice.
+After setup, the options flow can change the fallback entities and the fallback voice, with the same checks as the config flow.
+If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
 The server configuration selects the providers and the turn values.
 The TTS entity shows the voices that the server health response gives.
 
