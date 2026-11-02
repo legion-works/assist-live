@@ -262,6 +262,21 @@ With `mip_opt_out=true`, Deepgram keeps audio and transcripts only for request p
 Request metadata stays retrievable for 90 days. Summarized usage stays longer.
 See the [retention source record](https://github.com/legion-works/assist-live-server/blob/a888c3b5cc34e14f3ee9efb0bf76156df908de35/docs/providers/cloud.md#deepgram-retention-and-data-use).
 
+OpenAI `gpt-live-transcribe` is a second cloud STT candidate.
+The server opens one realtime transcription session for each turn and turns off the provider turn detection.
+The server turn detector stays the only source of the end of the turn. At the end decision, the server sends the commit.
+
+The last transcript is the `completed` event of the committed item. A `failed` or `error` event starts the HA fallback.
+The adapter uses the limits of the Deepgram adapter.
+The provider gives no word times, so the rule that replaces the last transcript does not apply.
+
+By default, OpenAI keeps abuse-monitoring logs for a maximum of 30 days, and these logs can hold content.
+A live check on 2026-11-02 found that the transcription session refuses 16 kHz audio.
+The server changes the turn audio from 16 kHz to 24 kHz before it sends the audio.
+In phase P1, a test compares Parakeet, Deepgram, and OpenAI and selects the cloud default.
+Version 1 does not use voice-to-voice models such as `gpt-realtime-2.1`.
+These models replace the STT, the HA conversation agent, and the TTS, and they stop the local fallback.
+
 ElevenLabs `eleven_flash_v2_5` is the planned cloud TTS default.
 Its WebSocket path uses a minimum 50-character chunk schedule and an end-of-reply flush.
 The default 120-character schedule adds buffering after HA's 60-character threshold.
