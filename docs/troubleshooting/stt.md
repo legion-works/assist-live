@@ -50,6 +50,8 @@ The server records `stt_final` for its complete transcript. The integration reco
 On fallback, the integration records `stt_final` and a proxy `end_decision` with `decision_source: ha_audio_end`.
 
 If fallback has a failure or the time limit ends, the result has empty text and the record uses `stt_failed`.
+The integration sends that timing event only after the server accepts `fallback_used` with `part: stt` for the turn.
+Without that accepted marker, the failure stays in local diagnostics, also before the integration adds a destination row.
 After a failure, the integration does not supply command text that is not complete.
 It does not retry the fallback or run the command again.
 

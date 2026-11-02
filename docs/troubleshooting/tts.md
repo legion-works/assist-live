@@ -96,6 +96,9 @@ The server owns `tts_first_byte`, `tts_sentence`, and `tts_last_byte` on the ser
 On fallback, the integration records `tts_first_byte` for the fallback engine, also for a mid-turn continuation.
 Server-path failures stay in local diagnostics. Only fallback failures give integration-owned `tts_failed` timing events.
 
+The server must first accept `fallback_used` with `part: tts` for the same turn.
+Without that accepted marker, the failure stays in local diagnostics, also before the integration adds a destination row.
+
 Diagnostics give the protocol version, failure counts, and the number of TTS entities in each fallback mode.
 The modes are `streaming` and `full_file`.
 The counts start at integration setup and include `fallback_used`, `stt_failed`, and `tts_failed`.

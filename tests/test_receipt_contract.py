@@ -205,20 +205,89 @@ async def test_audio_receipt_is_recorded_before_ha_consumes_output(client, ledge
 
 
 @pytest.mark.parametrize("part", ["stt", "tts"])
-@pytest.mark.parametrize("fallback", [False, True], ids=["server", "fallback"])
-async def test_failure_stage_has_only_its_path_owner(client, ledger, part, fallback):
+@pytest.mark.parametrize("destination", ["none", "server", "fallback"])
+@pytest.mark.parametrize("fallback", ["none", "same_part", "other_part"])
+async def test_failure_stage_has_only_its_path_owner(
+    client, ledger, part, destination, fallback
+):
+    from assist_live_client.models import STAGE_OWNERS
+
+    stored = []
+
+    async def accept(event):
+        event_part = "tts" if event.stage.startswith("tts_") else "stt"
+        has_fallback = any(
+            row.stage == "fallback_used" and row.data.get("part") == event_part
+            for row in stored
+        )
+        owner = STAGE_OWNERS[event.stage]["fallback" if has_fallback else "server"]
+        assert event.source == owner, "failure sent without stored same-part fallback"
+        stored.append(event)
+
+    client.event.side_effect = accept
     turn = ledger.open_voice("satellite-a")
-    ledger.used(turn.turn_id, part, "server", "local")
-    if fallback:
+    assert await ledger.connect(turn)
+    if fallback != "none":
+        fallback_part = (
+            part if fallback == "same_part" else ("tts" if part == "stt" else "stt")
+        )
         await ledger.use_fallback(
-            turn.turn_id, f"{part}_fallback", "test-engine", reason="stream_closed"
+            turn.turn_id,
+            f"{fallback_part}_fallback",
+            "test-engine",
+            reason="stream_closed",
+        )
+        await ledger.flush()
+    ledger.records[turn.turn_id].destinations.clear()
+    if destination != "none":
+        ledger.used(
+            turn.turn_id,
+            part if destination == "server" else f"{part}_fallback",
+            "test-engine",
+            "local",
         )
     ledger.mark(turn.turn_id, f"{part}_failed")
-    failures = [event for event in ledger._pending if event.stage == f"{part}_failed"]
-    assert len(failures) == int(fallback), "server failure has a second owner"
+    await ledger.flush()
+    failures = [event for event in stored if event.stage == f"{part}_failed"]
+    assert len(failures) == int(fallback == "same_part"), (
+        "fallback failure missing despite stored same-part fallback"
+    )
     assert ledger.failures[f"{part}_failed"] == 1
+    assert ledger.timing_events_dropped == 0
     if failures:
         assert failures[0].source == "integration"
+    await ledger.stop_events()
+
+
+@pytest.mark.parametrize("part", ["stt", "tts"])
+@pytest.mark.parametrize("marker_accepted", [False, True])
+async def test_failure_waits_for_accepted_fallback_marker(
+    client, ledger, part, marker_accepted
+):
+    stored = []
+
+    async def accept(event):
+        if event.stage == "fallback_used" and not marker_accepted:
+            raise ProtocolError("marker refused", kind="refused")
+        if event.stage == f"{part}_failed":
+            assert any(
+                row.stage == "fallback_used" and row.data.get("part") == part
+                for row in stored
+            ), "failure sent after fallback marker refusal"
+        stored.append(event)
+
+    client.event.side_effect = accept
+    turn = ledger.open_voice("satellite-a")
+    assert await ledger.connect(turn)
+    await ledger.use_fallback(
+        turn.turn_id, f"{part}_fallback", "test-engine", reason="stream_closed"
+    )
+    ledger.mark(turn.turn_id, f"{part}_failed")
+    await ledger.flush()
+    assert sum(row.stage == f"{part}_failed" for row in stored) == int(marker_accepted)
+    assert ledger.failures[f"{part}_failed"] == 1
+    assert ledger.timing_events_dropped == int(not marker_accepted)
+    await ledger.stop_events()
 
 
 @pytest.mark.parametrize(

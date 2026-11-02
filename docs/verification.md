@@ -3179,3 +3179,24 @@ Each queued event then gets its own server check. Refused events increase the re
 Diagnostics count the removed refused open in `turn_opens_dropped`, not in the timing-event counter.
 
 No live bench call, deployment, or hardware acceptance result is part of this change.
+
+## Failure timing owner boundary
+
+The server at `7ab511c` accepts integration `stt_failed` and `tts_failed` only after a stored `fallback_used` for the same part.
+A destination row alone does not select this path.
+Failures without that accepted marker stay in local diagnostics, with no refused failure event or increase in `timing_events_dropped`.
+
+On `f2a8360`, the owner-boundary matrix gave `10 failed, 8 passed` before the repair.
+It uses the pinned client's `STAGE_OWNERS` table.
+It checks no destination, a server destination, and a fallback destination, with no marker, a same-part marker, and an other-part marker.
+Two more failures before the repair showed that a refused fallback marker must keep its pending failure event local.
+The related suites then gave `163 passed`.
+
+A scratch probe ran the actual server app, SQLite store, registry, and pinned client in-process.
+The command `.venv/bin/python "$PROBE" "$RUNROOT"` uses the probe script and its new scratch directory.
+The same 18 conditions gave `8/18 passed` before the repair and `18/18 passed` after it.
+No server dependency or external source path is part of the integration test environment.
+
+A syntax-valid mutation used the previous destination-based guard.
+Two tests gave the named assertion failure `fallback failure missing despite stored same-part fallback`.
+No deployed server, HA test instance, or hardware test is part of this repair.

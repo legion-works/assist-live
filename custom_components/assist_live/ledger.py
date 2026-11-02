@@ -89,6 +89,7 @@ class TurnLedger:
         self._active: dict[str, str] = {}
         self._previous: dict[str, Record] = {}
         self._pending: list[TimingEvent] = []
+        self._fallback_parts: dict[str, set[str]] = {}
         self._pending_opens: dict[str, TurnOpen] = {}
         self._opening: dict[str, asyncio.Event] = {}
         self._retry_opens = False
@@ -249,6 +250,11 @@ class TurnLedger:
         self._pending_opens = {
             turn_id: turn
             for turn_id, turn in self._pending_opens.items()
+            if turn_id in retained
+        }
+        self._fallback_parts = {
+            turn_id: parts
+            for turn_id, parts in self._fallback_parts.items()
             if turn_id in retained
         }
         # Pending events can outlive the short record-retention window.
@@ -458,10 +464,14 @@ class TurnLedger:
             self.failures[stage] = self.failures.get(stage, 0) + 1
         record.stages.add(stage)
         if stage in {"stt_failed", "tts_failed"}:
-            # The server owns failures until this part uses fallback.
+            # The server uses fallback markers, not destination rows.
             part = stage.removesuffix("_failed")
-            parts = {row["part"] for row in record.destinations}
-            if part in parts and f"{part}_fallback" not in parts:
+            if part not in self._fallback_parts.get(turn_id, set()) and not any(
+                event.turn_id == turn_id
+                and event.stage == "fallback_used"
+                and event.data.get("part") == part
+                for event in self._pending
+            ):
                 self.changed()
                 return
         data: dict[str, object] = {}
@@ -628,6 +638,13 @@ class TurnLedger:
                     continue
                 self._retry_opens = False
                 return
+            if event.stage in {"stt_failed", "tts_failed"} and (
+                event.stage.removesuffix("_failed")
+                not in self._fallback_parts.get(event.turn_id or "", set())
+            ):
+                # A removed fallback marker leaves no accepted failure owner.
+                self._pending = [item for item in self._pending if item is not event]
+                continue
             try:
                 async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
                     await self.client.event(event)
@@ -644,6 +661,13 @@ class TurnLedger:
             except TimeoutError, OSError:
                 self._events_failed = True
                 return
+            if (
+                event.stage == "fallback_used"
+                and event.turn_id is not None
+                and isinstance(part := event.data.get("part"), str)
+                and part in {"stt", "tts"}
+            ):
+                self._fallback_parts.setdefault(event.turn_id, set()).add(part)
             # The queue can remove an in-flight event when it reaches its limit.
             self._pending = [item for item in self._pending if item is not event]
 
@@ -655,6 +679,7 @@ class TurnLedger:
             self._event_sender = None
         self._pending.clear()
         self._pending_opens.clear()
+        self._fallback_parts.clear()
 
     def snapshot(self) -> list[dict[str, str]]:
         return [
