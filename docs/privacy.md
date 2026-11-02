@@ -40,7 +40,7 @@ HA checks the current destination again before each fallback call and each mid-t
 
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/7ab511c8140b5ed49a51b0af789447b89c958229/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.
@@ -90,7 +90,10 @@ The background timing sender keeps at most 512 pending events in memory, with a 
 These events contain timing and service metadata, not audio, transcripts, or reply text.
 After a send failure, pending events wait for a satisfactory maintenance health check and can outlive their local turn records.
 Integration shutdown cancels the sender and discards pending events without a last send or disk write.
-Diagnostics count queue removals in `timing_events_dropped`. This counter contains no event content.
+Diagnostics count queue overflow and refused-event removals in `timing_events_dropped`. This counter contains no event content.
+
+Refused timing events do not put event data or server error messages in the logs.
+The `turn_opens_dropped` counter contains no turn or event data.
 
 Default diagnostics do not include tokens, server addresses, audio, transcript text, TTS text, or speaker names.
 Each diagnostic turn row includes the latency sensor's `turn_id` attribute value, a correlation ID with no content.

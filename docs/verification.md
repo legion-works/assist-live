@@ -3150,3 +3150,32 @@ Four changes in disposable copies each gave a named assertion failure:
 
 These checks do not show that an agent follows the prompt.
 No live agent, device, or bench test is part of this record.
+
+## Integration measurement receipts
+
+The client pin is `7ab511c8140b5ed49a51b0af789447b89c958229`.
+The initial regression run on `311f984` gave 12 failures and 20 satisfactory controls before the repair.
+The tests include server and fallback ownership, receipt names, fallback codes, refused-event removal, and late turn opens.
+A real-client HTTP test checks the pinned models and the initial open time.
+Signature checks examine the 15 public client call interfaces that the integration uses.
+
+Five syntax-valid changes in disposable copies each gave a named assertion failure:
+
+- Send server-path `stt_final` with no HA receipt.
+- Stop the pending list after a refused event.
+- Remove `opened_utc_ns` from the turn open request.
+- Send a pending event before its late turn open.
+- Stop the pending list after a refused late open.
+
+More tests found an audio receipt that waits for HA output and a missing fallback-continuation byte event before their repairs.
+Queue tests also found duplicate recovery opens and duplicate removal counts before their repairs.
+The repaired receipt and parent-turn suites gave `69 passed`.
+Superseded turns keep an accepted server open only until the closed-turn limits release it.
+Their events do not start audio or fallback and do not open the turn a second time.
+
+A real-client HTTP test checks refused late opens with a stored turn and a missing turn.
+The two conditions gave the named assertion failure before the repair.
+Each queued event then gets its own server check. Refused events increase the removal counter, not the accepted events.
+Diagnostics count the removed refused open in `turn_opens_dropped`, not in the timing-event counter.
+
+No live bench call, deployment, or hardware acceptance result is part of this change.

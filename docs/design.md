@@ -107,12 +107,14 @@ A sensor for each satellite shows `end_decision` to `playback_start` time and it
 One background sender for each integration entry sends timing events in order for each turn.
 STT results, TTS streams, and turn opens do not wait for timing events.
 An outer timeout gives each event request a 2 s limit.
-The integration sends events only for turns that the server opened.
+The integration sends a turn open before its events.
+After a refused late open, the server checks each event independently.
 
 After a send failure, pending events wait for the next satisfactory maintenance health check.
 The pending list holds at most 512 events, with the event in flight.
 When the list is full, a new event removes the oldest event.
-Diagnostics count these removals in `timing_events_dropped`.
+Diagnostics count these removals and refused-event removals in `timing_events_dropped`.
+The counter `turn_opens_dropped` counts removed refused opens, not events.
 Pending events can stay after their short-lived local turn records expire.
 
 At integration shutdown, the integration cancels the sender and waits for cancellation.

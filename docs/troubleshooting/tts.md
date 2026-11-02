@@ -46,7 +46,7 @@ The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
 The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
 It does not find sentence boundaries itself.
-See the [server protocol](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/protocol.md) at the pinned client revision `5ac300bca5b4d49984411dcd468a3a44d6296473` for position rules.
+See the [server protocol](https://github.com/legion-works/assist-live-server/blob/7ab511c8140b5ed49a51b0af789447b89c958229/docs/protocol.md) at the pinned client revision `7ab511c8140b5ed49a51b0af789447b89c958229` for position rules.
 
 An older server without `text_positions` uses the failure path with the full text, not continuation.
 The same rule applies when no marker comes or the last marker has no `text_end`.
@@ -90,6 +90,11 @@ The domain is `persistent_notification`. The service is `create`.
 See the [HA service documentation](https://www.home-assistant.io/actions/persistent_notification.create/).
 
 ## Diagnostics and logs
+
+The integration records `tts_first_text` for the first HA text and `tts_audio_received` for the first server audio byte.
+The server owns `tts_first_byte`, `tts_sentence`, and `tts_last_byte` on the server path.
+On fallback, the integration records `tts_first_byte` for the fallback engine, also for a mid-turn continuation.
+Server-path failures stay in local diagnostics. Only fallback failures give integration-owned `tts_failed` timing events.
 
 Diagnostics give the protocol version, failure counts, and the number of TTS entities in each fallback mode.
 The modes are `streaming` and `full_file`.

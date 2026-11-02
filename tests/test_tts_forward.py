@@ -215,7 +215,9 @@ async def test_non_default_pipeline_voice_reaches_client(client, ledger):
     assert seen == ["voice-2", "First sentence. Second sentence."]
     turn = ledger.current("satellite-a")
     assert turn.turn_type == "tts_only"
-    assert {"tts_first_text", "tts_first_byte"} <= ledger.records[turn.turn_id].stages
+    assert {"tts_first_text", "tts_audio_received"} <= ledger.records[
+        turn.turn_id
+    ].stages
 
 
 @pytest.mark.parametrize(

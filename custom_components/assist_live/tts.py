@@ -378,7 +378,10 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
                     elif isinstance(item, TTSAudio):
                         if audio_format is None:
                             raise ProtocolError("TTS format required before audio")
+                        if not item.data:
+                            continue
                         first_audio = item
+                        self.ledger.mark(turn.turn_id, "tts_audio_received")
                         break
                     elif isinstance(item, TTSSentenceEnd):
                         if audio_format is None:
@@ -444,7 +447,6 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             assert server is not None and wav_header is not None
             invalid = False
             try:
-                self.ledger.mark(turn.turn_id, "tts_first_byte")
                 yield wav_header
                 if first_audio is not None:
                     yield first_audio.data
@@ -487,7 +489,11 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
 
                     try:
                         response = await fallback(rest())
+                        first = True
                         async for chunk in compatible_pcm(response, audio_format):
+                            if first and chunk:
+                                self.ledger.mark(turn.turn_id, "tts_first_byte")
+                                first = False
                             yield chunk
                         return
                     except Exception as fallback_error:

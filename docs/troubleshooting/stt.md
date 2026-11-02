@@ -46,7 +46,9 @@ The integration checks these properties before input and again before fallback.
 It refuses an assist-live entity in the fallback chain and refuses a circular chain.
 
 The turn record uses `fallback_used` when local fallback starts.
-A complete transcript uses `stt_final`.
+The server records `stt_final` for its complete transcript. The integration records `stt_final_received` when HA gets that transcript.
+On fallback, the integration records `stt_final` and a proxy `end_decision` with `decision_source: ha_audio_end`.
+
 If fallback has a failure or the time limit ends, the result has empty text and the record uses `stt_failed`.
 After a failure, the integration does not supply command text that is not complete.
 It does not retry the fallback or run the command again.

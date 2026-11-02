@@ -244,7 +244,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                 async with asyncio.timeout(MESSAGE_DEADLINE):
                                     message = await anext(messages)
                                 if message["type"] == "final":
-                                    self.ledger.mark(turn.turn_id, "stt_final")
+                                    self.ledger.mark(turn.turn_id, "stt_final_received")
                                     speaker_deadline = (
                                         asyncio.get_running_loop().time()
                                         + SPEAKER_RESULT_DEADLINE
@@ -258,12 +258,6 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                                     background = True
                                     return stt.SpeechResult(
                                         message["text"], stt.SpeechResultState.SUCCESS
-                                    )
-                                elif message["type"] == "end_decision":
-                                    self.ledger.mark(
-                                        turn.turn_id,
-                                        "end_decision",
-                                        decision_source="server_detector",
                                     )
                         finally:
                             if not background and isinstance(messages, AsyncGenerator):

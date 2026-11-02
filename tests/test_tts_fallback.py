@@ -129,6 +129,9 @@ async def test_matching_fallback_uses_server_position_without_wav_header(
     assert requests == [True]
     client.health_capabilities.assert_awaited_once_with(timeout=0.2)
     assert "tts_failed" not in next(iter(ledger.records.values())).stages
+    assert "tts_first_byte" in ledger.latest["satellite-a"].stages, (
+        "fallback continuation first audio byte is missing"
+    )
 
 
 @pytest.mark.parametrize("case", ["legacy", "missing", "missing_after_position"])

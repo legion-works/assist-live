@@ -52,7 +52,7 @@ The [server text rules](design.md#spoken-text) apply to all agents.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/5ac300bca5b4d49984411dcd468a3a44d6296473/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/7ab511c8140b5ed49a51b0af789447b89c958229/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -79,9 +79,16 @@ Each request has a 2 s limit, and the pending list has a 512-event limit.
 After a failure, the sender retries only after a new satisfactory maintenance health check.
 The maintenance health interval is 30 s after success and 5 s after failure.
 
-The diagnostic counter `timing_events_dropped` counts the oldest events removed when the list is full.
+The diagnostic counter `timing_events_dropped` counts events removed when the list is full or the server refuses them.
 It starts at integration setup. These limits have no user options.
+The counter `turn_opens_dropped` counts removed refused opens, not timing events.
 Integration shutdown discards pending events without a last send. Pending events do not survive reload or restart.
+
+A refused event does not stop the next event. Time limits and connection errors keep the event for the next health check.
+After an outage, the sender opens each pending turn before its events, with the initial `opened_utc_ns` time.
+If the server refuses that open, the sender sends each event for its own check. It does not send the open again.
+
+The STT and TTS entities keep `conversation_id` empty. Each timing event has its `turn_id`.
 
 The STT fallback must accept the language, PCM codec, 16-bit samples, 16000 Hz, and `channel=1`.
 The TTS fallback must accept the language. It uses its own selected or default voice.
@@ -90,7 +97,7 @@ A non-streaming fallback buffers the full text. Diagnostics show this path as `f
 
 Mid-turn continuation must also use the same audio format. See the [TTS rules](troubleshooting/tts.md).
 
-Each `fallback_used` event has a `reason`. Diagnostics count each value in `fallback_reasons`.
+Each `fallback_used` event has a `reason` and a `part` (`stt` or `tts`). Diagnostics count each `reason` in `fallback_reasons`.
 A debug log gives that value and the error class, or `None` when no error occurred.
 The log does not contain error messages, addresses, tokens, transcripts, or reply text.
 

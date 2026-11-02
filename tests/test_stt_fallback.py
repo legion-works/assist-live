@@ -193,7 +193,7 @@ async def test_final_result_prevents_fallback_even_on_close_error(
     )
     assert result.text == "complete command"
     assert not hasattr(fallback, "audio")
-    assert stages(ledger) >= {"stt_final"}
+    assert stages(ledger) >= {"stt_final_received"}
     assert "fallback_used" not in stages(ledger)
 
 

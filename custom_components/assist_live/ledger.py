@@ -89,6 +89,9 @@ class TurnLedger:
         self._active: dict[str, str] = {}
         self._previous: dict[str, Record] = {}
         self._pending: list[TimingEvent] = []
+        self._pending_opens: dict[str, TurnOpen] = {}
+        self._opening: dict[str, asyncio.Event] = {}
+        self._retry_opens = False
         self._event_sender: asyncio.Task[None] | None = None
         self.create_event_task: Callable[
             [Coroutine[Any, Any, None]], asyncio.Task[None]
@@ -96,6 +99,7 @@ class TurnLedger:
         self._events_failed = False
         self._events_stopped = False
         self.timing_events_dropped = 0
+        self.turn_opens_dropped = 0
         self._connected: set[str] = set()
         self.failures: dict[str, int] = {}
         self.fallback_reasons = {
@@ -237,8 +241,16 @@ class TurnLedger:
         self._pending = [
             event
             for event in self._pending
-            if event.turn_id in self.records or event.turn_id in self._connected
+            if event.turn_id in self.records
+            or event.turn_id in self._connected
+            or event.turn_id in self._pending_opens
         ]
+        retained = self.records.keys() | {event.turn_id for event in self._pending}
+        self._pending_opens = {
+            turn_id: turn
+            for turn_id, turn in self._pending_opens.items()
+            if turn_id in retained
+        }
         # Pending events can outlive the short record-retention window.
         self._connected.intersection_update(
             self.records.keys() | {event.turn_id for event in self._pending}
@@ -260,8 +272,15 @@ class TurnLedger:
             else None
         )
         turn = TurnOpen(
-            str(uuid7()), satellite, kind, parent, None, self.record_transcripts
+            str(uuid7()),
+            satellite,
+            kind,
+            parent,
+            None,
+            self.record_transcripts,
+            opened_utc_ns=time.time_ns(),
         )
+        self._pending_opens[turn.turn_id] = turn
         self.records[turn.turn_id] = Record(turn, self.clock())
         self.latest[satellite] = self.records[turn.turn_id]
         self._active[satellite] = turn.turn_id
@@ -411,7 +430,9 @@ class TurnLedger:
     def open_tts(self, satellite: str) -> TurnOpen:
         current = self.current(satellite)
         if current and current.turn_type == "voice":
-            if "stt_final" in self.records[current.turn_id].stages:
+            if {"stt_final", "stt_final_received"} & self.records[
+                current.turn_id
+            ].stages:
                 return current
         return self._open(satellite, "tts_only")
 
@@ -436,6 +457,13 @@ class TurnLedger:
         if stage in {"stt_failed", "tts_failed", "fallback_used"}:
             self.failures[stage] = self.failures.get(stage, 0) + 1
         record.stages.add(stage)
+        if stage in {"stt_failed", "tts_failed"}:
+            # The server owns failures until this part uses fallback.
+            part = stage.removesuffix("_failed")
+            parts = {row["part"] for row in record.destinations}
+            if part in parts and f"{part}_fallback" not in parts:
+                self.changed()
+                return
         data: dict[str, object] = {}
         if decision_source is not None:
             data["decision_source"] = decision_source
@@ -446,7 +474,7 @@ class TurnLedger:
             and record.destinations
             and record.destinations[-1]["part"].endswith("_fallback")
         ):
-            data.update(record.destinations[-1])
+            data["part"] = record.destinations[-1]["part"].removesuffix("_fallback")
         self._queue_event(
             TimingEvent(
                 turn_id,
@@ -509,14 +537,21 @@ class TurnLedger:
             return False
         if turn.turn_id in self._connected:
             return True
+        # Maintenance can open this turn before its entity connects.
+        if opened := self._opening.get(turn.turn_id):
+            async with asyncio.timeout(10):
+                await opened.wait()
+            return (
+                turn.turn_id in self._connected and self.current(turn.satellite) == turn
+            )
+        self._opening[turn.turn_id] = asyncio.Event()
         try:
             async with asyncio.timeout(10):
                 await self.client.open_turn(turn)
-            if self.current(turn.satellite) != turn:
-                return False
+            self._pending_opens.pop(turn.turn_id, None)
             self._connected.add(turn.turn_id)
             self.schedule_events()
-            return True
+            return self.current(turn.satellite) == turn
         except (ProtocolError, TimeoutError, OSError) as error:
             record.open_failure = (
                 "open_refused"
@@ -525,6 +560,8 @@ class TurnLedger:
             )
             record.open_error_class = type(error).__name__
             return False
+        finally:
+            self._opening.pop(turn.turn_id).set()
 
     def _queue_event(self, event: TimingEvent) -> None:
         if self._events_stopped:
@@ -539,24 +576,72 @@ class TurnLedger:
             return
         if retry:
             self._events_failed = False
+            self._retry_opens = True
         if self._events_failed or (
             self._event_sender is not None and not self._event_sender.done()
         ):
             return
-        if any(event.turn_id in self._connected for event in self._pending):
+        if any(event.turn_id in self._connected for event in self._pending) or (
+            self._retry_opens and self._pending_opens
+        ):
             self._event_sender = self.create_event_task(self.flush())
 
     async def flush(self) -> None:
         while not self._events_stopped:
+            if self._retry_opens:
+                turn = next(
+                    (
+                        t
+                        for key, t in self._pending_opens.items()
+                        if key not in self._opening
+                    ),
+                    None,
+                )
+                if turn is not None:
+                    self._opening[turn.turn_id] = asyncio.Event()
+                    try:
+                        async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
+                            await self.client.open_turn(turn)
+                    except ProtocolError as error:
+                        if error.kind != "refused":
+                            self._events_failed = True
+                            self._retry_opens = False
+                            return
+                        # The server can refuse a retry after it accepts the
+                        # initial open. It must check each queued event.
+                        self.turn_opens_dropped += 1
+                    except TimeoutError, OSError:
+                        self._events_failed = True
+                        self._retry_opens = False
+                        return
+                    finally:
+                        self._opening.pop(turn.turn_id).set()
+                    self._pending_opens.pop(turn.turn_id, None)
+                    self._connected.add(turn.turn_id)
             event = next(
                 (e for e in self._pending if e.turn_id in self._connected), None
             )
             if event is None:
+                if self._retry_opens and any(
+                    key not in self._opening for key in self._pending_opens
+                ):
+                    continue
+                self._retry_opens = False
                 return
             try:
                 async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
                     await self.client.event(event)
-            except ProtocolError, TimeoutError, OSError:
+            except ProtocolError as error:
+                if error.kind == "refused":
+                    retained = any(item is event for item in self._pending)
+                    self._pending = [
+                        item for item in self._pending if item is not event
+                    ]
+                    self.timing_events_dropped += int(retained)
+                    continue
+                self._events_failed = True
+                return
+            except TimeoutError, OSError:
                 self._events_failed = True
                 return
             # The queue can remove an in-flight event when it reaches its limit.
@@ -569,6 +654,7 @@ class TurnLedger:
             await asyncio.gather(self._event_sender, return_exceptions=True)
             self._event_sender = None
         self._pending.clear()
+        self._pending_opens.clear()
 
     def snapshot(self) -> list[dict[str, str]]:
         return [

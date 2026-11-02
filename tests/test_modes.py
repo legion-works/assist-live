@@ -579,9 +579,7 @@ async def test_midturn_stt_records_provider_and_fallback(
     await drain_timing_events(ledger)
     events = [call.args[0] for call in client.event.call_args_list]
     assert next(event for event in events if event.stage == "fallback_used").data == {
-        "part": "stt_fallback",
-        "provider": "unknown",
-        "destination": "unknown",
+        "part": "stt",
         "reason": "stream_error",
     }
     decision = next(event for event in events if event.stage == "end_decision")

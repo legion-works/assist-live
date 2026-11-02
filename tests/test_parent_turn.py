@@ -110,7 +110,10 @@ async def test_superseded_during_open_does_not_start_fallback(client, caplog, pr
         entered.set()
         await release.wait()
 
+    audio_started = []
+
     async def empty_stream(*args):
+        audio_started.append(True)
         return
         yield
 
@@ -138,6 +141,20 @@ async def test_superseded_during_open_does_not_start_fallback(client, caplog, pr
     assert not any(
         call.args[0].stage == "fallback_used" for call in client.event.call_args_list
     )
+    assert old_turn.turn_id not in ledger._pending_opens
+    await ledger.flush()
+    assert (
+        sum(
+            call.args[0].stage == "turn_superseded"
+            and call.args[0].turn_id == old_turn.turn_id
+            for call in client.event.call_args_list
+        )
+        == 1
+    )
+    assert not audio_started
+    assert client.open_turn.await_count == 1
+    now[0] = 12
+    ledger.prune()
     assert old_turn.turn_id not in ledger._connected
     assert "turn superseded during open" in caplog.text
     assert "KeyError" not in caplog.text
@@ -156,7 +173,10 @@ async def test_superseded_tts_open_does_not_play_fallback(client, caplog, pruned
         entered.set()
         await release.wait()
 
+    audio_started = []
+
     async def empty_stream(*args, **kwargs):
+        audio_started.append(True)
         return
         yield
 
@@ -167,6 +187,7 @@ async def test_superseded_tts_open_does_not_play_fallback(client, caplog, pruned
             forward.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
         )
         await asyncio.wait_for(entered.wait(), 1)
+        old_turn = ledger.current("satellite-a")
         now[0] = 0.1
         replacement = ledger.open_voice("satellite-a")
         if pruned:
@@ -180,5 +201,20 @@ async def test_superseded_tts_open_does_not_play_fallback(client, caplog, pruned
     assert not any(
         "fallback_used" in record.stages for record in ledger.records.values()
     )
+    await ledger.flush()
+    assert (
+        sum(
+            call.args[0].stage == "turn_superseded"
+            and call.args[0].turn_id == old_turn.turn_id
+            for call in client.event.call_args_list
+        )
+        == 1
+    )
+    assert not audio_started
+    assert client.open_turn.await_count == 1
+    assert old_turn.turn_id not in ledger._pending_opens
+    now[0] = 12
+    ledger.prune()
+    assert old_turn.turn_id not in ledger._connected
     assert "turn superseded during open" in caplog.text
     assert "KeyError" not in caplog.text

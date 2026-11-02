@@ -166,6 +166,7 @@ async def async_get_config_entry_diagnostics(
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
         "timing_events_dropped": runtime.ledger.timing_events_dropped,
+        "turn_opens_dropped": runtime.ledger.turn_opens_dropped,
         "fallback_count": runtime.ledger.failures.get("fallback_used", 0),
         "fallback_reasons": dict(runtime.ledger.fallback_reasons),
         "speaker_metadata_missing": runtime.ledger.speaker_missing,

@@ -3,6 +3,22 @@
 The [measurement rules](../design.md#measurement-rules) give the report contract.
 These tools do not supply hardware acceptance results.
 
+## Integration receipts
+
+The server owns its detector, transcript, and audio-production events.
+The integration records `stt_final_received` when HA gets the transcript and `tts_audio_received` when HA gets the first audio byte.
+These receipt events do not replace the server endpoints in a latency report.
+On fallback, the integration owns `end_decision`, `stt_final`, and `tts_first_byte` for the fallback work.
+The decision is a proxy with `decision_source: ha_audio_end`. Each `fallback_used` event gives a `reason` and `part`.
+
+The integration keeps `conversation_id` empty and supplies a `turn_id` on each event.
+
+After a server outage, the integration sends the turn open before its events, with the initial open time.
+Refused events increase `timing_events_dropped` and do not stop the next event.
+After a refused late open, the sender sends each event independently. The server can accept it if the turn is in storage.
+The diagnostic counter `turn_opens_dropped` counts removed refused opens, not events.
+Time limits and connection errors keep the pending event until a satisfactory maintenance health check.
+
 ## Sets
 
 Each report row names its `set`: `replay` or `pause`.
