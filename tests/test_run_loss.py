@@ -52,6 +52,40 @@ def test_loss_window_accepts_stable_known_counters_only():
     result = measurement.loss_window(snapshot(3), snapshot(3))
     assert result["complete"]
     assert not result["loss_present"]
+    assert result["counter_deltas"] == {
+        "integration": 0,
+        "server": {"test_satellite": 0},
+        "device": {"test_satellite": 0},
+    }
+
+
+def test_loss_window_records_per_counter_increases():
+    before, after = snapshot(2), snapshot(2)
+    after["integration"]["value"] = 9
+    after["server"]["test_satellite"]["value"] = 8
+    after["device"]["test_satellite"]["value"] = 5
+    before["device"]["second_satellite"] = {"value": 11, "last_reset_utc_ns": 1}
+    after["device"]["second_satellite"] = {"value": 15, "last_reset_utc_ns": 1}
+    result = measurement.loss_window(before, after)
+    assert result["loss_present"]
+    assert result["counter_deltas"] == {
+        "integration": 7,
+        "server": {"test_satellite": 6},
+        "device": {"test_satellite": 3, "second_satellite": 4},
+    }
+
+
+def test_loss_window_does_not_invent_delta_across_counter_reset():
+    before, after = snapshot(2), snapshot(5)
+    after["integration"]["last_reset_utc_ns"] = 2
+    after["server"]["test_satellite"]["boot_id"] = 1
+    after["device"]["test_satellite"]["value"] = None
+    result = measurement.loss_window(before, after)
+    assert result["counter_deltas"] == {
+        "integration": None,
+        "server": {"test_satellite": None},
+        "device": {"test_satellite": None},
+    }
 
 
 def test_loss_window_does_not_drop_a_satellite_missing_at_end():
@@ -164,6 +198,7 @@ def test_sequence_gap_decrease_on_same_boot_is_late_arrival_not_reset():
     assert result["loss_present"]
     assert not result["reset_unknown"]
     assert result["server_missing_after_settle"]["test_satellite"] == 1
+    assert result["counter_deltas"]["server"]["test_satellite"] == -2
 
 
 @pytest.mark.parametrize("boot", [0, 18446744073709551615])

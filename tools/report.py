@@ -278,9 +278,45 @@ def sentence_timing(row: Row) -> list[Row] | None:
     ]
     if not any(e["stage"] in ("tts_sentence", "tts_last_byte") for e in events):
         return None
-    result = []
-    for request in sorted({event["data"].get("request", 0) for event in events}):
-        stream = [e for e in events if e["data"].get("request", 0) == request]
+    missing_request = any(event["data"].get("request") is None for event in events)
+    requests = {
+        event["data"]["request"]
+        for event in events
+        if event["data"].get("request") is not None
+    }
+    streams: list[tuple[int | None, list[Row]]] = []
+    if missing_request:
+        server_first = [
+            e
+            for e in events
+            if e["stage"] == "tts_first_byte" and e["source"] == "server"
+        ]
+        if len(server_first) != 1 or len(requests) > 1:
+            return [
+                {
+                    "request": None,
+                    "available": False,
+                    "reason": "MISSING_TTS_REQUEST_AMBIGUOUS_STREAM",
+                }
+            ]
+        streams.append(
+            (
+                next(iter(requests), None),
+                [
+                    e
+                    for e in events
+                    if e["stage"] not in ("tts_text_received", "tts_first_byte")
+                    or e["source"] == "server"
+                ],
+            )
+        )
+    else:
+        streams = [
+            (request, [e for e in events if e["data"]["request"] == request])
+            for request in sorted(requests)
+        ]
+    result: list[Row] = []
+    for request, stream in streams:
         sentences = sorted(
             [e["data"] for e in stream if e["stage"] == "tts_sentence"],
             key=lambda data: data["index"],
@@ -315,6 +351,9 @@ def sentence_timing(row: Row) -> list[Row] | None:
         result.append(
             {
                 "request": request,
+                "request_method": "single_server_stream"
+                if missing_request
+                else "recorded",
                 "available": True,
                 "sentences": ending["sentences"],
                 "audio_ms": ending["audio_ms"],

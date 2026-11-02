@@ -34,6 +34,7 @@ def loss_window(start: Row, end: Row) -> Row:
     methods = {}
     settled_missing = {}
     no_device_events = []
+    deltas: Row = {"integration": None, "server": {}, "device": {}}
     for kind in ("integration", "server", "device"):
         before = (
             {"integration": start.get(kind, {})}
@@ -79,10 +80,26 @@ def loss_window(start: Row, end: Row) -> Row:
                 reset = True
                 method = "reset_unknown"
             methods[kind + ":" + satellite] = method
+            same_epoch = method == "counters_since_utc_ns" and epochs[0] == epochs[1]
+            delta = (
+                b - a
+                if type(a) is int
+                and type(b) is int
+                and a >= 0
+                and b >= 0
+                and (same_boot or same_epoch)
+                and (b >= a or kind == "server")
+                else None
+            )
+            if kind == "integration":
+                deltas[kind] = delta
+            else:
+                deltas[kind][satellite] = delta
     return {
         "start": start,
         "end": end,
         "loss_present": loss,
+        "counter_deltas": deltas,
         "loss_unavailable": unavailable,
         "reset_unknown": reset,
         "reset_methods": methods,

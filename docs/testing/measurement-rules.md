@@ -55,6 +55,12 @@ With the same boot, the counter increase gives the count of missing events.
 A decrease can come from late events. In that condition, use the remaining end count.
 A different boot gives `reset_unknown`.
 
+`counter_deltas` records end minus start with the flags.
+It has one integration value and server and device values for each satellite.
+A known unchanged counter gives 0. An unknown counter or changed boot or epoch gives null.
+For a server counter, a negative value shows late events.
+`server_missing_after_settle` records the remaining count in that condition.
+
 An unknown boot at the start also gives `reset_unknown` with a known boot at the end.
 With no boot at the start or end, `no_device_events` makes device completeness unsatisfactory.
 It does not report missing events as an increase in the counter.
@@ -79,6 +85,13 @@ Its output keeps this limit apart from the fault outcome.
 
 The [TTS sentence timing](../design.md#tts-sentence-timing) contract gives the fields.
 The report groups sentence events by turn and TTS `request`.
+With a missing `request`, the turn must have one server `tts_first_byte` and no other server first-byte event.
+The report then uses `request_method: single_server_stream` and does not invent request 0.
+
+A sole recorded request ID stays in the result. With no recorded ID, the request ID stays null.
+With 0 or multiple server first-byte events, values stay unavailable with `MISSING_TTS_REQUEST_AMBIGUOUS_STREAM`.
+Multiple recorded request IDs also give that result when a request ID is missing.
+
 It measures `text_ms` and `first_byte_ms` from server `tts_text_received`.
 Playback starts at the server `tts_first_byte` event.
 For each sentence, the margin is the earlier audio time minus the wait for its first byte.

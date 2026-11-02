@@ -149,6 +149,43 @@ def test_sentence_margin_requires_server_text_and_first_byte_anchors():
     assert result["available"] is False
 
 
+@pytest.mark.parametrize("missing", ["all", "sentence_only"])
+def test_missing_request_uses_only_one_server_stream_without_default_zero(missing):
+    from tools.report import sentence_timing
+
+    row = sentence_row()
+    for event in row["events"]:
+        if event["stage"].startswith("tts_"):
+            event["data"]["request"] = 7
+            if missing == "all" or event["stage"] == "tts_sentence":
+                del event["data"]["request"]
+    result = sentence_timing(row)
+    assert len(result) == 1
+    assert result[0]["available"] is True
+    assert result[0]["request"] == (None if missing == "all" else 7)
+    assert result[0]["request_method"] == "single_server_stream"
+    assert result[0]["margins_ms"] == [0, -50, -200]
+
+
+@pytest.mark.parametrize("server_first_bytes", [0, 2])
+def test_missing_request_refuses_ambiguous_server_streams(server_first_bytes):
+    from tools.report import sentence_timing
+
+    row = sentence_row()
+    for event in row["events"]:
+        event["data"].pop("request", None)
+    first = next(e for e in row["events"] if e["stage"] == "tts_first_byte")
+    row["events"].remove(first)
+    row["events"].extend(copy.deepcopy(first) for _ in range(server_first_bytes))
+    assert sentence_timing(row) == [
+        {
+            "request": None,
+            "available": False,
+            "reason": "MISSING_TTS_REQUEST_AMBIGUOUS_STREAM",
+        }
+    ]
+
+
 def test_test_only_event_cannot_supply_a_measurement_endpoint():
     _, rows = dataset(1)
     row = rows[0]
