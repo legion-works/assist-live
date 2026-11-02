@@ -495,6 +495,57 @@ async def test_refused_late_open_still_sends_each_queued_event(
             await ledger.stop_events()
 
 
+async def test_identical_late_open_after_lost_response_keeps_events(
+    aiohttp_server, socket_enabled
+):
+    from aiohttp import web
+
+    from custom_components.assist_live.ledger import TurnLedger
+
+    opens = []
+    stages = []
+
+    async def opened(request):
+        body = await request.json()
+        opens.append(body)
+        if len(opens) == 1:
+            request.transport.close()
+            return web.Response()
+        assert body == opens[0], "lost_response_retry_keeps_identical_open"
+        return web.json_response({})
+
+    async def event(request):
+        body = await request.json()
+        assert len(opens) == 2, "late_open_precedes_recovered_events"
+        assert body["turn_id"] == opens[0]["turn_id"]
+        stages.append(body["stage"])
+        return web.json_response({})
+
+    app = web.Application()
+    app.router.add_post("/v1/turns", opened)
+    app.router.add_post("/v1/event", event)
+    server = await aiohttp_server(app)
+    async with AssistLiveClient(str(server.make_url("")), "test-only") as real:
+        ledger = TurnLedger(real)
+        try:
+            turn = ledger.open_voice("satellite-a")
+            assert not await ledger.connect(turn), "initial_open_response_is_lost"
+            ledger.mark(turn.turn_id, "stt_final_received")
+            ledger.mark(turn.turn_id, "tts_first_text")
+            ledger.schedule_events(retry=True)
+            await asyncio.wait_for(ledger._event_sender, 1)
+            assert stages == ["stt_final_received", "tts_first_text"], (
+                "lost_response_retry_sends_turn_events"
+            )
+            assert not ledger._pending, "lost_response_retry_drains_events"
+            assert ledger.turn_opens_dropped == 0, (
+                "identical_retry_is_not_a_dropped_open"
+            )
+            assert ledger.timing_events_dropped == 0
+        finally:
+            await ledger.stop_events()
+
+
 async def test_pinned_client_serializes_receipts_and_initial_open_time(
     aiohttp_server, socket_enabled
 ):

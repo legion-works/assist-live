@@ -123,7 +123,7 @@ jobs:
           --with "mutagen==1.48.1"
           --with "pymicro-vad==1.0.1"
           --with "pyspeex-noise==1.0.2"
-          --with "assist-live-client @ git+https://github.com/legion-works/assist-live-server@7ab511c8140b5ed49a51b0af789447b89c958229#subdirectory=client"
+          --with "assist-live-client @ git+https://github.com/legion-works/assist-live-server@8f9c620c376fe8f4b39b6039477b5247833e80fe#subdirectory=client"
           pytest tests/ -q
       - id: result
         env:

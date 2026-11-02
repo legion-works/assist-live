@@ -3200,3 +3200,40 @@ No server dependency or external source path is part of the integration test env
 A syntax-valid mutation used the previous destination-based guard.
 Two tests gave the named assertion failure `fallback failure missing despite stored same-part fallback`.
 No deployed server, HA test instance, or hardware test is part of this repair.
+
+## Counter start time and safe turn open
+
+Each new ledger sets `counters_since_utc_ns` with its counters at 0.
+Diagnostics give that same time until setup or reload makes a new ledger.
+Tests use the actual diagnostics function and HA setup, maintenance, options, reload, and `async_unload` paths.
+The two readers, `measurement.capture_loss` and `fault_runner.fallback_snapshot`, read the payload.
+The tests check a counter difference with the same start time, a reload, and an older payload without the start time.
+
+On `7c9eeda` source with the new test files, `uv run --locked pytest tests/test_run_loss.py tests/test_receipt_contract.py -q` gave `6 failed, 112 passed` before the repair.
+The named failures were `diagnostics_counter_start_missing` and `counter_start_is_utc_ns`.
+The same command after the repair gave `118 passed`.
+Three syntax-valid mutations in scratch copies each gave one named failure:
+
+- No start time in diagnostics: `diagnostics_counter_start_missing`.
+- A new start time on each read: `counter_start_stable_between_reads`.
+- The same start time after reload: `counter_start_renewed_on_reload`.
+
+The client pin is `8f9c620c376fe8f4b39b6039477b5247833e80fe`.
+Only the client source and its project declaration changed in `uv.lock`.
+All 15 public client call signatures agree with the previous pin: parameter `kind`, `default`, `annotation`, and `return_annotation` values.
+The 15-name contract test also gave `15 passed`.
+
+An HTTP test with the actual client stores an open, drops its response, and accepts a retry with the same values.
+The server gets the turn events in order, and `turn_opens_dropped` stays at 0.
+This test also gives a satisfactory result with the previous client pin because the server owns the retry behavior.
+
+A scratch probe uses the actual ledger, pinned client, server app, registry, and SQLite store.
+It uses server source from `git archive` at `3905140` and `8f9c620`.
+The command is `.venv/bin/python "$PROBE" "$SERVER_SNAPSHOT" "$EXPECTED_DROPS"`.
+
+If HA does not receive the first response, `3905140` gives open statuses `200, 409` and counts one dropped open.
+The same test at `8f9c620` gives `200, 200` and counts 0 dropped opens.
+The two versions store `stt_final_received` and `tts_first_text` with no dropped timing event.
+At `8f9c620`, a different open gives `409`, and the client keeps `ProtocolError(kind="refused")`.
+
+No bench change, deployment, or hardware acceptance test is part of this change.

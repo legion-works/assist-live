@@ -315,7 +315,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "assist-live-client", git = "https://github.com/legion-works/assist-live-server?subdirectory=client&rev=7ab511c8140b5ed49a51b0af789447b89c958229" },
+    { name = "assist-live-client", git = "https://github.com/legion-works/assist-live-server?subdirectory=client&rev=8f9c620c376fe8f4b39b6039477b5247833e80fe" },
     { name = "gazetteer-matcher", specifier = "==1.1.0" },
     { name = "ha-ffmpeg", specifier = "==3.2.2" },
     { name = "hassil", specifier = "==3.12.1" },
@@ -333,7 +333,7 @@ dev = [
 [[package]]
 name = "assist-live-client"
 version = "0.0.0"
-source = { git = "https://github.com/legion-works/assist-live-server?subdirectory=client&rev=7ab511c8140b5ed49a51b0af789447b89c958229#7ab511c8140b5ed49a51b0af789447b89c958229" }
+source = { git = "https://github.com/legion-works/assist-live-server?subdirectory=client&rev=8f9c620c376fe8f4b39b6039477b5247833e80fe#8f9c620c376fe8f4b39b6039477b5247833e80fe" }
 dependencies = [
     { name = "aiohttp" },
 ]

@@ -99,6 +99,7 @@ class TurnLedger:
         ] = asyncio.create_task
         self._events_failed = False
         self._events_stopped = False
+        self.counters_since_utc_ns = time.time_ns()
         self.timing_events_dropped = 0
         self.turn_opens_dropped = 0
         self._connected: set[str] = set()
@@ -617,8 +618,8 @@ class TurnLedger:
                             self._events_failed = True
                             self._retry_opens = False
                             return
-                        # The server can refuse a retry after it accepts the
-                        # initial open. It must check each queued event.
+                        # A conflicting or too-old open can have accepted events.
+                        # The server must check each queued event.
                         self.turn_opens_dropped += 1
                     except TimeoutError, OSError:
                         self._events_failed = True

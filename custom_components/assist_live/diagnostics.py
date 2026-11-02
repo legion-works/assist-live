@@ -165,6 +165,7 @@ async def async_get_config_entry_diagnostics(
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
+        "counters_since_utc_ns": runtime.ledger.counters_since_utc_ns,
         "timing_events_dropped": runtime.ledger.timing_events_dropped,
         "turn_opens_dropped": runtime.ledger.turn_opens_dropped,
         "fallback_count": runtime.ledger.failures.get("fallback_used", 0),

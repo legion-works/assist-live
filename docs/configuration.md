@@ -52,7 +52,7 @@ The [server text rules](design.md#spoken-text) apply to all agents.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/7ab511c8140b5ed49a51b0af789447b89c958229/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/8f9c620c376fe8f4b39b6039477b5247833e80fe/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -86,7 +86,10 @@ Integration shutdown discards pending events without a last send. Pending events
 
 A refused event does not stop the next event. Time limits and connection errors keep the event for the next health check.
 After an outage, the sender opens each pending turn before its events, with the initial `opened_utc_ns` time.
-If the server refuses that open, the sender sends each event for its own check. It does not send the open again.
+
+A retry with the same open values succeeds if HA does not receive the first response.
+The server refuses a conflicting or too-old open. The sender then sends each event for its own check.
+It does not send the refused open again.
 
 The STT and TTS entities keep `conversation_id` empty. Each timing event has its `turn_id`.
 
