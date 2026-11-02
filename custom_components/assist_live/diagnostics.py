@@ -163,6 +163,14 @@ async def async_get_config_entry_diagnostics(
     return {
         "protocol_version": 1,
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
+        "stt_hints": {
+            satellite: dict(row) for satellite, row in runtime.hints.status.items()
+        }
+        if hasattr(runtime, "hints")
+        else {},
+        "stt_hints_failures": runtime.hints.failures
+        if hasattr(runtime, "hints")
+        else 0,
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
         "counters_since_utc_ns": runtime.ledger.counters_since_utc_ns,

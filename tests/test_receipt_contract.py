@@ -35,7 +35,7 @@ from test_tts_forward import text
         (
             "HealthCapabilities",
             "healthy stt tts text_positions local_only destinations "
-            "tts_voices tts_default_voice",
+            "tts_voices tts_default_voice stt_hints stt_hints_by_satellite",
         ),
         (
             "TimingEvent",
@@ -54,6 +54,7 @@ from test_tts_forward import text
 )
 def test_fifteen_public_client_api_signatures(name, parameters):
     import inspect
+    from annotationlib import Format
 
     from assist_live_client import models
 
@@ -63,7 +64,30 @@ def test_fifteen_public_client_api_signatures(name, parameters):
         target = getattr(AssistLiveClient, name.split(".")[1])
     else:
         target = getattr(models, name)
-    assert list(inspect.signature(target).parameters) == parameters.split()
+    signature = inspect.signature(target, annotation_format=Format.STRING)
+    assert list(signature.parameters) == parameters.split()
+    if name == "HealthCapabilities":
+        expected = {
+            "healthy": ("bool", inspect.Parameter.empty),
+            "stt": ("bool", False),
+            "tts": ("bool", False),
+            "text_positions": ("bool", False),
+            "local_only": ("bool | None", None),
+            "destinations": ("Mapping[str, str] | None", None),
+            "tts_voices": ("tuple[TTSVoice, ...]", ()),
+            "tts_default_voice": ("str | None", None),
+            "stt_hints": ("bool", False),
+            "stt_hints_by_satellite": (
+                "Mapping[str, Mapping[str, str | int]] | None",
+                None,
+            ),
+        }
+        for field, (annotation, default) in expected.items():
+            parameter = signature.parameters[field]
+            assert parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+            assert parameter.annotation == annotation
+            assert parameter.default == default
+        assert signature.return_annotation == "None"
 
 
 async def run_entities(client, ledger, *, fallback):

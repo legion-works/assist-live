@@ -38,6 +38,28 @@ Set `local_only` on the server too. These configured-destination checks are not 
 These checks do not include the conversation agent.
 See [privacy](privacy.md) for the limits of these checks.
 
+## STT name hints
+
+The integration sends the names and aliases that Assist can use, and the area names, for each configured satellite.
+It changes each name to lower case and removes spaces at the two ends.
+Each name has 1 to 64 characters and a minimum of one letter. The list has no duplicates.
+Sorted area names come first, then sorted entity names and aliases. The integration keeps the first 500 names.
+
+It sends the list at setup and 5 s after an entity registry, area registry, or Assist exposure change.
+These three change sources use one debounce timer.
+A different digest in server health also starts a send for that satellite, for example after a server restart.
+After a server restart, the integration sends the list again on its next maintenance health read.
+Only setup and maintenance health reads start this recovery. A turn does not wait for the list.
+
+The integration sends names only when health reports `stt_hints=true`. Older servers and cloud STT providers get no list.
+
+Each send has a 2 s limit. A failure does not stop a turn. The next change or health check can retry it.
+
+Diagnostics give each satellite's `count`, `digest`, `not_sent`, `last_result`, and `last_send` in `stt_hints`.
+The result is `sent`, `skipped_no_support`, or `failed`. The time is the last satisfactory send in UTC, or `null` before one succeeds.
+The `stt_hints_failures` counter starts at integration setup. Logs give only the error class, not the names or server error text.
+See [privacy](privacy.md#stt-name-hints) for the destination and storage rules.
+
 ## Conversation agents
 
 Enable the Assist API ("Device control") on the conversation agent.
@@ -52,7 +74,7 @@ The [server text rules](design.md#spoken-text) apply to all agents.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/8f9c620c376fe8f4b39b6039477b5247833e80fe/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/8339feea795eac71008cbaa3f8046706a14602b6/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 

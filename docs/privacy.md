@@ -38,9 +38,19 @@ Diagnostics count each known value in `fallback_reasons`. See the [cause table](
 A known cloud fallback cannot use that decision.
 HA checks the current destination again before each fallback call and each mid-turn TTS continuation.
 
+## STT name hints
+
+The integration sends entity names, aliases, and area names only to the configured assist-live server.
+It sends them only when server health reports `stt_hints=true` for a local STT provider.
+The server keeps these names in memory only. It does not send the list to a cloud provider.
+
+The integration keeps its list in memory too. It does not add names to logs, diagnostics, repair issues, or timing events.
+Diagnostics contain only counts, the list digest, the send result, and the time of the last satisfactory send for each satellite.
+The failure counter and error-class log contain no names. See [configuration](configuration.md#stt-name-hints) for the send conditions.
+
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/8f9c620c376fe8f4b39b6039477b5247833e80fe/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/8339feea795eac71008cbaa3f8046706a14602b6/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.

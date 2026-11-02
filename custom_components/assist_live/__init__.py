@@ -31,6 +31,7 @@ from .repairs import (
     stored_state_issue,
     update_issues,
 )
+from .stt_hints import STTHints
 
 PLATFORMS = [Platform.STT, Platform.TTS, Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class Runtime:
         self.hass = hass
         self.entry = entry
         self.client = client
+        self.hints = STTHints(hass, client, entry.data["satellites"].values())
         self.ledger = TurnLedger(client)
         self.ledger.create_event_task = lambda coro: hass.async_create_background_task(
             coro, "assist-live-timing-events"
@@ -156,6 +158,7 @@ class Runtime:
     async def start(self) -> None:
         saved = await self.store.async_load()
         await self._restore_saved(saved)
+        self.hints.start()
         for satellite in self.entry.data["satellites"].values():
             self.tasks.append(
                 self.hass.async_create_background_task(
@@ -306,6 +309,7 @@ class Runtime:
                 self.ledger.schedule_events(retry=True)
             if isinstance(health, HealthCapabilities):
                 self.ledger.last_health = health
+                self.hints.observe_health(health)
                 for entity in self.tts.values():
                     if isinstance(entity, AssistLiveTTS):
                         entity.async_update_voices()
@@ -348,6 +352,7 @@ class Runtime:
         )
 
     async def stop(self) -> None:
+        await self.hints.stop()
         await self.ledger.stop_events()
         await self.ledger.stop_speaker_reads()
         for unsub in self.unsub:

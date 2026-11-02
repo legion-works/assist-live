@@ -3237,3 +3237,43 @@ The two versions store `stt_final_received` and `tts_first_text` with no dropped
 At `8f9c620`, a different open gives `409`, and the client keeps `ProtocolError(kind="refused")`.
 
 No bench change, deployment, or hardware acceptance test is part of this change.
+
+## STT name hints
+
+Date: 2026-11-02 (UTC).
+
+```sh
+uv run --locked pytest tests/test_stt_hints.py tests/test_stt_hints_contract.py -q
+```
+
+The first run on `7e0cd6e` gave `12 failed, 3 passed` before implementation.
+The named failures included `hint_builder_missing`, `setup_sends_each_satellite`, `one_debounced_send_per_satellite`, and `digest_mismatch_resends`.
+The completed tests gave `20 passed` on HA `2026.10.4` and HA `2026.10.1`.
+They use the HA test harness and the pinned client with an HTTP test server, without a server-package dependency.
+
+The tests check normalization, area names first, aliases, duplicates, the 500-name limit, and overflow diagnostics.
+Two digest vectors check the empty list and three names with UTF-8 text.
+Runtime tests check setup, all three change sources, one shared debounce timer, its restart, server restart recovery, and a change to `stt_hints=false`.
+They also check failure counts, last-send times, integration shutdown, and a completed fallback turn while a hint request waits.
+
+The privacy test captures all loggers at DEBUG and reads diagnostics, repair issues, and timing-event data.
+The test server gives an error with a synthetic name. The log contains only `ProtocolError`, not that name.
+Four syntax-valid mutations in scratch copies each gave a named assertion failure:
+
+| Mutation | Assertion |
+|---|---|
+| Send with `stt_hints=false` | `unsupported_server_never_gets_names` |
+| Remove the lower-case step | `normalized_names_and_area_priority` |
+| Ignore digest differences | `digest_mismatch_resends` |
+| Add names to diagnostics | `hint_name_private_in_all_debug_logs_and_diagnostics` |
+
+The non-public HA interfaces are `exposed_entities.async_should_expose`, `exposed_entities.async_listen_entity_updates`, and `intent.async_get_entity_aliases`.
+One module contains these calls. Their signature and behavior contracts run on the two HA versions.
+The contracts check default and explicit Assist exposure, `COMPUTED_NAME`, aliases, legacy entities, update notification, and unsubscribe.
+
+The client pin is `8339feea795eac71008cbaa3f8046706a14602b6` in all CI-enforced carriers.
+Only the client source and its project declaration change in `uv.lock`.
+Of the 15 earlier public client names, 14 keep the same signatures. This includes each parameter's type and default value.
+`HealthCapabilities` keeps its earlier parameters and adds only `stt_hints=False` and `stt_hints_by_satellite=None`.
+
+No bench change, deployment, cloud request, or hardware acceptance test is part of this change.

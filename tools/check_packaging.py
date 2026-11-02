@@ -28,6 +28,7 @@ PACKAGE_FILES = {
     "strings.json",
     "stt.py",
     "stt_fallback.py",
+    "stt_hints.py",
     "translations/en.json",
     "tts.py",
     "tts_fallback.py",

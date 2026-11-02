@@ -486,6 +486,7 @@ def test_package_file_set_is_explicit():
         "strings.json",
         "stt.py",
         "stt_fallback.py",
+        "stt_hints.py",
         "translations/en.json",
         "tts.py",
         "tts_fallback.py",
