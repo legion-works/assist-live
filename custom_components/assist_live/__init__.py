@@ -31,6 +31,7 @@ from .repairs import (
     stored_state_issue,
     update_issues,
 )
+from .settings import effective_settings
 from .stt_hints import STTHints
 
 PLATFORMS = [Platform.STT, Platform.TTS, Platform.SENSOR]
@@ -89,7 +90,7 @@ class Runtime:
     def update_options(self, entry: ConfigEntry) -> None:
         from .tts import AssistLiveTTS
 
-        settings = {**entry.data, **entry.options}
+        settings = effective_settings(entry)
         self.ledger.record_transcripts = settings.get("record_transcripts", False)
         self.ledger.local_only = settings.get("local_only", False)
         for entity in self.tts.values():
@@ -100,7 +101,7 @@ class Runtime:
         from .config_flow import destination, entity_iot_class
 
         mode = destination(await entity_iot_class(self.hass, entity_id))
-        settings = {**self.entry.data, **self.entry.options}
+        settings = effective_settings(self.entry)
         if (
             mode == "unknown"
             and settings.get("local_decisions", {})
@@ -373,9 +374,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .stt import AssistLiveSTT
     from .tts import AssistLiveTTS
 
+    settings = effective_settings(entry)
     if any(
-        is_forwarder(hass, entry.data[name])
-        for name in ("fallback_stt", "fallback_tts")
+        is_forwarder(hass, settings[name]) for name in ("fallback_stt", "fallback_tts")
     ):
         return False
     client = AssistLiveClient(
@@ -388,7 +389,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await runtime.refresh_health()
 
         async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
-            runtime.update_options(updated)
+            current = effective_settings(updated)
+            if any(
+                current[name] != settings[name]
+                for name in ("fallback_stt", "fallback_tts")
+            ):
+                await hass.config_entries.async_reload(updated.entry_id)
+            else:
+                runtime.update_options(updated)
 
         entry.async_on_unload(entry.add_update_listener(options_updated))
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

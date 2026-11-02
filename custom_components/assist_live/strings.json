@@ -33,6 +33,7 @@
     },
     "error": {
       "fallback_loop": "An assist-live entity cannot be a fallback.",
+      "invalid_fallback_entity": "Select an available fallback entity of the correct type.",
       "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
@@ -45,18 +46,29 @@
   "options": {
     "step": {
       "init": {
-        "title": "Destination checks, transcript storage, and fallback voice",
+        "title": "Fallback engines, destination checks, and transcript storage",
         "description": "With local only on, HA uses server STT or TTS only when health reports local_only on and a local destination for that part. If a check is unsatisfactory, HA uses the fallback. HA does not use an older server without these fields. HA also checks fallback destinations and speaker events. These configured-destination checks are not a firewall. These checks do not include the conversation agent.",
         "data": {
+          "fallback_stt": "Fallback STT entity",
+          "fallback_tts": "Fallback TTS entity",
           "local_only": "Use local destinations only",
           "record_transcripts": "Permit transcript storage on the server",
           "fallback_stt_local": "Record an unknown fallback STT destination as local",
           "fallback_tts_local": "Record an unknown fallback TTS destination as local",
           "fallback_tts_voice": "Fallback TTS voice (empty uses its default)"
         }
+      },
+      "fallback_voice": {
+        "title": "Voice of the new fallback TTS engine",
+        "description": "Select a voice from the new fallback engine. Default uses that engine's default voice. No changes are saved before this step is complete.",
+        "data": {
+          "fallback_tts_voice": "Fallback TTS voice (empty uses its default)"
+        }
       }
     },
     "error": {
+      "fallback_loop": "An assist-live entity cannot be a fallback.",
+      "invalid_fallback_entity": "Select an available fallback entity of the correct type.",
       "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "invalid_fallback_voice": "Select a voice from the fallback engine or its default."

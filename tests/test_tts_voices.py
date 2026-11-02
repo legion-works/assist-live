@@ -341,7 +341,7 @@ async def test_voice_metadata_changes_trigger_repair_sweep(
         assert delete.call_count == 2
 
 
-async def test_options_select_voice_from_fallback_engine(hass):
+async def test_options_select_voice_from_fallback_engine(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     entry = MockConfigEntry(

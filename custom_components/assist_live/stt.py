@@ -21,6 +21,7 @@ from .const import (
     SPEAKER_RESULT_DEADLINE,
 )
 from .ledger import FallbackReason, SpeakerRead, TurnLedger, stream_failure_reason
+from .settings import effective_settings
 from .stt_fallback import FallbackAudio
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,7 +31,9 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     runtime = hass.data[DOMAIN][entry.entry_id]
-    fallback = stt.async_get_speech_to_text_entity(hass, entry.data["fallback_stt"])
+    fallback = stt.async_get_speech_to_text_entity(
+        hass, effective_settings(entry)["fallback_stt"]
+    )
     if fallback is None:
         raise ValueError("fallback STT unavailable")
     entities = []

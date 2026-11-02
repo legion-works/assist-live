@@ -367,7 +367,7 @@ async def test_complete_reply_counts_only_late_server_errors(
         notifications.append(call.data)
 
     hass.services.async_register("persistent_notification", "create", notification)
-    entry = SimpleNamespace(entry_id="entry")
+    entry = SimpleNamespace(entry_id="entry", data={}, options={})
     hass.data["assist_live"] = {
         "entry": SimpleNamespace(
             ledger=ledger,
@@ -423,7 +423,9 @@ async def test_diagnostics_has_counts_and_buffering_without_content(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
     )
     assert [part async for part in response.data_gen]
-    entry = SimpleNamespace(entry_id="entry", data={"token": "planted-sensitive-value"})
+    entry = SimpleNamespace(
+        entry_id="entry", data={"token": "planted-sensitive-value"}, options={}
+    )
     hass.data["assist_live"] = {
         "entry": SimpleNamespace(
             ledger=ledger,
@@ -467,7 +469,7 @@ async def test_full_file_fallback_is_reported(client, ledger, hass):
         fallback.async_get_tts_audio.call_args.args[0]
         == "First sentence. Second sentence."
     )
-    entry = SimpleNamespace(entry_id="entry")
+    entry = SimpleNamespace(entry_id="entry", data={}, options={})
     hass.data["assist_live"] = {
         "entry": SimpleNamespace(
             ledger=ledger,

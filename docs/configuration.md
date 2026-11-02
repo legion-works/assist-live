@@ -18,6 +18,21 @@ The empty selection uses that engine's default voice.
 Entries without this option use that default until an operator selects a voice.
 The integration does not send the fallback voice to the server or the server voice to the fallback.
 
+To change fallback engines after setup, open **Settings > Devices & services > assist-live > Configure**.
+Select the fallback STT and TTS entities, then select **Submit**.
+If the TTS entity changes, a second step shows the voices of the new engine and **Default**.
+Select a voice, then select **Submit** again to save all changes.
+If the TTS entity does not change, the first step also shows the voice selection.
+
+HA refuses missing engines and assist-live entities as fallbacks.
+The same destination checks apply at setup and in the options flow.
+A local decision stays with its entity ID, not with the STT or TTS field.
+The integration removes decisions for entities that are not selected.
+
+A fallback entity change reloads the integration. The next turn uses the new engines.
+A mode or voice change without an entity change does not reload the integration or stop the current turn.
+See the [fallback configuration contract](design.md#components-and-turn-flow).
+
 The `local_only` option defaults to `false` in HA.
 When it is on, HA refuses cloud fallback destinations before use.
 An unknown fallback also must have an explicit local decision in the options flow.

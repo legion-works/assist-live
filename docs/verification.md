@@ -3277,3 +3277,35 @@ Of the 15 earlier public client names, 14 keep the same signatures. This include
 `HealthCapabilities` keeps its earlier parameters and adds only `stt_hints=False` and `stt_hints_by_satellite=None`.
 
 No bench change, deployment, cloud request, or hardware acceptance test is part of this change.
+
+## Fallback engine options after setup
+
+Date: 2026-11-02 (UTC).
+
+The [fallback configuration contract](design.md#components-and-turn-flow) lets an operator change the fallback entities and voice after setup.
+The first options tests on `64851f0` gave `8 failed` on HA `2026.10.4` and HA `2026.10.1`.
+The options step had no fallback entity fields.
+
+```sh
+uv run --locked pytest tests/test_options_fallback.py -q
+```
+
+The completed options tests gave `16 passed` on each HA version.
+They use the HA config-entry and options-flow test harness with synthetic entities and audio.
+They check the next STT and TTS requests after a fallback entity change.
+They also check the new voice list, refusal of a voice of the previous engine, and a second voice check before save.
+
+Setup and options refuse missing engines and assist-live entities through the same checks.
+The tests check cloud refusal with local only on and local decisions for the selected entity IDs only.
+A loaded engine with an unavailable entity state stays selectable.
+Unchanged entities keep one options step. Mode and voice changes do not reload the integration or stop the current turn.
+
+Three mutations in different scratch copies each gave a named assertion failure on the two HA versions:
+
+| Mutation | Assertion |
+|---|---|
+| Read the STT fallback from entry data again | `next STT turn uses selected fallback` |
+| Remove assist-live refusal from options | `assist-live fallback is refused in each options field` |
+| Remove the voice check before save | `voice is revalidated against the new engine before save` |
+
+No bench change, deployment, cloud request, or hardware acceptance test is part of these checks.

@@ -25,6 +25,7 @@ PACKAGE_FILES = {
     "manifest.json",
     "repairs.py",
     "sensor.py",
+    "settings.py",
     "strings.json",
     "stt.py",
     "stt_fallback.py",

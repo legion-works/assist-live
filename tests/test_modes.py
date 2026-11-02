@@ -24,7 +24,9 @@ def test_iot_class_is_not_assumed_local(iot_class, want):
     assert getattr(config_flow, "destination", lambda _: "missing")(iot_class) == want
 
 
-async def test_unknown_fallback_requires_explicit_audited_choice(hass):
+async def test_unknown_fallback_requires_explicit_audited_choice(
+    hass, available_fallbacks
+):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()
@@ -43,7 +45,7 @@ async def test_unknown_fallback_requires_explicit_audited_choice(hass):
     }
 
 
-async def test_options_default_off_and_local_override_audit(hass):
+async def test_options_default_off_and_local_override_audit(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     entry = MockConfigEntry(
@@ -74,7 +76,7 @@ async def test_options_default_off_and_local_override_audit(hass):
     )
 
 
-async def test_cloud_cannot_be_overridden_as_local(hass):
+async def test_cloud_cannot_be_overridden_as_local(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     entry = MockConfigEntry(

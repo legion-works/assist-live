@@ -1,9 +1,27 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import custom_components.assist_live  # noqa: F401
+
+
+@pytest.fixture
+def available_fallbacks():
+    from test_stt_forward import Fallback as SttFallback
+    from test_tts_forward import Fallback as TtsFallback
+
+    with (
+        patch(
+            "homeassistant.components.stt.async_get_speech_to_text_entity",
+            return_value=SttFallback(),
+        ),
+        patch(
+            "custom_components.assist_live.tts.get_engine_instance",
+            return_value=TtsFallback(),
+        ),
+    ):
+        yield
 
 
 @pytest.fixture

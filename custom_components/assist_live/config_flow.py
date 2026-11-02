@@ -13,6 +13,7 @@ from homeassistant.helpers import selector
 from homeassistant.loader import async_get_integration
 
 from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
+from .settings import effective_settings
 
 
 def destination(iot_class: str | None) -> str:
@@ -37,7 +38,12 @@ async def entity_iot_class(hass: HomeAssistant, entity_id: str) -> str | None:
 
 async def mode_errors(hass: HomeAssistant, settings: dict[str, Any]) -> dict[str, str]:
     errors = {}
-    decisions = dict(settings.get("local_decisions", {}))
+    selected = {settings[field] for field in ("fallback_stt", "fallback_tts")}
+    decisions = {
+        entity_id: decision
+        for entity_id, decision in settings.get("local_decisions", {}).items()
+        if entity_id in selected
+    }
     for field in ("fallback_stt", "fallback_tts"):
         entity_id = settings[field]
         mode = destination(await entity_iot_class(hass, entity_id))
@@ -54,7 +60,8 @@ async def mode_errors(hass: HomeAssistant, settings: dict[str, Any]) -> dict[str
                 errors[field] = "cloud_destination"
             elif mode == "unknown" and entity_id not in decisions:
                 errors[field] = "unknown_destination"
-    settings["local_decisions"] = decisions
+    if not errors:
+        settings["local_decisions"] = decisions
     return errors
 
 
@@ -76,6 +83,63 @@ def mode_schema(settings: dict[str, Any]) -> dict[Any, Any]:
 def is_forwarder(hass: HomeAssistant, entity_id: str) -> bool:
     entity = er.async_get(hass).async_get(entity_id)
     return entity is not None and entity.platform == DOMAIN
+
+
+def fallback_errors(hass: HomeAssistant, settings: dict[str, Any]) -> dict[str, str]:
+    from homeassistant.components import stt
+
+    from .tts import fallback_engine
+
+    errors = {}
+    for field in ("fallback_stt", "fallback_tts"):
+        entity_id = settings[field]
+        if is_forwarder(hass, entity_id):
+            errors[field] = "fallback_loop"
+        elif field == "fallback_stt":
+            try:
+                fallback = stt.async_get_speech_to_text_entity(hass, entity_id)
+            except KeyError:
+                fallback = None
+            if fallback is None:
+                errors[field] = "invalid_fallback_entity"
+        else:
+            try:
+                fallback_engine(hass, entity_id)
+            except HomeAssistantError, KeyError:
+                errors[field] = "invalid_fallback_entity"
+    return errors
+
+
+def fallback_voices(hass: HomeAssistant, entity_id: str) -> dict[str, str]:
+    from .tts import fallback_engine
+
+    voices = {"": "Default"}
+    try:
+        fallback = fallback_engine(hass, entity_id)
+    except HomeAssistantError, KeyError:
+        return voices
+    for language in fallback.supported_languages:
+        for voice in fallback.async_get_supported_voices(language) or []:
+            voices[voice.voice_id] = voice.name
+    return voices
+
+
+def fallback_voice_schema(
+    settings: dict[str, Any], voices: dict[str, str]
+) -> dict[Any, Any]:
+    return {
+        vol.Optional(
+            CONF_FALLBACK_TTS_VOICE,
+            default=settings.get(CONF_FALLBACK_TTS_VOICE, ""),
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    selector.SelectOptionDict(value=value, label=label)
+                    for value, label in voices.items()
+                ]
+            )
+        ),
+    }
 
 
 def valid_satellite(hass: HomeAssistant, device: str, pipeline_select: str) -> bool:
@@ -114,11 +178,8 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     ) -> config_entries.ConfigFlowResult:
         errors = {}
         if user_input:
-            if any(
-                is_forwarder(self.hass, user_input[field])
-                for field in ("fallback_stt", "fallback_tts")
-            ):
-                errors["base"] = "fallback_loop"
+            if errors := fallback_errors(self.hass, user_input):
+                pass
             elif errors := await mode_errors(self.hass, user_input):
                 pass
             else:
@@ -237,67 +298,97 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
 class AssistLiveOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
+        self.settings = effective_settings(entry)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        from .tts import fallback_engine
-
-        settings = {**self.entry.data, **self.entry.options}
-        voices = {"": "Default"}
-        try:
-            fallback = fallback_engine(self.hass, settings["fallback_tts"])
-        except HomeAssistantError, KeyError:
-            pass
-        else:
-            for language in fallback.supported_languages:
-                for voice in fallback.async_get_supported_voices(language) or []:
-                    voices[voice.voice_id] = voice.name
+        settings = self.settings
         errors = {}
         if user_input is not None:
             settings.update(user_input)
-            errors = {
-                f"{field}_local": error
-                for field, error in (await mode_errors(self.hass, settings)).items()
-            }
-            if settings.get(CONF_FALLBACK_TTS_VOICE, "") not in voices:
-                errors[CONF_FALLBACK_TTS_VOICE] = "invalid_fallback_voice"
+            errors = fallback_errors(self.hass, settings)
             if not errors:
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        key: settings.get(key, False)
-                        for key in (
-                            "local_only",
-                            "record_transcripts",
-                            "fallback_stt_local",
-                            "fallback_tts_local",
-                        )
-                    }
-                    | {
-                        "local_decisions": settings["local_decisions"],
-                        CONF_FALLBACK_TTS_VOICE: settings.get(
-                            CONF_FALLBACK_TTS_VOICE, ""
-                        ),
-                    },
-                )
+                errors = {
+                    f"{field}_local": error
+                    for field, error in (await mode_errors(self.hass, settings)).items()
+                }
+            if not errors:
+                if (
+                    settings["fallback_tts"]
+                    != effective_settings(self.entry)["fallback_tts"]
+                ):
+                    settings[CONF_FALLBACK_TTS_VOICE] = ""
+                    return await self.async_step_fallback_voice()
+                if settings.get(CONF_FALLBACK_TTS_VOICE, "") not in fallback_voices(
+                    self.hass, settings["fallback_tts"]
+                ):
+                    errors[CONF_FALLBACK_TTS_VOICE] = "invalid_fallback_voice"
+                else:
+                    return self._finish()
         return self.async_show_form(
             step_id="init",
             errors=errors,
             data_schema=vol.Schema(
                 {
+                    vol.Required(
+                        "fallback_stt", default=settings["fallback_stt"]
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="stt")
+                    ),
+                    vol.Required(
+                        "fallback_tts", default=settings["fallback_tts"]
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="tts")
+                    ),
                     **mode_schema(settings),
-                    vol.Optional(
-                        CONF_FALLBACK_TTS_VOICE,
-                        default=settings.get(CONF_FALLBACK_TTS_VOICE, ""),
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                selector.SelectOptionDict(value=value, label=label)
-                                for value, label in voices.items()
-                            ]
-                        )
+                    **fallback_voice_schema(
+                        settings, fallback_voices(self.hass, settings["fallback_tts"])
                     ),
                 }
             ),
+        )
+
+    async def async_step_fallback_voice(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        settings = self.settings
+        voices = fallback_voices(self.hass, settings["fallback_tts"])
+        errors = {}
+        if user_input is not None:
+            settings.update(user_input)
+            if fallback_errors(self.hass, settings) or await mode_errors(
+                self.hass, settings
+            ):
+                return await self.async_step_init(settings)
+            if settings.get(CONF_FALLBACK_TTS_VOICE, "") not in voices:
+                errors[CONF_FALLBACK_TTS_VOICE] = "invalid_fallback_voice"
+            else:
+                return self._finish()
+        return self.async_show_form(
+            step_id="fallback_voice",
+            errors=errors,
+            data_schema=vol.Schema(fallback_voice_schema(settings, voices)),
+        )
+
+    def _finish(self) -> config_entries.ConfigFlowResult:
+        settings = self.settings
+        return self.async_create_entry(
+            title="",
+            data={
+                **self.entry.options,
+                **{
+                    key: settings.get(key, False)
+                    for key in (
+                        "local_only",
+                        "record_transcripts",
+                        "fallback_stt_local",
+                        "fallback_tts_local",
+                    )
+                },
+                "fallback_stt": settings["fallback_stt"],
+                "fallback_tts": settings["fallback_tts"],
+                "local_decisions": settings["local_decisions"],
+                CONF_FALLBACK_TTS_VOICE: settings.get(CONF_FALLBACK_TTS_VOICE, ""),
+            },
         )

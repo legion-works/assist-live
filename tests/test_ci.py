@@ -483,6 +483,7 @@ def test_package_file_set_is_explicit():
         "manifest.json",
         "repairs.py",
         "sensor.py",
+        "settings.py",
         "strings.json",
         "stt.py",
         "stt_fallback.py",

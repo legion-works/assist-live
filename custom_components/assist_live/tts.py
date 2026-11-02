@@ -25,6 +25,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .ledger import FallbackReason, TurnLedger, stream_failure_reason
+from .settings import effective_settings
 from .tts_fallback import compatible_pcm
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,9 +51,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     runtime = hass.data[DOMAIN][entry.entry_id]
+    settings = effective_settings(entry)
     issue_id = f"{entry.entry_id}_fallback_tts_unavailable"
     try:
-        fallback = fallback_engine(hass, entry.data["fallback_tts"])
+        fallback = fallback_engine(hass, settings["fallback_tts"])
     except HomeAssistantError:
         ir.async_create_issue(
             hass,
@@ -70,9 +72,7 @@ async def async_setup_entry(
             satellite, device, runtime.client, runtime.ledger, fallback
         )
         entity.notify_tts_failure = entry.data.get(CONF_NOTIFY_TTS_FAILURE, False)
-        entity.fallback_voice = {**entry.data, **entry.options}.get(
-            CONF_FALLBACK_TTS_VOICE
-        ) or None
+        entity.fallback_voice = settings.get(CONF_FALLBACK_TTS_VOICE) or None
         if registered := dr.async_get(hass).async_get(device):
             entity._attr_device_info = dr.DeviceInfo(
                 identifiers=registered.identifiers,

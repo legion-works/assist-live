@@ -20,7 +20,10 @@ async def test_flow_refuses_fallback_loop(hass):
                 "fallback_tts": "tts.standard",
             }
         )
-    assert result["errors"] == {"base": "fallback_loop"}
+    assert result["errors"] == {
+        "fallback_stt": "fallback_loop",
+        "fallback_tts": "fallback_loop",
+    }
 
 
 async def test_provisioned_unique_device_bindings(hass):
@@ -62,7 +65,7 @@ async def test_provisioned_unique_device_bindings(hass):
         assert result["errors"] == {"base": "invalid_satellite"}
 
 
-async def test_user_validates_server_and_advances(hass):
+async def test_user_validates_server_and_advances(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()
@@ -91,7 +94,7 @@ async def test_user_validates_server_and_advances(hass):
     client.close.assert_awaited_once()
 
 
-async def test_malformed_url_has_its_own_error(hass):
+async def test_malformed_url_has_its_own_error(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()
@@ -108,7 +111,9 @@ async def test_malformed_url_has_its_own_error(hass):
 
 
 @pytest.mark.parametrize("url", ["http://server.example", "HTTP://server.example"])
-async def test_http_warns_and_can_continue_without_refusal(hass, url):
+async def test_http_warns_and_can_continue_without_refusal(
+    hass, url, available_fallbacks
+):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()

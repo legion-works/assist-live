@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from .config_flow import destination, entity_iot_class
 from .const import DOMAIN
+from .settings import effective_settings
 from .tts import AssistLiveTTS
 
 
@@ -49,7 +50,7 @@ async def async_get_config_entry_diagnostics(
                 streaming += 1
             else:
                 full_file += 1
-    settings = {**getattr(entry, "data", {}), **getattr(entry, "options", {})}
+    settings = effective_settings(entry)
     fallbacks = {}
     decisions = []
     for part in ("stt", "tts"):
