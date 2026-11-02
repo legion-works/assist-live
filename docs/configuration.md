@@ -113,6 +113,7 @@ The `playback_quality` attribute keeps the initial quality value.
 
 The `turn_id` and `turn_type` attributes identify the latest turn when it opens, before the conversation step.
 These diagnostic correlation IDs contain no transcript or audio content.
+Each diagnostic turn row includes the latency sensor's `turn_id` attribute value, a correlation ID with no content.
 HA does not include these two attributes in recorder history.
 
 ## Transcript storage and release checks

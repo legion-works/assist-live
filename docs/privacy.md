@@ -93,6 +93,7 @@ Integration shutdown cancels the sender and discards pending events without a la
 Diagnostics count queue removals in `timing_events_dropped`. This counter contains no event content.
 
 Default diagnostics do not include tokens, server addresses, audio, transcript text, TTS text, or speaker names.
+Each diagnostic turn row includes the latency sensor's `turn_id` attribute value, a correlation ID with no content.
 They include counts, destination categories, timing quality, and selected audio-format fields.
 The per-turn service list includes each used fallback, not only the configured engines.
 HA keeps one last-turn summary for each satellite in memory. It does not keep that summary after a restart.

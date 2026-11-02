@@ -190,7 +190,6 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
             token_file=token_file,
             temporary_agent_pipeline=True,
             pipeline="existing",
-            fallback_deadline=20,
         )
     )
     assert result["bench_restored"] is True
@@ -213,7 +212,22 @@ async def test_public_diagnostics_download_extracts_counts_or_missing_evidence(
         if payload == "malformed":
             return web.Response(text="not json", content_type="application/json")
         return web.json_response(
-            {"data": {"fallback_reasons": {"health_timeout": 4, "stream_closed": 2}}}
+            {
+                "data": {
+                    "fallback_reasons": {"health_timeout": 4, "stream_closed": 2},
+                    "turns": [
+                        {
+                            "turn_id": "turn",
+                            "destinations": [
+                                {
+                                    "part": "stt_fallback",
+                                    "fallback_reason": "stream_closed",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
             if payload == "counts"
             else {"data": {}}
         )
@@ -247,7 +261,22 @@ async def test_public_diagnostics_download_extracts_counts_or_missing_evidence(
         async with aiohttp.ClientSession() as session:
             counts = await fault_runner.fallback_snapshot(session, token_file, "trial")
         assert counts == (
-            {"health_timeout": 4, "stream_closed": 2} if payload == "counts" else None
+            {
+                "fallback_reasons": {"health_timeout": 4, "stream_closed": 2},
+                "turns": [
+                    {
+                        "turn_id": "turn",
+                        "destinations": [
+                            {
+                                "part": "stt_fallback",
+                                "fallback_reason": "stream_closed",
+                            }
+                        ],
+                    }
+                ],
+            }
+            if payload == "counts"
+            else None
         )
         assert requests == ["/api/diagnostics/config_entry/entry"]
     finally:

@@ -3077,3 +3077,17 @@ No live bench run or hardware acceptance result is part of this change.
 The new records check runs in `task check` and CI.
 It rejects changed, deleted, or new lines before the end of the previous record, and names those lines.
 The historical sections `Fault and native-function runner` (`b728cdb`) and `Turn parents and fallback causes` (`0cb075d`) stay in their initial positions.
+
+### Trial-specific fallback cause
+
+The fault classifier reads the fallback cause from the trial's own diagnostic turn row and its `stt_fallback` destination.
+The aggregate delta is a consistency check, not the cause source.
+A different turn, a TTS-only cause, or a different aggregate delta gives an unsatisfactory result.
+Diagnostics include the same content-free `turn_id` as the latency sensor attribute.
+The integration change adds only that field to each diagnostic turn row.
+
+Before the repair, the runner tests gave 9 failures and 3 satisfactory controls on `3bd285d`.
+The diagnostic correlation test also gave a failure before the repair.
+The tests include different turns, TTS-only causes, correct STT causes, and aggregate mismatches.
+The cleanup test does not supply the removed deadline argument.
+No live bench run is part of this repair.

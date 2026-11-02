@@ -86,6 +86,7 @@ async def async_get_config_entry_diagnostics(
     for record in runtime.ledger.latest.values():
         turns.append(
             {
+                "turn_id": record.turn.turn_id,
                 "satellite": safe_label(record.turn.satellite),
                 "destinations": [
                     {

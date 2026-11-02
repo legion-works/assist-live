@@ -369,3 +369,27 @@ async def test_fallback_reason_is_visible_per_turn_and_allowlisted(
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["turns"][0]["destinations"][0]["fallback_reason"] == expected
     assert "synthetic-secret-content" not in json.dumps(result)
+
+
+async def test_diagnostic_turn_ids_match_latency_sensor_correlation_ids(hass, client):
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+    from custom_components.assist_live.sensor import TurnLatencySensor
+
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+    runtime = Runtime(hass, entry, client)
+    first = runtime.ledger.open_voice("satellite-a")
+    second = runtime.ledger.open_voice("satellite-b")
+    hass.data["assist_live"] = {entry.entry_id: runtime}
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    by_satellite = {row["satellite"]: row for row in result["turns"]}
+    assert first.turn_id != second.turn_id
+    for turn in (first, second):
+        sensor = TurnLatencySensor(turn.satellite, "device", runtime.ledger)
+        assert (
+            by_satellite[turn.satellite].get("turn_id")
+            == (sensor.extra_state_attributes["turn_id"])
+            == turn.turn_id
+        )

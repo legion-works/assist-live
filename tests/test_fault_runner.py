@@ -23,6 +23,7 @@ def trial():
         fallback_reasons_delta={"stream_closed": 1},
         fault_injected=True,
     )
+    set_reasons(row, "speech")
     return row
 
 
@@ -240,6 +241,14 @@ def set_reasons(row, stage):
         fallback_reasons_after=delta.copy(),
         fallback_reasons_delta=delta,
         failure_cause=reason if delta else None,
+        fallback_turns=[
+            {
+                "turn_id": row["turn_id"],
+                "destinations": [{"part": "stt_fallback", "fallback_reason": reason}]
+                if delta
+                else [],
+            }
+        ],
     )
 
 
@@ -266,9 +275,38 @@ def test_recorded_reason_delta_must_match_stage(stage, delta):
     if delta not in ("correct", "unreadable"):
         row["fallback_reasons_delta"] = row["fallback_reasons_after"].copy()
         row["failure_cause"] = next(iter(row["fallback_reasons_delta"]), None)
+        row["fallback_turns"][0]["destinations"] = (
+            [{"part": "stt_fallback", "fallback_reason": row["failure_cause"]}]
+            if row["fallback_reasons_delta"]
+            else []
+        )
     assert acceptable(row) is (
         delta == "correct" or (stage == "after-final" and delta == "none")
     )
+
+
+@pytest.mark.parametrize("stage", ["before", "speech", "pause"])
+@pytest.mark.parametrize("source", ["foreign-turn", "tts-only", "matching", "mismatch"])
+def test_reason_belongs_to_trial_turn_and_stt_part(stage, source):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row["stage"] = stage
+    set_reasons(row, stage)
+    row["fallback_turns"] = [
+        {
+            "turn_id": "foreign-turn" if source == "foreign-turn" else row["turn_id"],
+            "destinations": [
+                {
+                    "part": "tts_fallback" if source == "tts-only" else "stt_fallback",
+                    "fallback_reason": "open_error"
+                    if source == "mismatch"
+                    else row["failure_cause"],
+                }
+            ],
+        }
+    ]
+    assert acceptable(row) is (source == "matching")
 
 
 @pytest.mark.parametrize("elapsed,passed", [(19.9, True), (20.0, True), (20.1, False)])
@@ -319,6 +357,7 @@ def test_each_allowed_recorded_reason_has_one_count(stage, reason):
         fallback_reasons_after={reason: 5},
         fallback_reasons_delta={reason: 1},
     )
+    row["fallback_turns"][0]["destinations"][0]["fallback_reason"] = reason
     assert acceptable(row)
 
 
@@ -365,8 +404,9 @@ def test_check_cannot_override_spec_deadline(tmp_path, monkeypatch):
 @pytest.mark.parametrize("stage", ["before", "speech", "pause", "after-final"])
 @pytest.mark.parametrize("evidence", ["missing", "fresh", "stale"])
 @pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("reason_source", ["matching", "mismatch"])
 async def test_driver_injects_each_fault_point_and_restores(
-    stage, evidence, late, monkeypatch
+    stage, evidence, late, reason_source, monkeypatch
 ):
     import asyncio
     import time
@@ -508,11 +548,30 @@ async def test_driver_injects_each_fault_point_and_restores(
 
     async def snapshot(*args):
         calls.append("diagnostics")
-        if calls.count("diagnostics") == 1 or stage == "after-final":
-            return {"health_timeout": 4, "stream_closed": 2}
+        first = calls.count("diagnostics") == 1
+        counts = (
+            {"health_timeout": 4, "stream_closed": 2}
+            if first
+            else {
+                "health_timeout": 5 if stage == "before" else 4,
+                "stream_closed": 3 if stage in ("speech", "pause") else 2,
+            }
+        )
+        reason = "health_timeout" if stage == "before" else "stream_closed"
+        if reason_source == "mismatch":
+            reason = "open_error" if stage == "before" else "message_timeout"
         return {
-            "health_timeout": 5 if stage == "before" else 4,
-            "stream_closed": 2 if stage == "before" else 3,
+            "fallback_reasons": counts,
+            "turns": [
+                {
+                    "turn_id": trial()["turn_id"],
+                    "destinations": [
+                        {"part": "stt_fallback", "fallback_reason": reason}
+                    ]
+                    if not first and stage != "after-final"
+                    else [],
+                }
+            ],
         }
 
     monkeypatch.setattr(fault_runner, "connect", connect)
@@ -548,22 +607,30 @@ async def test_driver_injects_each_fault_point_and_restores(
     assert calls[-2] == "diagnostics"
     assert row["injected_fault"] == "server_container_stopped"
     assert row["failure_cause"] == (
-        "health_timeout"
+        None
+        if evidence != "fresh" or stage == "after-final"
+        else "open_error"
+        if reason_source == "mismatch" and stage == "before"
+        else "message_timeout"
+        if reason_source == "mismatch"
+        else "health_timeout"
         if stage == "before"
-        else None
-        if stage == "after-final"
         else "stream_closed"
     )
     assert row["fallback_deadline_utc_ns"] > time.time_ns()
     start = next(event for event in row["events"] if event["stage"] == "run-start")
     assert row["fallback_deadline_utc_ns"] == start["t_utc_ns"] + 20_000_000_000
-    assert row["acceptable"] is (evidence == "fresh" and not missed)
+    mismatch = reason_source == "mismatch" and stage != "after-final"
+    assert row["acceptable"] is (evidence == "fresh" and not missed and not mismatch)
     if evidence == "missing":
         assert "MISSING_COMPLETE_OPERATION_RECORD" in row["failures"]
     elif evidence == "fresh":
         assert row["turn_id"] == trial()["turn_id"]
         assert row["action_trace"] == trial()["action_trace"]
-        assert row["failures"] == (["FAULT_STAGE_MISSED"] if missed else [])
+        assert row["failures"] == (
+            (["FAULT_STAGE_MISSED"] if missed else [])
+            + (["MISSING_OR_UNEXPECTED_FALLBACK_REASON"] if mismatch else [])
+        )
     if stage == "before":
         assert calls.index("stop") < calls.index("run")
     elif stage == "after-final":
@@ -905,7 +972,25 @@ async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations
     async def connect(*args):
         return Socket()
 
-    snapshots = iter([{}, {"health_timeout": 1}])
+    snapshots = iter(
+        [
+            {"fallback_reasons": {}, "turns": []},
+            {
+                "fallback_reasons": {"health_timeout": 1},
+                "turns": [
+                    {
+                        "turn_id": expected["turn_id"],
+                        "destinations": [
+                            {
+                                "part": "stt_fallback",
+                                "fallback_reason": "health_timeout",
+                            }
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
 
     async def snapshot(*args):
         return next(snapshots)

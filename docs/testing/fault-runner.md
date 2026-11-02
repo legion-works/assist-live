@@ -9,6 +9,11 @@ Get approval before a live bench run.
 Each trial downloads public diagnostics for the pipeline STT config entry before and after the turn.
 The runner keeps the `fallback_reasons` counts and their delta.
 It records `server_container_stopped` in `injected_fault` and the integration cause in `failure_cause`.
+
+The cause comes from the diagnostic turn row with the trial's `turn_id`, and only from its `stt_fallback` destination.
+The row stays in `fallback_turns` in the trial output.
+The aggregate delta must agree with that STT cause, or show no change when the turn has no STT fallback.
+A missing or duplicate turn row, a TTS-only cause, or a different aggregate delta cannot prove the necessary STT fallback.
 Missing diagnostics, invalid counts, and a counter decrease give an unsatisfactory result.
 
 | Stage | Necessary delta |
@@ -17,7 +22,7 @@ Missing diagnostics, invalid counts, and a counter decrease give an unsatisfacto
 | `speech`, `pause` | One fallback only: `stream_closed`, `message_timeout`, or `stream_error` |
 | `after-final` | No fallback |
 
-The diagnostics belong to the full config entry.
+The aggregate counts belong to the full config entry.
 Keep other turns not active during each trial.
 An unrelated fallback can cause an unsatisfactory result.
 

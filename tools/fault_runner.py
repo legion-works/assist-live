@@ -100,12 +100,46 @@ def reason_delta(before: object, after: object) -> dict[str, int] | None:
     return {key: value for key, value in delta.items() if value}
 
 
+def stt_reason_for_turn(trial: Row) -> tuple[bool, str | None]:
+    turns = trial.get("fallback_turns")
+    turn_id = trial.get("turn_id")
+    if not isinstance(turns, list) or not isinstance(turn_id, str) or not turn_id:
+        return False, None
+    records = [
+        record
+        for record in turns
+        if isinstance(record, dict) and record.get("turn_id") == turn_id
+    ]
+    if len(records) != 1:
+        return False, None
+    destinations = records[0].get("destinations")
+    if not isinstance(destinations, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("part"), str)
+        for row in destinations
+    ):
+        return False, None
+    fallbacks = [row for row in destinations if row["part"] == "stt_fallback"]
+    if not fallbacks:
+        return True, None
+    if len(fallbacks) != 1:
+        return False, None
+    reason = fallbacks[0].get("fallback_reason")
+    return (True, reason) if isinstance(reason, str) and reason else (False, None)
+
+
 def recorded_reason_matches(trial: Row) -> bool:
     delta = reason_delta(
         trial.get("fallback_reasons_before"), trial.get("fallback_reasons_after")
     )
     stage = trial.get("stage")
     if delta is None or delta != trial.get("fallback_reasons_delta"):
+        return False
+    evidence, reason = stt_reason_for_turn(trial)
+    if (
+        not evidence
+        or reason != trial.get("failure_cause")
+        or delta != ({reason: 1} if reason is not None else {})
+    ):
         return False
     if stage == "after-final":
         return delta == {} and trial.get("failure_cause") is None
@@ -399,7 +433,7 @@ def scrub_cleanup_error(error: Exception, redactions: tuple[str, ...] = ()) -> s
 
 async def fallback_snapshot(
     session: aiohttp.ClientSession, token_file: Path, pipeline: str
-) -> dict[str, int] | None:
+) -> Row | None:
     try:
         async with control_command(session, token_file) as command:
             pipelines = await command("assist_pipeline/pipeline/list")
@@ -423,8 +457,12 @@ async def fallback_snapshot(
                 headers={"Authorization": "Bearer " + token},
             ) as response:
                 response.raise_for_status()
-                counts = (await response.json())["data"]["fallback_reasons"]
-        return counts if reason_delta({}, counts) is not None else None
+                data = (await response.json())["data"]
+                counts = data["fallback_reasons"]
+                turns = data.get("turns")
+        if reason_delta({}, counts) is None or not isinstance(turns, list):
+            return None
+        return {"fallback_reasons": counts, "turns": turns}
     except (
         OSError,
         ValueError,
@@ -477,6 +515,7 @@ async def pipeline_trial(
         fallback_reasons_before=None,
         fallback_reasons_after=None,
         fallback_reasons_delta=None,
+        fallback_turns=None,
         stop_latency_seconds=stop_latency_seconds,
         fallback_deadline_utc_ns=None,
         completed_utc_ns=None,
@@ -503,9 +542,8 @@ async def pipeline_trial(
         row["injected_fault"] = "server_container_stopped"
 
     try:
-        row["fallback_reasons_before"] = await fallback_snapshot(
-            session, token_file, pipeline
-        )
+        before = await fallback_snapshot(session, token_file, pipeline)
+        row["fallback_reasons_before"] = before["fallback_reasons"] if before else None
         if stage == "before":
             await inject()
         async with await connect(session, token_file) as ws:
@@ -679,16 +717,16 @@ async def pipeline_trial(
                     row["failures"].append("FAULT_INJECTION_FAILED")
         finally:
             try:
-                row["fallback_reasons_after"] = await fallback_snapshot(
-                    session, token_file, pipeline
+                after = await fallback_snapshot(session, token_file, pipeline)
+                row["fallback_reasons_after"] = (
+                    after["fallback_reasons"] if after else None
                 )
+                row["fallback_turns"] = after["turns"] if after else None
                 delta = reason_delta(
                     row["fallback_reasons_before"], row["fallback_reasons_after"]
                 )
                 row["fallback_reasons_delta"] = delta
-                row["failure_cause"] = (
-                    next(iter(delta)) if delta is not None and len(delta) == 1 else None
-                )
+                _, row["failure_cause"] = stt_reason_for_turn(row)
                 if not recorded_reason_matches(row):
                     row["failures"].append("MISSING_OR_UNEXPECTED_FALLBACK_REASON")
             finally:

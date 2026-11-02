@@ -291,6 +291,21 @@ def acceptance_fixture():
                 "fallback_reasons_delta": {}
                 if stage == "after-final"
                 else {"health_timeout" if stage == "before" else "stream_closed": 1},
+                "fallback_turns": [
+                    {
+                        "turn_id": f"fault-{stage}-{i}",
+                        "destinations": []
+                        if stage == "after-final"
+                        else [
+                            {
+                                "part": "stt_fallback",
+                                "fallback_reason": "health_timeout"
+                                if stage == "before"
+                                else "stream_closed",
+                            }
+                        ],
+                    }
+                ],
                 "events": [{"stage": "run-start", "t_utc_ns": 1_000_000_000}],
                 "fallback_deadline_utc_ns": 21_000_000_000,
                 "completed_utc_ns": 19_000_000_000,
