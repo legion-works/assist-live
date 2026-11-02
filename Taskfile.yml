@@ -10,6 +10,7 @@ tasks:
       - task: unit
       - uv run --locked python tools/check_bootstrap.py
       - uv run --locked python tools/check_ci.py
+      - task: records-check
       - gitleaks dir . --redact --exit-code 1
       - gitleaks git . --redact --exit-code 1
       - |
@@ -18,6 +19,9 @@ tasks:
         else
           uv run --locked python tools/check_public_tree.py --history --root .
         fi
+  records-check:
+    cmds:
+      - uv run --locked python tools/check_records.py
   lint:
     cmds:
       - uv run --locked ruff format --check .

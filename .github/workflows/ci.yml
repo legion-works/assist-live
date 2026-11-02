@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           version: "0.13.1"
@@ -28,6 +30,7 @@ jobs:
         run: gcc --version && g++ --version
       - run: uv sync --locked
       - run: uv run --locked ruff format --check . && uv run --locked ruff check .
+      - run: uv run --locked python tools/check_records.py
       - run: uv run --locked python tools/check_bootstrap.py && uv run --locked python tools/check_ci.py && uv run --locked python tools/check_packaging.py
   typecheck:
     runs-on: ubuntu-latest

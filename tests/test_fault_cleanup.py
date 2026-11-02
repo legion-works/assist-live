@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import aiohttp
 import pytest
@@ -166,11 +167,15 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
     async def restore(*_):
         pass
 
+    async def measure(*_):
+        return 0.125
+
     async def pipeline_trial(*_, **kwargs):
         await sockets[0].close()
         return {**row, "acceptable": True, "failures": []}
 
     monkeypatch.setattr(fault_runner.TestServer, "restore", restore)
+    monkeypatch.setattr(fault_runner.TestServer, "measure_stop_latency", measure)
     monkeypatch.setattr(fault_runner, "pipeline_trial", pipeline_trial)
     result = await fault_runner.run(
         Namespace(
@@ -190,4 +195,91 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
     )
     assert result["bench_restored"] is True
     assert result["restored_healthy"] is True
+    assert result["stop_latency_seconds"] == 0.125
     assert len(deletes) == 1 and deletes[0] is not sockets[0]
+
+
+@pytest.mark.parametrize("payload", ["counts", "missing", "malformed", "denied"])
+async def test_public_diagnostics_download_extracts_counts_or_missing_evidence(
+    payload, tmp_path, socket_enabled, unused_tcp_port, monkeypatch
+):
+    requests = []
+
+    async def download(request):
+        assert request.headers["Authorization"] == "Bearer synthetic"
+        requests.append(request.path)
+        if payload == "denied":
+            return web.Response(status=403)
+        if payload == "malformed":
+            return web.Response(text="not json", content_type="application/json")
+        return web.json_response(
+            {"data": {"fallback_reasons": {"health_timeout": 4, "stream_closed": 2}}}
+            if payload == "counts"
+            else {"data": {}}
+        )
+
+    @asynccontextmanager
+    async def command(*_):
+        async def call(kind):
+            if kind == "assist_pipeline/pipeline/list":
+                return {"pipelines": [{"id": "trial", "stt_engine": "stt.test"}]}
+            assert kind == "config/entity_registry/list"
+            return [
+                {
+                    "entity_id": "stt.test",
+                    "platform": "assist_live",
+                    "config_entry_id": "entry",
+                }
+            ]
+
+        yield call
+
+    app = web.Application()
+    app.router.add_get("/api/diagnostics/config_entry/entry", download)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "localhost", unused_tcp_port).start()
+    monkeypatch.setattr(fault_runner, "control_command", command)
+    monkeypatch.setattr(fault_runner, "URL", f"http://localhost:{unused_tcp_port}")
+    token_file = tmp_path / "authentication.json"
+    token_file.write_text(json.dumps({"token": "synthetic"}))
+    try:
+        async with aiohttp.ClientSession() as session:
+            counts = await fault_runner.fallback_snapshot(session, token_file, "trial")
+        assert counts == (
+            {"health_timeout": 4, "stream_closed": 2} if payload == "counts" else None
+        )
+        assert requests == ["/api/diagnostics/config_entry/entry"]
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.parametrize("failure", [False, True])
+async def test_stop_latency_measures_stop_not_restore_and_always_restores(
+    monkeypatch, failure
+):
+    clock = 100.0
+    calls = []
+    server = fault_runner.TestServer()
+
+    async def stop():
+        nonlocal clock
+        calls.append("stop")
+        clock += 0.125
+        if failure:
+            raise ValueError("synthetic stop failure")
+
+    async def restore():
+        nonlocal clock
+        calls.append("restore")
+        clock += 10
+
+    monkeypatch.setattr(server, "stop", stop)
+    monkeypatch.setattr(server, "restore", restore)
+    monkeypatch.setattr(fault_runner.time, "monotonic", lambda: clock)
+    if failure:
+        with pytest.raises(ValueError, match="synthetic stop failure"):
+            await server.measure_stop_latency()
+    else:
+        assert await server.measure_stop_latency() == 0.125
+    assert calls == ["stop", "restore"]

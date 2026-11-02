@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import math
 import os
 import re
 import sys
@@ -41,6 +40,13 @@ CONTAINER = "assist-live-server-q1"
 ROOT = Path(__file__).resolve().parents[1]
 TEMPORARY_PIPELINE_NAME = "assist-live f11-smoke"
 PIPELINE_CLEANUP_TIMEOUT = 30.0
+FALLBACK_LIMIT_NS = 20_000_000_000
+EXPECTED_REASONS = {
+    "before": {"health_timeout", "health_error", "server_unhealthy", "open_error"},
+    "speech": {"stream_closed", "message_timeout", "stream_error"},
+    "pause": {"stream_closed", "message_timeout", "stream_error"},
+    "after-final": set(),
+}
 
 
 class TemporaryPipelineError(ValueError):
@@ -79,6 +85,38 @@ def no_text_error(trial: Row) -> bool:
     )
 
 
+def reason_delta(before: object, after: object) -> dict[str, int] | None:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    if any(
+        not isinstance(key, str) or type(value) is not int or value < 0
+        for counts in (before, after)
+        for key, value in counts.items()
+    ):
+        return None
+    delta = {key: after.get(key, 0) - before.get(key, 0) for key in before | after}
+    if any(value < 0 for value in delta.values()):
+        return None
+    return {key: value for key, value in delta.items() if value}
+
+
+def recorded_reason_matches(trial: Row) -> bool:
+    delta = reason_delta(
+        trial.get("fallback_reasons_before"), trial.get("fallback_reasons_after")
+    )
+    stage = trial.get("stage")
+    if delta is None or delta != trial.get("fallback_reasons_delta"):
+        return False
+    if stage == "after-final":
+        return delta == {} and trial.get("failure_cause") is None
+    return (
+        stage in EXPECTED_REASONS
+        and sum(delta.values()) == 1
+        and set(delta) <= EXPECTED_REASONS[stage]
+        and trial.get("failure_cause") == next(iter(delta), None)
+    )
+
+
 def acceptable(trial: Row) -> bool:
     if not all(
         key in trial
@@ -91,6 +129,11 @@ def acceptable(trial: Row) -> bool:
     label = trial.get("label")
     deadline = trial.get("fallback_deadline_utc_ns")
     completed = trial.get("completed_utc_ns")
+    starts = [
+        event.get("t_utc_ns")
+        for event in trial.get("events", [])
+        if isinstance(event, dict) and event.get("stage") == "run-start"
+    ]
     if not (
         isinstance(trace, list)
         and all(
@@ -107,9 +150,12 @@ def acceptable(trial: Row) -> bool:
         and isinstance(label.get("intent"), dict)
         and trial.get("stage") in STAGES
         and trial.get("fault_injected") is True
-        and isinstance(trial.get("failure_cause"), str)
-        and trial["failure_cause"]
+        and trial.get("injected_fault") == "server_container_stopped"
+        and recorded_reason_matches(trial)
+        and len(starts) == 1
+        and type(starts[0]) is int
         and type(deadline) is int
+        and deadline == starts[0] + FALLBACK_LIMIT_NS
         and type(completed) is int
         and 0 < completed <= deadline
     ):
@@ -211,9 +257,20 @@ def fault_window(label: Row, stage: str) -> tuple[int, int] | None:
     return start, end
 
 
-def fault_sample(label: Row, stage: str) -> int | None:
+def fault_sample(
+    label: Row, stage: str, *, stop_latency_seconds: float = 0
+) -> int | None:
     window = fault_window(label, stage)
-    return (window[0] + window[1]) // 2 if window else None
+    return (
+        max(
+            0,
+            window[0]
+            + (window[1] - window[0]) // 4
+            - int(stop_latency_seconds * 16000),
+        )
+        if window
+        else None
+    )
 
 
 class TestServer:
@@ -237,6 +294,14 @@ class TestServer:
 
     async def stop(self) -> None:
         await self.docker("stop", "--time", "0", CONTAINER)
+
+    async def measure_stop_latency(self) -> float:
+        started = time.monotonic()
+        try:
+            await self.stop()
+            return time.monotonic() - started
+        finally:
+            await self.restore()
 
     async def restore(self) -> None:
         await self.docker("start", CONTAINER)
@@ -332,6 +397,46 @@ def scrub_cleanup_error(error: Exception, redactions: tuple[str, ...] = ()) -> s
     return message[:1000]
 
 
+async def fallback_snapshot(
+    session: aiohttp.ClientSession, token_file: Path, pipeline: str
+) -> dict[str, int] | None:
+    try:
+        async with control_command(session, token_file) as command:
+            pipelines = await command("assist_pipeline/pipeline/list")
+            engine = next(
+                item["stt_engine"]
+                for item in pipelines["pipelines"]
+                if item["id"] == pipeline
+            )
+            registry = await command("config/entity_registry/list")
+            entries = {
+                item["config_entry_id"]
+                for item in registry
+                if item["entity_id"] == engine and item.get("platform") == "assist_live"
+            }
+            if len(entries) != 1:
+                return None
+        token = json.loads(token_file.read_text())["token"]
+        async with asyncio.timeout(30):
+            async with session.get(
+                URL + "/api/diagnostics/config_entry/" + entries.pop(),
+                headers={"Authorization": "Bearer " + token},
+            ) as response:
+                response.raise_for_status()
+                counts = (await response.json())["data"]["fallback_reasons"]
+        return counts if reason_delta({}, counts) is not None else None
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        StopIteration,
+        TimeoutError,
+        aiohttp.ClientError,
+    ):
+        return None
+
+
 async def pipeline_trial(
     session: aiohttp.ClientSession,
     token_file: Path,
@@ -340,8 +445,8 @@ async def pipeline_trial(
     pcm: bytes,
     stage: str,
     server: TestServer,
-    deadline_seconds: float,
     *,
+    stop_latency_seconds: float = 0,
     device_id: str | None = None,
     turn_sensor: str | None = None,
 ) -> Row:
@@ -368,13 +473,19 @@ async def pipeline_trial(
         failures=[],
         fault_injected=False,
         failure_cause=None,
+        injected_fault=None,
+        fallback_reasons_before=None,
+        fallback_reasons_after=None,
+        fallback_reasons_delta=None,
+        stop_latency_seconds=stop_latency_seconds,
         fallback_deadline_utc_ns=None,
         completed_utc_ns=None,
         host_timing={"mark_start_utc_ns": time.time_ns()},
     )
     injection: asyncio.Task[None] | None = None
     sender: asyncio.Task[None] | None = None
-    offset = fault_sample(label, stage)
+    offset = fault_sample(label, stage, stop_latency_seconds=stop_latency_seconds)
+    row["fault_planned_audio_sample"] = offset
 
     async def inject() -> None:
         row["fault_requested_utc_ns"] = time.time_ns()
@@ -389,12 +500,12 @@ async def pipeline_trial(
             if not window[0] <= position < window[1]:
                 row["fault_injected"] = False
                 row["failures"].append("FAULT_STAGE_MISSED")
-        row["failure_cause"] = "server_container_stopped"
-        row["fallback_deadline_utc_ns"] = row["fault_requested_utc_ns"] + int(
-            deadline_seconds * 1e9
-        )
+        row["injected_fault"] = "server_container_stopped"
 
     try:
+        row["fallback_reasons_before"] = await fallback_snapshot(
+            session, token_file, pipeline
+        )
         if stage == "before":
             await inject()
         async with await connect(session, token_file) as ws:
@@ -455,7 +566,7 @@ async def pipeline_trial(
                     )
                 await ws.send_bytes(bytes([handler]))
 
-            async with asyncio.timeout(len(pcm) / 32000 + deadline_seconds + 15):
+            async with asyncio.timeout(len(pcm) / 32000 + 20 + 15):
                 while True:
                     message = await ws.receive_json()
                     if message.get("type") == "result" and message.get("id") == 3:
@@ -494,6 +605,9 @@ async def pipeline_trial(
                         }
                     )
                     if kind == "run-start":
+                        row["fallback_deadline_utc_ns"] = (
+                            row["events"][-1]["t_utc_ns"] + FALLBACK_LIMIT_NS
+                        )
                         handler = event["data"]["runner_data"]["stt_binary_handler_id"]
                         sender = asyncio.create_task(send_audio(handler))
                     elif kind == "stt-end":
@@ -564,7 +678,21 @@ async def pipeline_trial(
                 except ValueError, TimeoutError:
                     row["failures"].append("FAULT_INJECTION_FAILED")
         finally:
-            await server.restore()
+            try:
+                row["fallback_reasons_after"] = await fallback_snapshot(
+                    session, token_file, pipeline
+                )
+                delta = reason_delta(
+                    row["fallback_reasons_before"], row["fallback_reasons_after"]
+                )
+                row["fallback_reasons_delta"] = delta
+                row["failure_cause"] = (
+                    next(iter(delta)) if delta is not None and len(delta) == 1 else None
+                )
+                if not recorded_reason_matches(row):
+                    row["failures"].append("MISSING_OR_UNEXPECTED_FALLBACK_REASON")
+            finally:
+                await server.restore()
     row["acceptable"] = acceptable(row)
     if not row["acceptable"] and not row["failures"]:
         row["failures"].append("INCORRECT_TRANSCRIPT_OR_OPERATIONS")
@@ -792,6 +920,7 @@ async def run(args: argparse.Namespace) -> Row:
     server = TestServer()
     try:
         await server.restore()
+        result["stop_latency_seconds"] = await server.measure_stop_latency()
         async with aiohttp.ClientSession() as session:
 
             async def trials(
@@ -807,7 +936,7 @@ async def run(args: argparse.Namespace) -> Row:
                             pcm,
                             stage,
                             server,
-                            args.fallback_deadline,
+                            stop_latency_seconds=result["stop_latency_seconds"],
                             device_id=device_id,
                             turn_sensor=sensor,
                         )
@@ -904,7 +1033,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipeline")
     parser.add_argument("--labels", type=Path, default=Path("tests/data/labels.jsonl"))
     parser.add_argument("--audio-root", type=Path)
-    parser.add_argument("--fallback-deadline", type=float, default=30)
     parser.add_argument("--native-matrix", type=Path)
     parser.add_argument("--temporary-agent-pipeline", action="store_true")
     args = parser.parse_args(argv)
@@ -938,12 +1066,8 @@ def main(argv: list[str] | None = None) -> int:
         or not args.stages
         or len(args.stages.split(",")) != len(set(args.stages.split(",")))
         or not set(args.stages.split(",")) <= set(STAGES)
-        or not math.isfinite(args.fallback_deadline)
-        or args.fallback_deadline <= 0
     ):
-        parser.error(
-            "positive counts and deadline, and unique known stages are required"
-        )
+        parser.error("positive counts and unique known stages are required")
     try:
         result = asyncio.run(run(args))
         passed = sum(acceptable(row) for row in result["trials"])

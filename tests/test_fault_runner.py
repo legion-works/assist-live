@@ -13,9 +13,14 @@ def trial():
             "transcript": row["recognized_transcript"],
             "intent": row["evaluated_intent"],
         },
-        fallback_deadline_utc_ns=20_000_000_000,
+        events=[{"stage": "run-start", "t_utc_ns": 1_000_000_000}],
+        fallback_deadline_utc_ns=21_000_000_000,
         completed_utc_ns=19_000_000_000,
-        failure_cause="server_stopped",
+        injected_fault="server_container_stopped",
+        failure_cause="stream_closed",
+        fallback_reasons_before={},
+        fallback_reasons_after={"stream_closed": 1},
+        fallback_reasons_delta={"stream_closed": 1},
         fault_injected=True,
     )
     return row
@@ -73,7 +78,7 @@ def test_self_reported_correct_flag_cannot_replace_label_comparison():
         ("turn_id", None),
         ("failure_cause", None),
         ("fallback_deadline_utc_ns", None),
-        ("completed_utc_ns", 21_000_000_000),
+        ("completed_utc_ns", 22_000_000_000),
         ("fault_injected", False),
     ],
 )
@@ -98,7 +103,13 @@ def empty_trial():
     )
     # HA 2026.10.3 default_pipeline.py:422-431,472-486 and run.py:255-273.
     row["events"] = [
-        {"run_id": 3, "stage": stage, "source": "ha", "data": data}
+        {
+            "run_id": 3,
+            "stage": stage,
+            "source": "ha",
+            "data": data,
+            "t_utc_ns": 1_000_000_000,
+        }
         for stage, data in (
             ("run-start", {}),
             ("stt-start", {"engine": "stt.test"}),
@@ -214,10 +225,141 @@ def test_fault_gate_requires_all_four_stages_and_distinct_turns():
         for i in range(10):
             row = copy.deepcopy(trial())
             row.update(stage=stage, turn_id=f"{stage}-{i}")
+            set_reasons(row, stage)
             trials.append(row)
     assert fault_gate({"trials": trials})["passed"]
     trials[0]["stage"] = "speech"
     assert not fault_gate({"trials": trials})["passed"]
+
+
+def set_reasons(row, stage):
+    reason = "health_timeout" if stage == "before" else "stream_closed"
+    delta = {} if stage == "after-final" else {reason: 1}
+    row.update(
+        fallback_reasons_before={},
+        fallback_reasons_after=delta.copy(),
+        fallback_reasons_delta=delta,
+        failure_cause=reason if delta else None,
+    )
+
+
+@pytest.mark.parametrize("stage", ["before", "speech", "pause", "after-final"])
+@pytest.mark.parametrize(
+    "delta", ["correct", "wrong", "two-reasons", "two-counts", "none", "unreadable"]
+)
+def test_recorded_reason_delta_must_match_stage(stage, delta):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row["stage"] = stage
+    set_reasons(row, stage)
+    if delta == "wrong":
+        row["fallback_reasons_after"] = {"not_local_only": 1}
+    elif delta == "two-reasons":
+        row["fallback_reasons_after"] = {"health_timeout": 1, "stream_closed": 1}
+    elif delta == "two-counts":
+        row["fallback_reasons_after"] = {"stream_closed": 2}
+    elif delta == "none":
+        row["fallback_reasons_after"] = {}
+    elif delta == "unreadable":
+        row["fallback_reasons_before"] = None
+    if delta not in ("correct", "unreadable"):
+        row["fallback_reasons_delta"] = row["fallback_reasons_after"].copy()
+        row["failure_cause"] = next(iter(row["fallback_reasons_delta"]), None)
+    assert acceptable(row) is (
+        delta == "correct" or (stage == "after-final" and delta == "none")
+    )
+
+
+@pytest.mark.parametrize("elapsed,passed", [(19.9, True), (20.0, True), (20.1, False)])
+def test_deadline_is_twenty_seconds_from_run_start(elapsed, passed):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row["fault_requested_utc_ns"] = 10_000_000_000
+    row["completed_utc_ns"] = 1_000_000_000 + int(elapsed * 1e9)
+    assert acceptable(row) is passed
+    row["fallback_deadline_utc_ns"] = 30_000_000_000
+    assert not acceptable(row)
+
+
+def test_stop_plan_targets_first_quarter_and_subtracts_latency():
+    from tools.fault_runner import fault_sample
+
+    label = {"alignment_words": [{"start_sample": 16000, "end_sample": 32000}]}
+    assert fault_sample(label, "speech") == 20000
+    assert fault_sample(label, "speech", stop_latency_seconds=0.1) == 18400
+
+
+@pytest.mark.parametrize(
+    "stage,reason",
+    [
+        ("before", reason)
+        for reason in (
+            "health_timeout",
+            "health_error",
+            "server_unhealthy",
+            "open_error",
+        )
+    ]
+    + [
+        (stage, reason)
+        for stage in ("speech", "pause")
+        for reason in ("stream_closed", "message_timeout", "stream_error")
+    ],
+)
+def test_each_allowed_recorded_reason_has_one_count(stage, reason):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row.update(
+        stage=stage,
+        failure_cause=reason,
+        fallback_reasons_before={reason: 4},
+        fallback_reasons_after={reason: 5},
+        fallback_reasons_delta={reason: 1},
+    )
+    assert acceptable(row)
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        None,
+        [],
+        {"stream_closed": True},
+        {"stream_closed": 1.5},
+        {"stream_closed": -1},
+        {},
+    ],
+)
+def test_unreadable_or_reset_diagnostics_cannot_be_reason_evidence(after):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row.update(
+        fallback_reasons_before={"stream_closed": 4}, fallback_reasons_after=after
+    )
+    assert not acceptable(row)
+
+
+def test_check_cannot_override_spec_deadline(tmp_path, monkeypatch):
+    from tools import fault_runner
+
+    monkeypatch.setattr(fault_runner, "native_main", lambda _: 0)
+    with pytest.raises(SystemExit) as error:
+        fault_runner.main(
+            [
+                "--native-matrix",
+                "unused",
+                "--output",
+                str(tmp_path / "result.json"),
+                "--check",
+                "--fallback-deadline",
+                "30",
+            ]
+        )
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("stage", ["before", "speech", "pause", "after-final"])
@@ -246,6 +388,7 @@ async def test_driver_injects_each_fault_point_and_restores(
         async def stop(self):
             nonlocal clock
             calls.append("stop")
+            clock += 0.1
             if late:
                 clock += 1
 
@@ -363,7 +506,17 @@ async def test_driver_injects_each_fault_point_and_restores(
     async def connect(*args):
         return Socket()
 
+    async def snapshot(*args):
+        calls.append("diagnostics")
+        if calls.count("diagnostics") == 1 or stage == "after-final":
+            return {"health_timeout": 4, "stream_closed": 2}
+        return {
+            "health_timeout": 5 if stage == "before" else 4,
+            "stream_closed": 2 if stage == "before" else 3,
+        }
+
     monkeypatch.setattr(fault_runner, "connect", connect)
+    monkeypatch.setattr(fault_runner, "fallback_snapshot", snapshot)
     monkeypatch.setattr(fault_runner.asyncio, "sleep", fast_sleep)
     monkeypatch.setattr(fault_runner.time, "monotonic", lambda: clock)
     label = {
@@ -371,19 +524,19 @@ async def test_driver_injects_each_fault_point_and_restores(
         "id": "test",
         "audio_sha256": "a" * 64,
         "split": "held_out",
-        "alignment_words": [{"start_sample": 160, "end_sample": 480}],
-        "pause_start_sample": 480,
-        "pause_end_sample": 800,
+        "alignment_words": [{"start_sample": 16000, "end_sample": 32000}],
+        "pause_start_sample": 32000,
+        "pause_end_sample": 48000,
     }
     row = await fault_runner.pipeline_trial(
         None,
         Path("unused"),
         "pipeline",
         label,
-        bytes(2560),
+        bytes(112000),
         stage,
         Server(),
-        30,
+        stop_latency_seconds=0.1,
         device_id="virtual-device" if evidence != "missing" else None,
         turn_sensor="sensor.latency" if evidence != "missing" else None,
     )
@@ -391,8 +544,19 @@ async def test_driver_injects_each_fault_point_and_restores(
     assert calls[-1] == "restore"
     missed = late and stage in ("speech", "pause")
     assert row["fault_injected"] is not missed
-    assert row["failure_cause"] == "server_container_stopped"
+    assert calls[0] == "diagnostics"
+    assert calls[-2] == "diagnostics"
+    assert row["injected_fault"] == "server_container_stopped"
+    assert row["failure_cause"] == (
+        "health_timeout"
+        if stage == "before"
+        else None
+        if stage == "after-final"
+        else "stream_closed"
+    )
     assert row["fallback_deadline_utc_ns"] > time.time_ns()
+    start = next(event for event in row["events"] if event["stage"] == "run-start")
+    assert row["fallback_deadline_utc_ns"] == start["t_utc_ns"] + 20_000_000_000
     assert row["acceptable"] is (evidence == "fresh" and not missed)
     if evidence == "missing":
         assert "MISSING_COMPLETE_OPERATION_RECORD" in row["failures"]
@@ -405,7 +569,18 @@ async def test_driver_injects_each_fault_point_and_restores(
     elif stage == "after-final":
         assert calls.index("stop") > calls.index("audio")
     else:
-        assert row["fault_audio_sample"] == fault_runner.fault_sample(label, stage)
+        assert row["fault_planned_audio_sample"] == (
+            18400 if stage == "speech" else 34400
+        )
+        assert (
+            row["fault_planned_audio_sample"]
+            <= row["fault_audio_sample"]
+            < (row["fault_planned_audio_sample"] + 320)
+        )
+        if not missed:
+            assert row["fault_stopped_audio_sample"] == pytest.approx(
+                20160 if stage == "speech" else 36160, abs=1
+            )
 
 
 def test_simulated_trials_never_satisfy_hardware_fault_gate():
@@ -416,6 +591,8 @@ def test_simulated_trials_never_satisfy_hardware_fault_gate():
         for stage in ("before", "speech", "pause", "after-final")
         for i in range(10)
     ]
+    for row in trials:
+        set_reasons(row, row["stage"])
     result = fault_gate({"trials": trials})
     assert result["count"] == 40
     assert not result["passed"]
@@ -728,7 +905,13 @@ async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations
     async def connect(*args):
         return Socket()
 
+    snapshots = iter([{}, {"health_timeout": 1}])
+
+    async def snapshot(*args):
+        return next(snapshots)
+
     monkeypatch.setattr(fault_runner, "connect", connect)
+    monkeypatch.setattr(fault_runner, "fallback_snapshot", snapshot)
     label = {
         **expected["label"],
         "id": "test",
@@ -743,7 +926,6 @@ async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations
         bytes(640),
         "before",
         Server(),
-        30,
         turn_sensor="sensor.latency",
     )
     assert row["acceptable"]

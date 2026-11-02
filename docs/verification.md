@@ -3059,3 +3059,21 @@ HA restarted. One fault-free turn has a server Parakeet result and no fallback e
 The server is healthy, and loggers are at warning. The pipeline list did not change.
 
 The bench used no physical-device operation. This single fault trial does not satisfy P0 or P1 hardware acceptance.
+
+## Fault runner and append-only records
+
+The fault runner downloads public integration diagnostics before and after each trial.
+The classifier accepts one recorded fallback cause for `before`, `speech`, and `pause`, and no fallback for `after-final`.
+The test stop and recorded fallback cause have different fields.
+The deadline is 20 s from `run-start`, with no CLI override.
+The runner measures stop latency and plans the stop end at 25% of the labelled window.
+It rejects a stop that ends at a sample not in the window.
+
+The initial regression run gave 25 failures and 7 satisfactory controls before the repair.
+The related suites then gave `240 passed`.
+Tests use a fake clock, fake stop latency, public diagnostic responses from a local test server, and disposable Git repositories.
+No live bench run or hardware acceptance result is part of this change.
+
+The new records check runs in `task check` and CI.
+It rejects changed, deleted, or new lines before the end of the previous record, and names those lines.
+The historical sections `Fault and native-function runner` (`b728cdb`) and `Turn parents and fallback causes` (`0cb075d`) stay in their initial positions.

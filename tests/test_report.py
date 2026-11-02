@@ -278,8 +278,21 @@ def acceptance_fixture():
                 "action_trace": baseline_rows[0]["action_trace"],
                 "label": labels[0],
                 "fault_injected": True,
-                "failure_cause": "server_stopped",
-                "fallback_deadline_utc_ns": 20_000_000_000,
+                "injected_fault": "server_container_stopped",
+                "failure_cause": "health_timeout"
+                if stage == "before"
+                else None
+                if stage == "after-final"
+                else "stream_closed",
+                "fallback_reasons_before": {},
+                "fallback_reasons_after": {}
+                if stage == "after-final"
+                else {"health_timeout" if stage == "before" else "stream_closed": 1},
+                "fallback_reasons_delta": {}
+                if stage == "after-final"
+                else {"health_timeout" if stage == "before" else "stream_closed": 1},
+                "events": [{"stage": "run-start", "t_utc_ns": 1_000_000_000}],
+                "fallback_deadline_utc_ns": 21_000_000_000,
                 "completed_utc_ns": 19_000_000_000,
             }
             for stage in ("before", "speech", "pause", "after-final")
@@ -527,7 +540,7 @@ def test_failed_attempt_requires_present_fields_and_named_reasons():
 
 
 def test_fault_empty_path_cannot_hide_operations_and_duplicate_trials(acceptance):
-    from tests.test_fault_runner import empty_trial
+    from tests.test_fault_runner import empty_trial, set_reasons
     from tools.report import fault_gate
 
     _, _, _, faults = copy.deepcopy(acceptance)
@@ -539,6 +552,7 @@ def test_fault_empty_path_cannot_hide_operations_and_duplicate_trials(acceptance
         turn_id=previous["turn_id"],
         action_trace=[{"service": "light.turn_on"}],
     )
+    set_reasons(trial, trial["stage"])
     faults["trials"][0] = trial
     assert not fault_gate(faults)["passed"]
     trial["action_trace"] = []

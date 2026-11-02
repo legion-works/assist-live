@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from tests.test_fault_runner import trial
+from tests.test_fault_runner import set_reasons, trial
 from tests.test_report import build, dataset
 from tools.fault_runner import acceptable
 from tools.report import word_errors, words
@@ -43,6 +43,7 @@ def smoke_turn(request):
             },
         },
     )
+    set_reasons(row, "after-final")
     row["action_trace"] = [
         {
             "service": "timer.started",
