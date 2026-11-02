@@ -165,12 +165,8 @@ async def async_get_config_entry_diagnostics(
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
         "stt_hints": {
             satellite: dict(row) for satellite, row in runtime.hints.status.items()
-        }
-        if hasattr(runtime, "hints")
-        else {},
-        "stt_hints_failures": runtime.hints.failures
-        if hasattr(runtime, "hints")
-        else 0,
+        },
+        "stt_hints_failures": runtime.hints.failures,
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
         "counters_since_utc_ns": runtime.ledger.counters_since_utc_ns,
@@ -181,7 +177,7 @@ async def async_get_config_entry_diagnostics(
         "speaker_metadata_missing": runtime.ledger.speaker_missing,
         "speaker_not_identified": runtime.ledger.speaker_not_identified,
         "speaker_superseded": runtime.ledger.speaker_superseded,
-        "speaker_policy_violations": getattr(runtime, "speaker_policy_violations", 0),
+        "speaker_policy_violations": runtime.speaker_policy_violations,
         "server_healthy": runtime.server_healthy,
         "server_last_healthy": runtime.last_healthy.isoformat()
         if runtime.last_healthy is not None

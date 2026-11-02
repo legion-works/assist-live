@@ -375,6 +375,8 @@ async def test_complete_reply_counts_only_late_server_errors(
             server_healthy=False,
             last_healthy=None,
             last_healthy_health=None,
+            hints=SimpleNamespace(status={}, failures=0),
+            speaker_policy_violations=0,
         )
     }
     for count in (1, 2):
@@ -429,6 +431,8 @@ async def test_diagnostics_has_counts_and_buffering_without_content(
             server_healthy=False,
             last_healthy=None,
             last_healthy_health=None,
+            hints=SimpleNamespace(status={}, failures=0),
+            speaker_policy_violations=0,
         )
     }
     result = await async_get_config_entry_diagnostics(hass, entry)
@@ -471,6 +475,8 @@ async def test_full_file_fallback_is_reported(client, ledger, hass):
             server_healthy=False,
             last_healthy=None,
             last_healthy_health=None,
+            hints=SimpleNamespace(status={}, failures=0),
+            speaker_policy_violations=0,
         )
     }
     result = await async_get_config_entry_diagnostics(hass, entry)
