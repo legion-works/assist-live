@@ -102,6 +102,23 @@ Diagnostics show protocol version, provider destinations, and fallback counts.
 A repair issue reports an unavailable server.
 A sensor for each satellite shows `end_decision` to `playback_start` time and its quality.
 
+### Background timing events
+
+One background sender for each integration entry sends timing events in order for each turn.
+STT results, TTS streams, and turn opens do not wait for timing events.
+An outer timeout gives each event request a 2 s limit.
+The integration sends events only for turns that the server opened.
+
+After a send failure, pending events wait for the next satisfactory maintenance health check.
+The pending list holds at most 512 events, with the event in flight.
+When the list is full, a new event removes the oldest event.
+Diagnostics count these removals in `timing_events_dropped`.
+Pending events can stay after their short-lived local turn records expire.
+
+At integration shutdown, the integration cancels the sender and waits for cancellation.
+It discards pending events without a last send or disk write.
+Restart markers for saved open turns keep their startup behavior. They are not on a turn path.
+
 ### Satellite pre-roll
 
 This firmware design awaits review. The setting is off by default, not on in a release.

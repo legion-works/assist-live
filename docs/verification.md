@@ -3015,3 +3015,47 @@ A different number or an added `the` stays different.
 The report gives lowercase, punctuation removal, English number words as digits, and Levenshtein distance on those tokens in `methods.words`.
 The CLI test reads this field from an accepted P1 JSON report.
 The related tests gave `253 passed` after the two repairs.
+
+## Background timing events
+
+Date: 2026-11-02 (UTC).
+
+Before the repair, the regression tests gave `8 failed` on the unchanged production source.
+Hanging event requests blocked STT fallback results, TTS stream ends, and turn opens.
+The two event sources kept more than 512 pending events. Three send-error classes removed the event after a send failure.
+The same tests gave `8 passed` after the repair.
+
+The sender tests use a controlled clock and event barriers, not real-time sleeps.
+They check the 2 s request limit, failure retention, health-gated retry, event order, and queue overflow during a request.
+They also check that events wait for a satisfactory server open and survive expiry of the local turn record.
+The HA entry test calls `async_unload_entry` with a hanging sender and checks cancellation.
+It then reloads the entry and calls `async_unload_entry` again.
+Integration shutdown discards pending events without a last send.
+
+The event-payload tests drain the background sender with a bounded test helper before they examine sent events.
+The payload and order assertions stay unchanged. Fallback-reason tests capture events at queue insertion, also for turns without a server open.
+The restart-marker path stays in startup before platform setup, not on an STT or TTS turn path.
+
+The necessary checks are Ruff format and lint, `task check`, `task ha-minimum`, packaging, hassfest, privacy, `git diff --check`, and STE.
+These synthetic tests do not give a live fault result or a P0 or P1 acceptance result.
+
+Four scratch mutations add the awaited STT flush, remove the request timeout, discard an event after failure, or remove the queue limit.
+Each mutation compiles and gives one named test failure. The unchanged scratch control gives `14 passed`.
+
+### Isolated bench check
+
+One bench trial stopped the server during a labelled voiced word.
+The fallback gave its result about 4.583 s after turn start. Pipeline `stt-end` followed after about 0.3 ms.
+The handoff compares a Docker log timestamp with the probe UTC clock, so the sub-millisecond value is approximate.
+The handoff is less than 1 s. The turn is less than 20 s.
+
+A background send had a failure about 5.634 s after turn start.
+The next satisfactory maintenance health check occurred at 14.328 s.
+The server received the three pending events in order from 14.343 s through 14.345 s.
+The server store has the opened turn and its `fallback_used`, `end_decision`, and `stt_final` integration events.
+
+After the trial, all 14 installed integration files and the worktree files had equal source hashes, without the temporary timing logs.
+HA restarted. One fault-free turn has a server Parakeet result and no fallback event.
+The server is healthy, and loggers are at warning. The pipeline list did not change.
+
+The bench used no physical-device operation. This single fault trial does not satisfy P0 or P1 hardware acceptance.

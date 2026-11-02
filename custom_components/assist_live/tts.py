@@ -234,7 +234,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             connected = await self.ledger.connect(turn)
             if self.ledger.current(self.satellite) != turn:
                 _LOGGER.debug("turn superseded during open")
-                await self.ledger.flush()
+                self.ledger.schedule_events()
                 raise HomeAssistantError("turn superseded during open")
             if not connected:
                 record = self.ledger.records[turn.turn_id]
@@ -276,7 +276,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
             producer.cancel()
             with suppress(asyncio.CancelledError):
                 await producer
-            await self.ledger.flush()
+            self.ledger.schedule_events()
 
         async def capture() -> AsyncGenerator[str]:
             offset = 0

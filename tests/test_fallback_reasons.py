@@ -120,13 +120,13 @@ async def test_each_fallback_has_reason_event_count_and_safe_log(
         yield
 
     events = []
-    flush = ledger.flush
+    queue_event = ledger._queue_event
 
-    async def capture_events():
-        events.extend(ledger._pending)
-        await flush()
+    def capture_event(event):
+        events.append(event)
+        queue_event(event)
 
-    monkeypatch.setattr(ledger, "flush", capture_events)
+    monkeypatch.setattr(ledger, "_queue_event", capture_event)
     client.stt = failed_stream
     client.tts_stream = failed_stream
     with caplog.at_level(logging.DEBUG, logger="custom_components.assist_live"):
@@ -195,7 +195,7 @@ async def test_tts_header_failure_has_stream_error_reason(client, ledger, monkey
     ],
 )
 async def test_tts_continuation_keeps_failure_reason(
-    client, ledger, caplog, kind, reason
+    client, ledger, caplog, kind, reason, drain_timing_events
 ):
     client.health_capabilities.return_value = HealthCapabilities(True, True, True, True)
 
@@ -218,6 +218,7 @@ async def test_tts_continuation_keeps_failure_reason(
         output = b"".join([chunk async for chunk in response.data_gen])
     assert output[44:] == b"\x01\x00" + wav_audio()[44:]
     assert fallback.received_text == ["Second sentence."]
+    await drain_timing_events(ledger)
     events = [call.args[0] for call in client.event.call_args_list]
     event = next(event for event in events if event.stage == "fallback_used")
     assert event.data["reason"] == reason
@@ -302,6 +303,7 @@ async def test_pinned_client_kinds_reach_fallback_events(
                 assert ledger.fallback_reasons[reason] == 1
             finally:
                 release.set()
+                await ledger.stop_events()
 
 
 async def test_fallback_for_pruned_turn_does_not_raise():

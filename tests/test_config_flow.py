@@ -308,7 +308,30 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
     ]
     assert len(sensors) == 1
     assert sensors[0].attributes["quality"] == "missing"
-    assert await hass.config_entries.async_unload(entry.entry_id)
+    sending, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def hanging_event(event):
+        sending.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    client.event.side_effect = hanging_event
+    turn = runtime.ledger.open_voice("satellite-a")
+    assert await runtime.ledger.connect(turn)
+    runtime.ledger.mark(turn.turn_id, "stt_final")
+    runtime.ledger.schedule_events()
+    await asyncio.wait_for(sending.wait(), 1)
+    sender = runtime.ledger._event_sender
+    assert await asyncio.wait_for(hass.config_entries.async_unload(entry.entry_id), 1)
+    assert cancelled.is_set()
+    assert sender.done()
+    assert not runtime.ledger._pending
+    calls = client.event.await_count
+    runtime.ledger.schedule_events(retry=True)
+    assert client.event.await_count == calls
+    client.event.side_effect = None
     before = {p.id for p in assist_pipeline.async_get_pipelines(hass)}
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
         assert await hass.config_entries.async_setup(entry.entry_id)

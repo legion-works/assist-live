@@ -554,7 +554,9 @@ async def test_stt_checks_current_fallback_destination(
     assert bool(runtime.ledger.latest["satellite-a"].destinations) is allowed
 
 
-async def test_midturn_stt_records_provider_and_fallback(client, ledger):
+async def test_midturn_stt_records_provider_and_fallback(
+    client, ledger, drain_timing_events
+):
     from assist_live_client.models import HealthCapabilities
     from assist_live_client.protocol import ProtocolError
     from test_stt_forward import Fallback, audio, entity, metadata
@@ -574,6 +576,7 @@ async def test_midturn_stt_records_provider_and_fallback(client, ledger):
         "stt",
         "stt_fallback",
     ]
+    await drain_timing_events(ledger)
     events = [call.args[0] for call in client.event.call_args_list]
     assert next(event for event in events if event.stage == "fallback_used").data == {
         "part": "stt_fallback",

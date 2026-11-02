@@ -197,7 +197,9 @@ async def test_final_result_prevents_fallback_even_on_close_error(
     assert "fallback_used" not in stages(ledger)
 
 
-async def test_partial_then_disconnect_replays_kept_and_live_once(client, ledger):
+async def test_partial_then_disconnect_replays_kept_and_live_once(
+    client, ledger, drain_timing_events
+):
     client.health_capabilities.return_value = HealthCapabilities(True, True, True)
     release = asyncio.Event()
     chunks = [bytes([i, 0]) * 160 for i in (1, 2, 3)]
@@ -228,6 +230,7 @@ async def test_partial_then_disconnect_replays_kept_and_live_once(client, ledger
     assert result.text == "local command"
     assert fallback.audio == b"".join(chunks)
     assert "fallback_used" in stages(ledger)
+    await drain_timing_events(ledger)
     events = [call.args[0] for call in client.event.call_args_list]
     assert [event.stage for event in events] == [
         "fallback_used",

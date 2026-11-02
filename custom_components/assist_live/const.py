@@ -3,6 +3,8 @@ from assist_live_client.protocol import MESSAGE_DEADLINE as MESSAGE_DEADLINE
 DOMAIN = "assist_live"
 CONF_NOTIFY_TTS_FAILURE = "notify_tts_failure"
 CONF_FALLBACK_TTS_VOICE = "fallback_tts_voice"
+TIMING_EVENT_TIMEOUT = 2.0
+MAX_PENDING_TIMING_EVENTS = 512
 
 # The server sends final before identification. At server revision b3b1e16,
 # destinations.py permits 5 s for resolution and speaker.py permits 5 s

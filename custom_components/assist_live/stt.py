@@ -195,7 +195,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         failed = stt.SpeechResult("", stt.SpeechResultState.ERROR)
         if not self.check_metadata(metadata) or not self._fallback_compatible(metadata):
             self.ledger.mark(turn.turn_id, "stt_failed")
-            await self.ledger.flush()
+            self.ledger.schedule_events()
             return failed
         audio = FallbackAudio(stream, started=started, cancelled=asyncio.Event())
         reason: FallbackReason = "server_unhealthy"
@@ -314,4 +314,4 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
             return failed
         finally:
             await audio.aclose()
-            await self.ledger.flush()
+            self.ledger.schedule_events()

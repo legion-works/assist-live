@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 from uuid import uuid7
@@ -11,9 +11,11 @@ from assist_live_client.models import HealthCapabilities, TimingEvent, TurnOpen
 from assist_live_client.protocol import ProtocolError
 
 from .const import (
+    MAX_PENDING_TIMING_EVENTS,
     MAX_SPEAKER_DISTANCE,
     MAX_SPEAKER_READS,
     MAX_SPEAKER_READS_PER_SATELLITE,
+    TIMING_EVENT_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +89,13 @@ class TurnLedger:
         self._active: dict[str, str] = {}
         self._previous: dict[str, Record] = {}
         self._pending: list[TimingEvent] = []
+        self._event_sender: asyncio.Task[None] | None = None
+        self.create_event_task: Callable[
+            [Coroutine[Any, Any, None]], asyncio.Task[None]
+        ] = asyncio.create_task
+        self._events_failed = False
+        self._events_stopped = False
+        self.timing_events_dropped = 0
         self._connected: set[str] = set()
         self.failures: dict[str, int] = {}
         self.fallback_reasons = {
@@ -220,15 +229,20 @@ class TurnLedger:
         )
         for turn_id in remove:
             self.records.pop(turn_id)
-            self._connected.discard(turn_id)
         self._previous = {
             satellite: record
             for satellite, record in self._previous.items()
             if record.turn.turn_id in self.records
         }
         self._pending = [
-            event for event in self._pending if event.turn_id in self.records
+            event
+            for event in self._pending
+            if event.turn_id in self.records or event.turn_id in self._connected
         ]
+        # Pending events can outlive the short record-retention window.
+        self._connected.intersection_update(
+            self.records.keys() | {event.turn_id for event in self._pending}
+        )
 
     def _open(self, satellite: str, kind: Literal["voice", "tts_only"]) -> TurnOpen:
         self.prune()
@@ -410,7 +424,7 @@ class TurnLedger:
         reason: FallbackReason | None = None,
     ) -> None:
         record = self.records.get(turn_id)
-        if record is None:
+        if record is None or self._events_stopped:
             return
         if stage == "fallback_used":
             if reason is None:
@@ -433,7 +447,7 @@ class TurnLedger:
             and record.destinations[-1]["part"].endswith("_fallback")
         ):
             data.update(record.destinations[-1])
-        self._pending.append(
+        self._queue_event(
             TimingEvent(
                 turn_id,
                 record.turn.satellite,
@@ -464,7 +478,7 @@ class TurnLedger:
         if turn := self.current(satellite):
             self.records[turn.turn_id].last_activity = self.clock()
             self.records[turn.turn_id].stages.add("satellite_state")
-            self._pending.append(
+            self._queue_event(
                 TimingEvent(
                     turn.turn_id,
                     satellite,
@@ -501,7 +515,7 @@ class TurnLedger:
             if self.current(turn.satellite) != turn:
                 return False
             self._connected.add(turn.turn_id)
-            await self.flush()
+            self.schedule_events()
             return True
         except (ProtocolError, TimeoutError, OSError) as error:
             record.open_failure = (
@@ -512,15 +526,49 @@ class TurnLedger:
             record.open_error_class = type(error).__name__
             return False
 
+    def _queue_event(self, event: TimingEvent) -> None:
+        if self._events_stopped:
+            return
+        if len(self._pending) >= MAX_PENDING_TIMING_EVENTS:
+            self._pending.pop(0)
+            self.timing_events_dropped += 1
+        self._pending.append(event)
+
+    def schedule_events(self, *, retry: bool = False) -> None:
+        if self._events_stopped:
+            return
+        if retry:
+            self._events_failed = False
+        if self._events_failed or (
+            self._event_sender is not None and not self._event_sender.done()
+        ):
+            return
+        if any(event.turn_id in self._connected for event in self._pending):
+            self._event_sender = self.create_event_task(self.flush())
+
     async def flush(self) -> None:
-        pending, self._pending = self._pending, []
-        for event in pending:
-            if event.turn_id not in self._connected:
-                continue
+        while not self._events_stopped:
+            event = next(
+                (e for e in self._pending if e.turn_id in self._connected), None
+            )
+            if event is None:
+                return
             try:
-                await self.client.event(event)
-            except ProtocolError:
-                pass
+                async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
+                    await self.client.event(event)
+            except ProtocolError, TimeoutError, OSError:
+                self._events_failed = True
+                return
+            # The queue can remove an in-flight event when it reaches its limit.
+            self._pending = [item for item in self._pending if item is not event]
+
+    async def stop_events(self) -> None:
+        self._events_stopped = True
+        if self._event_sender is not None:
+            self._event_sender.cancel()
+            await asyncio.gather(self._event_sender, return_exceptions=True)
+            self._event_sender = None
+        self._pending.clear()
 
     def snapshot(self) -> list[dict[str, str]]:
         return [
@@ -531,17 +579,19 @@ class TurnLedger:
     async def restore(self, rows: list[dict[str, str]]) -> None:
         for row in rows:
             try:
-                await self.client.event(
-                    TimingEvent(
-                        row["turn_id"],
-                        row["satellite"],
-                        "integration",
-                        "turn_superseded",
-                        time.time_ns(),
-                        "measured",
-                        None,
-                        data={"reason": "restart"},
+                # docs/design.md: each timing event request has a 2 s limit.
+                async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
+                    await self.client.event(
+                        TimingEvent(
+                            row["turn_id"],
+                            row["satellite"],
+                            "integration",
+                            "turn_superseded",
+                            time.time_ns(),
+                            "measured",
+                            None,
+                            data={"reason": "restart"},
+                        )
                     )
-                )
-            except ProtocolError:
+            except ProtocolError, TimeoutError, OSError:
                 pass

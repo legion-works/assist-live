@@ -50,6 +50,9 @@ class Runtime:
         self.entry = entry
         self.client = client
         self.ledger = TurnLedger(client)
+        self.ledger.create_event_task = lambda coro: hass.async_create_background_task(
+            coro, "assist-live-timing-events"
+        )
         self.ledger.fallback_policy = self.fallback_destination
         self.ledger.speaker_event = self.speaker_metadata
         self.ledger.speaker_destination = self.speaker_destination
@@ -175,7 +178,7 @@ class Runtime:
             if entity and state and entity.device_id in self.entry.data["satellites"]:
                 satellite = self.entry.data["satellites"][entity.device_id]
                 self.ledger.satellite_state(satellite, state.state)
-                self.hass.async_create_task(self.ledger.flush())
+                self.ledger.schedule_events()
 
         self.unsub.append(
             async_track_state_change_event(self.hass, entities, state_changed)
@@ -300,6 +303,7 @@ class Runtime:
             if self._healthy:
                 self.last_healthy = dt_util.utcnow()
                 self.last_healthy_health = health
+                self.ledger.schedule_events(retry=True)
             if isinstance(health, HealthCapabilities):
                 self.ledger.last_health = health
                 for entity in self.tts.values():
@@ -320,7 +324,6 @@ class Runtime:
                     for satellite in self.entry.data["satellites"].values()
                 ]
                 self._store_retry_due = self.clock() + max(delays, default=30)
-        await self.ledger.flush()
         await self.refresh_health()
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
         registry = er.async_get(self.hass)
@@ -345,6 +348,7 @@ class Runtime:
         )
 
     async def stop(self) -> None:
+        await self.ledger.stop_events()
         await self.ledger.stop_speaker_reads()
         for unsub in self.unsub:
             unsub()

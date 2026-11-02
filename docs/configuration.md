@@ -62,6 +62,15 @@ The voice count and default voice contain no reply text.
 
 ## Fallback and timing
 
+Timing events use one background sender. A turn does not wait for timing events.
+Each request has a 2 s limit, and the pending list has a 512-event limit.
+After a failure, the sender retries only after a new satisfactory maintenance health check.
+The maintenance health interval is 30 s after success and 5 s after failure.
+
+The diagnostic counter `timing_events_dropped` counts the oldest events removed when the list is full.
+It starts at integration setup. These limits have no user options.
+Integration shutdown discards pending events without a last send. Pending events do not survive reload or restart.
+
 The STT fallback must accept the language, PCM codec, 16-bit samples, 16000 Hz, and `channel=1`.
 The TTS fallback must accept the language. It uses its own selected or default voice.
 A streaming fallback can start audio before HA gets all text.

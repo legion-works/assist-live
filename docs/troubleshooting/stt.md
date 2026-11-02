@@ -33,6 +33,11 @@ The fallback deadline is 20 s from the initial turn start.
 The health check, server connection, and server audio do not restart this deadline.
 Cancellation stops the input task and closes the source.
 
+The STT result does not wait for timing events, also when the server stops during voice input.
+Each background event request has a 2 s limit. After a send failure, events stay pending until a satisfactory maintenance health check.
+If the 512-event list is full, the integration removes the oldest event, and `timing_events_dropped` increases.
+Missing timing events do not cause a command to run again.
+
 ## Engine selection and failures
 
 Select a standard HA STT entity as the fallback.
