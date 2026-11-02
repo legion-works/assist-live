@@ -20,6 +20,7 @@ if __package__ in (None, ""):
 
 from tools.corpus import load_corpus, resolve_audio
 from tools.device_replay import BRIDGE_OPERATION_MAP, RUN_FIELDS
+from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
 from tools.metrics import rate
 from tools.native_matrix import (
     main as native_main,
@@ -54,7 +55,7 @@ class TemporaryPipelineError(ValueError):
 
 
 def no_text_error(trial: Row) -> bool:
-    run_id = trial.get("pipeline_run_id")
+    run_id = trial.get("pipeline_request_id")
     events = trial.get("events")
     if (
         type(run_id) is not int
@@ -65,7 +66,7 @@ def no_text_error(trial: Row) -> bool:
         or trial.get("agent_records") != []
         or not all(
             isinstance(event, dict)
-            and event.get("run_id") == run_id
+            and event.get("request_id") == run_id
             and event.get("source") == "ha"
             for event in events
         )
@@ -462,7 +463,12 @@ async def fallback_snapshot(
                 turns = data.get("turns")
         if reason_delta({}, counts) is None or not isinstance(turns, list):
             return None
-        return {"fallback_reasons": counts, "turns": turns}
+        return {
+            "fallback_reasons": counts,
+            "turns": turns,
+            "timing_events_dropped": data.get("timing_events_dropped"),
+            "counters_since_utc_ns": data.get("counters_since_utc_ns"),
+        }
     except (
         OSError,
         ValueError,
@@ -473,6 +479,47 @@ async def fallback_snapshot(
         aiohttp.ClientError,
     ):
         return None
+
+
+def pipeline_observations(row: Row) -> Row:
+    events = row["events"]
+    identifiers: Row = {}
+    for event in events:
+        data = event.get("data", {})
+        for source in (data, data.get("intent_output", {})):
+            for name in ("run_id", "conversation_id"):
+                if source.get(name) is not None:
+                    identifiers.setdefault(name, source[name])
+    progress = [e for e in events if e["stage"] == "intent-progress"]
+    text = [
+        e
+        for e in progress
+        if e.get("data", {}).get("chat_log_delta", {}).get("content")
+        and e["data"]["chat_log_delta"].get("role", "assistant") == "assistant"
+    ]
+    calls = [
+        e
+        for e in progress
+        if e.get("data", {}).get("chat_log_delta", {}).get("tool_calls")
+    ]
+    results = [
+        e
+        for e in progress
+        if "tool_result" in e.get("data", {}).get("chat_log_delta", {})
+    ]
+    return {
+        "test_only": True,
+        "turn_id": row["turn_id"],
+        "turn_id_source": row.get("turn_id_source"),
+        "request_id": row["pipeline_request_id"],
+        "run_id": identifiers.get("run_id"),
+        "conversation_id": identifiers.get("conversation_id"),
+        "first_agent_text_delta": text[0] if text else None,
+        "tool_call_deltas": calls,
+        "tool_result_deltas": results,
+        "intent_end": next((e for e in events if e["stage"] == "intent-end"), None),
+        "tts_start": "not_run",
+    }
 
 
 async def pipeline_trial(
@@ -504,7 +551,7 @@ async def pipeline_trial(
         label=label,
         stage=stage,
         events=[],
-        pipeline_run_id=3,
+        pipeline_request_id=3,
         agent_records=[],
         action_trace_complete=False,
         complete=False,
@@ -543,6 +590,11 @@ async def pipeline_trial(
 
     try:
         before = await fallback_snapshot(session, token_file, pipeline)
+        loss_start = await capture_loss(
+            None, satellites=[device_id or "not_identified"], integration_data=before
+        )
+        row["loss_counters"] = {"start": loss_start, "end": None}
+        row["loss_unavailable"] = True
         row["fallback_reasons_before"] = before["fallback_reasons"] if before else None
         if stage == "before":
             await inject()
@@ -638,7 +690,8 @@ async def pipeline_trial(
                             "data": event.get("data", {}),
                             "t_utc_ns": time.time_ns(),
                             "source": "ha",
-                            "run_id": message["id"],
+                            "request_id": message["id"],
+                            "test_only": True,
                             "quality": "measured",
                         }
                     )
@@ -718,6 +771,16 @@ async def pipeline_trial(
         finally:
             try:
                 after = await fallback_snapshot(session, token_file, pipeline)
+                loss_end = await capture_loss(
+                    None,
+                    satellites=[device_id or "not_identified"],
+                    integration_data=after,
+                )
+                row["loss_counters"] = loss_window(
+                    row["loss_counters"]["start"], loss_end
+                )
+                for flag in LOSS_FLAGS:
+                    row[flag] = row["loss_counters"][flag]
                 row["fallback_reasons_after"] = (
                     after["fallback_reasons"] if after else None
                 )
@@ -732,6 +795,9 @@ async def pipeline_trial(
             finally:
                 await server.restore()
     row["acceptable"] = acceptable(row)
+    for event in row["events"]:
+        event["turn_id"] = row["turn_id"]
+    row["test_pipeline"] = pipeline_observations(row)
     if not row["acceptable"] and not row["failures"]:
         row["failures"].append("INCORRECT_TRANSCRIPT_OR_OPERATIONS")
     return row
@@ -1037,6 +1103,17 @@ async def run(args: argparse.Namespace) -> Row:
 
 
 def write_result(path: Path, result: Row) -> None:
+    windows = [
+        row["loss_counters"]
+        for row in result.get("trials", [])
+        if row.get("loss_counters")
+    ]
+    if windows:
+        result["loss_counters"] = loss_window(windows[0]["start"], windows[-1]["end"])
+        for flag in LOSS_FLAGS:
+            result[flag] = result["loss_counters"][flag] or any(
+                window.get(flag) for window in windows
+            )
     result["faults"] = fault_gate(result)
     result["native_denominators"] = {
         "device": {

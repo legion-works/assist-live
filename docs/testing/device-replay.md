@@ -97,6 +97,7 @@ uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl
 ```
 
 The tool checks each recording's SHA-256 before it plays the wake word or command.
+The [measurement report rules](measurement-rules.md) give the counter inputs and uncertainty rules.
 It plays the wake word, waits for one device wake event and microphone-open event, then plays the command.
 Duplicate wakes, unmatched turns, and missing device events cause an unsatisfactory sample result.
 Timing records come through the pinned client's public subscription, turn query, and export methods.

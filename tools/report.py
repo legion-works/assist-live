@@ -19,6 +19,7 @@ from tools.device_replay import (
     sample_errors,
 )
 from tools.fault_runner import fault_gate
+from tools.measurement import LOSS_FLAGS, endpoint_uncertainty, loss_window
 from tools.metrics import rate
 from tools.native_matrix import validate_native_matrix
 from tools.result_text import words
@@ -135,6 +136,8 @@ def validate_rows(rows: list[Row], labels: list[Row], phase: str) -> None:
             raise ReplayError("UNKNOWN_HELD_OUT_RECORDING")
         if label.get("audio_sha256") != row["audio_sha256"]:
             raise ReplayError("UNRESOLVED_RECORDING_HASH")
+        if "set" in row and row["set"] != label.get("set"):
+            raise ReplayError("RUN_SET_MISMATCH")
         configs.add(row["baseline_config_id"])
         revisions.add(row["calibration_revision"])
     if not rows or len(configs) != 1 or len(revisions) != 1:
@@ -164,7 +167,9 @@ def timing(row: Row, stage: str) -> Row | None:
     events = [
         event
         for event in row["events"]
-        if event["stage"] == stage and event["turn_id"] == row["turn_id"]
+        if event["stage"] == stage
+        and event["turn_id"] == row["turn_id"]
+        and not event.get("test_only")
     ]
     if stage in DEVICE_STAGES:
         events = [event for event in events if event["source"] == "device"]
@@ -195,11 +200,15 @@ def evidence_complete(row: Row) -> bool:
 
 
 def group_timings(rows: list[Row]) -> Row:
+    sets = {row.get("set", "replay") for row in rows}
+    if len(sets) > 1:
+        raise ReplayError("MIXED_CRITERION_SETS")
     result = {}
     for name, (start, end) in STEPS.items():
         values, uncertainties = [], []
         qualities: Counter[str] = Counter()
         methods: Counter[str] = Counter()
+        unknown = 0
         for row in rows:
             left, right = timing(row, start), timing(row, end)
             if left is None or right is None:
@@ -221,12 +230,14 @@ def group_timings(rows: list[Row]) -> Row:
                 + ";"
                 + right.get("method", "recorded-event")
             ] += 1
-            if (
-                left.get("uncertainty_ms") is not None
-                and right.get("uncertainty_ms") is not None
-            ):
-                uncertainties.append(left["uncertainty_ms"] + right["uncertainty_ms"])
+            left_uncertainty = endpoint_uncertainty(left)
+            right_uncertainty = endpoint_uncertainty(right)
+            if left_uncertainty is None or right_uncertainty is None:
+                unknown += 1
+            else:
+                uncertainties.append(left_uncertainty + right_uncertainty)
         result[name] = {
+            "label": "agent and HA wait" if name == "agent" else name,
             "n": len(values),
             "missing": len(rows) - len(values),
             "p50_ms": percentile(values, 50) if values else None,
@@ -234,8 +245,9 @@ def group_timings(rows: list[Row]) -> Row:
             "quality": dict(qualities),
             "methods": dict(methods),
             "uncertainty_p90_ms": percentile(uncertainties, 90)
-            if uncertainties
+            if uncertainties and not unknown
             else None,
+            "uncertainty_unknown": unknown,
         }
     return {"n": len(rows), "steps": result}
 
@@ -243,12 +255,83 @@ def group_timings(rows: list[Row]) -> Row:
 def observation_complete(row: Row) -> bool:
     return (
         row.get("complete") is not False
+        and not row.get("loss_present")
+        and not row.get("loss_unavailable")
+        and not row.get("reset_unknown")
+        and not row.get("no_device_events")
         and all(timing(row, stage) is not None for stage in DEVICE_STAGES)
         and not any(
             event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
             for event in row["events"]
         )
     )
+
+
+def sentence_timing(row: Row) -> list[Row] | None:
+    events = [
+        event
+        for event in row["events"]
+        if event.get("turn_id") == row["turn_id"]
+        and event["stage"]
+        in ("tts_sentence", "tts_last_byte", "tts_text_received", "tts_first_byte")
+        and not event.get("test_only")
+    ]
+    if not any(e["stage"] in ("tts_sentence", "tts_last_byte") for e in events):
+        return None
+    result = []
+    for request in sorted({event["data"].get("request", 0) for event in events}):
+        stream = [e for e in events if e["data"].get("request", 0) == request]
+        sentences = sorted(
+            [e["data"] for e in stream if e["stage"] == "tts_sentence"],
+            key=lambda data: data["index"],
+        )
+        endings = [e["data"] for e in stream if e["stage"] == "tts_last_byte"]
+        text = [e for e in stream if e["stage"] == "tts_text_received"]
+        first = [e for e in stream if e["stage"] == "tts_first_byte"]
+        if not sentences or len(endings) != 1 or len(text) != 1 or len(first) != 1:
+            result.append({"request": request, "available": False})
+            continue
+        if [s["index"] for s in sentences] != list(range(len(sentences))):
+            raise ReplayError("INVALID_SENTENCE_INDICES")
+        ending = endings[0]
+        if ending["sentences"] != len(sentences):
+            result.append({"request": request, "available": False, "truncated": True})
+            continue
+        origin = (first[0]["t_utc_ns"] - text[0]["t_utc_ns"]) / 1e6
+        audio = stop_ms = previous_text = 0.0
+        stops = 0
+        margins, waits, provider = [], [], []
+        for sentence in sentences:
+            margin = audio - (sentence["first_byte_ms"] - origin)
+            margins.append(margin)
+            gap = max(0.0, -margin - stop_ms)
+            if gap:
+                stops += 1
+                stop_ms += gap
+            waits.append(sentence["text_ms"] - previous_text)
+            provider.append(sentence["first_byte_ms"] - sentence["text_ms"])
+            previous_text = sentence["text_ms"]
+            audio += sentence["audio_ms"]
+        result.append(
+            {
+                "request": request,
+                "available": True,
+                "sentences": ending["sentences"],
+                "audio_ms": ending["audio_ms"],
+                "margins_ms": margins,
+                "minimum_margin_ms": min(margins),
+                "stop_count": stops,
+                "stop_ms": stop_ms,
+                "agent_text_wait_ms": waits,
+                "provider_ms": provider,
+                "provider_measure": (
+                    "provider time including queue behind prior sentence"
+                ),
+                "playback_model": "server first byte, not observed device stops",
+                "sentence_time_origin": "server tts_text_received",
+            }
+        )
+    return result
 
 
 def summarize(rows: list[Row]) -> Row:
@@ -291,6 +374,7 @@ def summarize(rows: list[Row]) -> Row:
             if row.get("complete") is False
         ],
         "reply_groups": groups,
+        "sentence_timing": {row["turn_id"]: sentence_timing(row) for row in rows},
         "unclassified_reply_count": sum(
             not isinstance(row["reply_text"], str)
             and row["reply_group"] not in ("short", "long")
@@ -344,8 +428,37 @@ def build_report(
 ) -> Row:
     if latency_profile != "safe":
         raise ReplayError("DEFAULT_SAFE_PROFILE_REQUIRED")
+    rows = [
+        {
+            **row,
+            "events": [
+                event
+                for event in row["events"]
+                if not isinstance(event, dict) or not event.get("test_only")
+            ],
+        }
+        if isinstance(row.get("events"), list)
+        else row
+        for row in rows
+    ]
     validate_rows(rows, labels, phase)
     by_id = {label["id"]: label for label in labels}
+    rows = [{**row, "set": by_id[row["clip_id"]]["set"]} for row in rows]
+    for row in rows:
+        counters = row.get("loss_counters", {})
+        start, end = counters.get("start"), counters.get("end")
+        if isinstance(start, dict) and isinstance(end, dict):
+            observed_loss = loss_window(start, end)
+            for flag in LOSS_FLAGS:
+                row[flag] = bool(row.get(flag) or observed_loss[flag])
+        else:
+            row["loss_unavailable"] = True
+    run_flags: dict[str, Row] = {}
+    for row in rows:
+        flags = run_flags.setdefault(row["run_id"], dict.fromkeys(LOSS_FLAGS, False))
+        for flag in LOSS_FLAGS:
+            flags[flag] = flags[flag] or bool(row.get(flag))
+    rows = [{**row, **run_flags[row["run_id"]]} for row in rows]
     excluded = []
     primary, native_rows = [], []
     synthetic = []
@@ -367,7 +480,13 @@ def build_report(
         else:
             primary.append(row)
     profiles = {
-        profile: summarize([row for row in primary if row["profile"] == profile])
+        profile: summarize(
+            [
+                row
+                for row in primary
+                if row["profile"] == profile and row["set"] == "replay"
+            ]
+        )
         for profile in (("baseline",) if phase == "p0" else ("safe", "fast"))
     }
     config, revision = rows[0]["baseline_config_id"], rows[0]["calibration_revision"]
@@ -381,6 +500,17 @@ def build_report(
         "input_count": len(rows),
         "exclusions": excluded,
         "profiles": profiles,
+        "rows": [
+            {"turn_id": row["turn_id"], "set": row["set"], "run_id": row["run_id"]}
+            for row in rows
+        ],
+        "runs": {
+            row["run_id"]: {
+                "loss_counters": row.get("loss_counters"),
+                **run_flags[row["run_id"]],
+            }
+            for row in rows
+        },
         "native_pipeline": summarize(native_rows),
         "synthetic": summarize(synthetic),
         "methods": {
@@ -577,7 +707,8 @@ def markdown(report: Row) -> str:
         for group, values in data["reply_groups"].items():
             for step, timing_data in values["steps"].items():
                 lines.append(
-                    f"| {profile} | {group} | {step} | {timing_data['n']} | "
+                    f"| {profile} | {group} | {timing_data.get('label', step)} | "
+                    f"{timing_data['n']} | "
                     f"{timing_data['missing']} | {timing_data['p50_ms']} | "
                     f"{timing_data['p90_ms']} | {timing_data['quality']} |"
                 )

@@ -36,6 +36,24 @@ def test_partial_transcript_action_fails_gate():
     assert not acceptable(row)
 
 
+def test_pipeline_observations_keep_ids_from_intent_end_without_inventing_them():
+    from tools.fault_runner import pipeline_observations
+
+    row = trial()
+    row["pipeline_request_id"] = 3
+    row["events"] = [
+        {"stage": "run-start", "data": {}},
+        {
+            "stage": "intent-end",
+            "data": {"intent_output": {"conversation_id": "test-conversation"}},
+        },
+    ]
+    observed = pipeline_observations(row)
+    assert observed["conversation_id"] == "test-conversation"
+    assert observed["run_id"] is None
+    assert observed["intent_end"]["stage"] == "intent-end"
+
+
 def test_acceptable_requires_only_a_trial_record():
     import inspect
 
@@ -100,12 +118,12 @@ def empty_trial():
         action_trace=[],
         operations=[],
         agent_records=[],
-        pipeline_run_id=3,
+        pipeline_request_id=3,
     )
     # HA 2026.10.3 default_pipeline.py:422-431,472-486 and run.py:255-273.
     row["events"] = [
         {
-            "run_id": 3,
+            "request_id": 3,
             "stage": stage,
             "source": "ha",
             "data": data,
@@ -168,7 +186,7 @@ def test_empty_error_requires_complete_same_run_evidence(change):
 
     row = empty_trial()
     if change == "other-run":
-        row["events"][2]["run_id"] = 99
+        row["events"][2]["request_id"] = 99
     elif change == "other-error":
         row["events"][2]["data"]["code"] = "stt-stream-failed"
     elif change == "no-end":
@@ -183,11 +201,11 @@ def test_empty_error_requires_complete_same_run_evidence(change):
         del row["operations"]
     elif change == "final":
         row["events"].insert(
-            2, {"run_id": 3, "stage": "stt-end", "source": "ha", "data": {}}
+            2, {"request_id": 3, "stage": "stt-end", "source": "ha", "data": {}}
         )
     elif change == "intent":
         row["events"].insert(
-            2, {"run_id": 3, "stage": "intent-start", "source": "ha", "data": {}}
+            2, {"request_id": 3, "stage": "intent-start", "source": "ha", "data": {}}
         )
     elif change == "turn":
         row["turn_id"] = None
@@ -446,7 +464,11 @@ async def test_driver_injects_each_fault_point_and_restores(
                     "type": "event",
                     "event": {
                         "type": "run-start",
-                        "data": {"runner_data": {"stt_binary_handler_id": 7}},
+                        "data": {
+                            "runner_data": {"stt_binary_handler_id": 7},
+                            "run_id": "ha-test-run",
+                            "conversation_id": "test-conversation",
+                        },
                     },
                 },
                 {
@@ -516,6 +538,25 @@ async def test_driver_injects_each_fault_point_and_restores(
                         },
                     }
                 ]
+            for delta in reversed(
+                [
+                    {"role": "tool", "content": "Not agent text"},
+                    {"role": "assistant", "content": "First text"},
+                    {"tool_calls": [{"id": "call-1", "tool_name": "test_tool"}]},
+                    {"role": "tool", "tool_call_id": "call-1", "tool_result": {}},
+                ]
+            ):
+                self.messages.insert(
+                    3,
+                    {
+                        "id": 3,
+                        "type": "event",
+                        "event": {
+                            "type": "intent-progress",
+                            "data": {"chat_log_delta": delta},
+                        },
+                    },
+                )
 
         async def __aenter__(self):
             return self
@@ -619,6 +660,22 @@ async def test_driver_injects_each_fault_point_and_restores(
     )
     assert row["fallback_deadline_utc_ns"] > time.time_ns()
     start = next(event for event in row["events"] if event["stage"] == "run-start")
+    assert all(item["test_only"] is True for item in row["events"])
+    assert all(item["turn_id"] == row["turn_id"] for item in row["events"])
+    assert row["pipeline_request_id"] == 3
+    assert row["test_pipeline"]["run_id"] == "ha-test-run"
+    assert row["test_pipeline"]["conversation_id"] == "test-conversation"
+    assert (
+        row["test_pipeline"]["first_agent_text_delta"]["data"]["chat_log_delta"][
+            "content"
+        ]
+        == "First text"
+    )
+    assert len(row["test_pipeline"]["tool_call_deltas"]) == 1
+    assert len(row["test_pipeline"]["tool_result_deltas"]) == 1
+    assert row["test_pipeline"]["tts_start"] == "not_run"
+    assert row["loss_counters"]["start"]["observed_utc_ns"] > 0
+    assert row["loss_counters"]["end"]["observed_utc_ns"] > 0
     assert row["fallback_deadline_utc_ns"] == start["t_utc_ns"] + 20_000_000_000
     mismatch = reason_source == "mismatch" and stage != "after-final"
     assert row["acceptable"] is (evidence == "fresh" and not missed and not mismatch)
@@ -1017,7 +1074,9 @@ async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations
     assert row["recognized_transcript"] is row["evaluated_intent"] is None
     assert row["action_trace_complete"] is True
     assert row["action_trace"] == row["operations"] == row["agent_records"] == []
-    assert all(item["run_id"] == row["pipeline_run_id"] for item in row["events"])
+    assert all(
+        item["request_id"] == row["pipeline_request_id"] for item in row["events"]
+    )
 
 
 @pytest.fixture

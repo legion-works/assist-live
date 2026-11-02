@@ -215,6 +215,8 @@ async def test_public_diagnostics_download_extracts_counts_or_missing_evidence(
             {
                 "data": {
                     "fallback_reasons": {"health_timeout": 4, "stream_closed": 2},
+                    "timing_events_dropped": 3,
+                    "counters_since_utc_ns": 100,
                     "turns": [
                         {
                             "turn_id": "turn",
@@ -263,6 +265,8 @@ async def test_public_diagnostics_download_extracts_counts_or_missing_evidence(
         assert counts == (
             {
                 "fallback_reasons": {"health_timeout": 4, "stream_closed": 2},
+                "timing_events_dropped": 3,
+                "counters_since_utc_ns": 100,
                 "turns": [
                     {
                         "turn_id": "turn",

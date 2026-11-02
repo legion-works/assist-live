@@ -709,6 +709,15 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
 
     records = []
 
+    async def capture_loss_without_network(*args, **kwargs):
+        from tools.measurement import capture_loss
+
+        return await capture_loss(None, satellites=kwargs["satellites"])
+
+    monkeypatch.setattr(
+        "tools.device_replay.capture_loss", capture_loss_without_network
+    )
+
     class RecordingEvents(FakeEvents):
         def __init__(self, *args):
             turn = f"01900000-0000-7000-8000-{len(records) + 10:012x}"
@@ -748,6 +757,10 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     args.clock_record = clock_record
     selector = Selector()
     rows = await run(args, selector)
+    assert all(row["set"] == "replay" for row in rows)
+    assert all(row["loss_counters"]["start"]["observed_utc_ns"] > 0 for row in rows)
+    assert all(row["loss_counters"]["end"]["observed_utc_ns"] > 0 for row in rows)
+    assert all(row["loss_unavailable"] and row["reset_unknown"] for row in rows)
     assert all(row["mode"] == "smoke" for row in rows)
     assert selector.calls == ["safe", "fast"]
     assert [row["profile"] for row in rows] == ["safe", "fast"]
@@ -1248,6 +1261,15 @@ async def test_one_failed_attempt_of_three_is_written_and_not_dropped(
         }
         for i in range(3)
     ]
+
+    async def capture_loss_without_network(*args, **kwargs):
+        from tools.measurement import capture_loss
+
+        return await capture_loss(None, satellites=kwargs["satellites"])
+
+    monkeypatch.setattr(
+        "tools.device_replay.capture_loss", capture_loss_without_network
+    )
     token, records_path = tmp_path / "token.json", tmp_path / "operations.jsonl"
     token.write_text(json.dumps({"token": "test-only"}))
     for key, value in {

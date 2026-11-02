@@ -16,6 +16,20 @@ def test_incomplete_turns_stay_in_denominator():
 
 def dataset(count=2, phase="p0", latency=500, *, offset=0, set_name="replay"):
     labels, rows = [], []
+    snapshot = {
+        "observed_utc_ns": 10,
+        "integration": {"value": 0, "last_reset_utc_ns": 1},
+        **{
+            kind: {
+                "test_satellite": {
+                    "value": 0,
+                    "last_reset_utc_ns": 1,
+                    **({"boot_id": 0} if kind == "server" else {}),
+                }
+            }
+            for kind in ("server", "device")
+        },
+    }
     for i in range(offset, offset + count):
         row = copy.deepcopy(sample())
         row.update(
@@ -23,6 +37,10 @@ def dataset(count=2, phase="p0", latency=500, *, offset=0, set_name="replay"):
             turn_id=f"01900000-0000-7000-8000-{i + 1:012x}",
             phase=phase,
             profile="baseline" if phase == "p0" else "safe",
+            loss_counters={
+                "start": copy.deepcopy(snapshot),
+                "end": copy.deepcopy(snapshot),
+            },
         )
         for item in row["events"]:
             item["turn_id"] = row["turn_id"]

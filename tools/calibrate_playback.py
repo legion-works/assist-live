@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 from tools import annotate_corpus
 from tools.corpus import load_corpus
 from tools.device_replay import ReplayError, sample_errors
+from tools.measurement import endpoint_uncertainty
 
 
 def percentile(values: list[float], percent: float) -> float:
@@ -41,9 +42,19 @@ def calibrate(rows: list[dict[str, Any]], device: str) -> dict[str, Any]:
     ):
         raise ReplayError("CALIBRATION_MIXED_CONFIGURATION")
     uncertainty = [row["alignment"]["uncertainty_ms"] for row in rows]
-    uncertainty_p90 = percentile(uncertainty, 90)
     proxies = {}
     for boundary in ("start", "end"):
+        clock_uncertainty = [
+            endpoint_uncertainty(row["playback_" + boundary]) for row in rows
+        ]
+        combined = [
+            acoustic + clock
+            for acoustic, clock in zip(uncertainty, clock_uncertainty, strict=True)
+            if clock is not None
+        ]
+        uncertainty_p90 = (
+            percentile(combined, 90) if len(combined) == len(rows) else None
+        )
         absolute_errors = [
             abs(
                 row["playback_" + boundary]["t_utc_ns"]
@@ -54,12 +65,13 @@ def calibrate(rows: list[dict[str, Any]], device: str) -> dict[str, Any]:
             for row in rows
         ]
         p90 = percentile(absolute_errors, 90)
-        accepted = p90 + uncertainty_p90 <= 100
+        bound = p90 + uncertainty_p90 if uncertainty_p90 is not None else None
+        accepted = bound is not None and bound <= 100
         proxies[boundary] = {
             "n": len(rows),
             "p50_absolute_error_ms": percentile(absolute_errors, 50),
             "p90_absolute_error_ms": p90,
-            "p90_error_bound_ms": p90 + uncertainty_p90,
+            "p90_error_bound_ms": bound,
             "accepted": accepted,
             "status": "accepted" if accepted else "rejected",
         }

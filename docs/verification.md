@@ -3091,3 +3091,30 @@ The diagnostic correlation test also gave a failure before the repair.
 The tests include different turns, TTS-only causes, correct STT causes, and aggregate mismatches.
 The cleanup test does not supply the removed deadline argument.
 No live bench run is part of this repair.
+
+## Report measurement rules
+
+The regression tests gave 15 named failures on unchanged code from `65d6e69`.
+The tests include replay and pause sets, endpoint uncertainty, calibration,
+missing-event counters, sentence timing, and test-only pipeline observations.
+
+Six syntax-valid changes in disposable copies each gave a named test failure:
+
+- Accept mixed sets in a timing criterion.
+- Use 0 for unknown estimate uncertainty.
+- Ignore device clock uncertainty in calibration.
+- Ignore `loss_present` in completeness.
+- Use the opposite sentence margin sign.
+- Use a test-only event as a measurement endpoint.
+
+The sentence fixtures measure time from server text receipt.
+They check margins of 0, -50, and -200 ms, two stops, and 200 ms of full stop time.
+This is a server playback model, not a measured device result.
+The new sentence events are necessary in the pinned client before end-to-end input can run.
+
+The replay runner records counters before and after its samples.
+It waits 1000 ms before the end snapshot for late events.
+Missing counters or unknown times when a counter went back to 0 make completeness unsatisfactory.
+The fault runner ends at intent and marks its pipeline observations as test-only.
+Its TTS start value is `not_run`.
+No live bench call or hardware acceptance result is part of this change.

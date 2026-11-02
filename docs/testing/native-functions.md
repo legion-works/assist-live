@@ -118,6 +118,9 @@ The integration latency sensor uses end-decision to playback-start time and stay
 
 ## P1 report
 
+The [measurement report rules](measurement-rules.md) keep replay latency and pause criteria apart.
+They also give the checks for missing events and test-only pipeline observations.
+
 Replay `safe` and `fast` against the same baseline configuration and calibration revision.
 Pair baseline transcripts by recording ID and recording hash before word error rate computation.
 The default `safe` setting must decrease p50 last-voice-to-playback latency by a minimum of 40% in each nonempty reply group.

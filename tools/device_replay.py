@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Protocol, TypeGuard, cast
 from urllib.parse import urlsplit
 
+import aiohttp
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -35,6 +37,7 @@ from tools.corpus import (
     resolve_audio,
     text,
 )
+from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
 from tools.test_environment import (
     validate_intent_action_evidence,
     validate_run_evidence,
@@ -949,6 +952,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--acceptance", action="store_true")
     result.add_argument("--output", type=Path, required=True)
     result.add_argument("--clock-record", type=Path)
+    result.add_argument("--ha-url")
+    result.add_argument("--ha-token-file", type=Path)
+    result.add_argument("--integration-entry")
+    result.add_argument("--device-loss-entity")
     return result
 
 
@@ -1008,7 +1015,24 @@ async def run(
     )
     token = json.loads(Path(os.environ["ASSIST_LIVE_TOKEN_FILE"]).read_text())["token"]
     pending: list[tuple[Row, Row]] = []
-    async with AssistLiveClient(os.environ["ASSIST_LIVE_URL"], token) as client:
+    loss_options: dict[str, Any] = {
+        "satellites": [os.environ["ASSIST_LIVE_SATELLITE"]],
+        "ha_url": args.ha_url,
+        "ha_token_file": args.ha_token_file,
+        "integration_entry": args.integration_entry,
+        "device_entities": {
+            os.environ["ASSIST_LIVE_SATELLITE"]: args.device_loss_entity
+        }
+        if args.device_loss_entity
+        else {},
+        "server_url": os.environ["ASSIST_LIVE_URL"],
+        "server_token": token,
+    }
+    async with (
+        aiohttp.ClientSession() as loss_session,
+        AssistLiveClient(os.environ["ASSIST_LIVE_URL"], token) as client,
+    ):
+        loss_start = await capture_loss(loss_session, **loss_options)
         for profile in profiles:
             selection_error = None
             if selector is not None:
@@ -1029,6 +1053,7 @@ async def run(
                         "phase": args.phase,
                         "profile": profile,
                         "clip_id": label["id"],
+                        "set": label["set"],
                         "audio_sha256": label["audio_sha256"],
                         "split": args.split,
                         "frozen": frozen,
@@ -1044,6 +1069,8 @@ async def run(
                         "action_trace_complete": False,
                         "turn_type": "voice",
                         "server_clock": dict(clock),
+                        "loss_counters": {"start": loss_start, "end": None},
+                        "loss_unavailable": True,
                     }
                 )
                 try:
@@ -1083,6 +1110,14 @@ async def run(
                 args.output.write_text(
                     "".join(json.dumps(item) + "\n" for _, item in pending)
                 )
+        await asyncio.sleep(1.0)
+        loss_end = await capture_loss(loss_session, **loss_options)
+        loss_end["settle_ms"] = 1000
+        loss = loss_window(loss_start, loss_end)
+        for _, row in pending:
+            row["loss_counters"] = loss
+            for flag in LOSS_FLAGS:
+                row[flag] = loss[flag]
     try:
         records = load_corpus(evidence_path)
         evidence_error = None

@@ -21,6 +21,7 @@ def replies(count=50, start_error=100, end_error=100, uncertainty=10):
         row["turn_id"] = f"01900000-0000-7000-8000-{i:012x}"
         for event in row["events"]:
             event["turn_id"] = row["turn_id"]
+            event["uncertainty_ms"] = 0
         row["alignment"]["reply_start_utc_ns"] -= start_error * 1_000_000
         row["alignment"]["reply_end_utc_ns"] += end_error * 1_000_000
         rows.append(row)
