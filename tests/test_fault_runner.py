@@ -54,6 +54,26 @@ def test_pipeline_observations_keep_ids_from_intent_end_without_inventing_them()
     assert observed["intent_end"]["stage"] == "intent-end"
 
 
+def test_pipeline_observations_accept_events_without_data():
+    from tools.fault_runner import pipeline_observations
+
+    row = trial()
+    row["pipeline_request_id"] = 3
+    row["events"] = [
+        {"stage": "run-start", "data": {"run_id": "test-run"}},
+        {"stage": "intent-end", "data": {"intent_output": None}},
+        {"stage": "intent-progress", "data": None},
+        {"stage": "intent-progress", "data": {"chat_log_delta": None}},
+        {"stage": "run-end", "data": None},
+    ]
+    observed = pipeline_observations(row)
+    assert observed["run_id"] == "test-run", "events without data keep earlier ids"
+    assert observed["conversation_id"] is None
+    assert observed["first_agent_text_delta"] is None
+    assert observed["tool_call_deltas"] == []
+    assert observed["tool_result_deltas"] == []
+
+
 def test_acceptable_requires_only_a_trial_record():
     import inspect
 

@@ -3309,3 +3309,17 @@ Three mutations in different scratch copies each gave a named assertion failure 
 | Remove the voice check before save | `voice is revalidated against the new engine before save` |
 
 No bench change, deployment, cloud request, or hardware acceptance test is part of these checks.
+
+## Fault runner with HA pipeline events without data
+
+Date: 2026-11-02 (UTC).
+
+HA sends `data: null` for some pipeline events, for example `run-end`.
+The fault runner read `data` of each event as a mapping, and a trial with the Wyoming fallback STT engine stopped with `AttributeError` in `pipeline_observations`.
+After the change, the runner records `{}` for an event without data. It also reads `intent_output` and `chat_log_delta` as empty when they are not mappings.
+
+```sh
+uv run --locked pytest tests/test_fault_runner.py -q -k without_data
+```
+
+On `fcc3030`, this test gave `1 failed` with `AttributeError`. After the change, this test and the other fault-runner tests give no failure.

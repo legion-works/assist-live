@@ -481,32 +481,31 @@ async def fallback_snapshot(
         return None
 
 
+def mapping(value: object) -> Row:
+    # HA sends `data: null` for some pipeline events, for example `run-end`.
+    return value if isinstance(value, dict) else {}
+
+
 def pipeline_observations(row: Row) -> Row:
     events = row["events"]
     identifiers: Row = {}
     for event in events:
-        data = event.get("data", {})
-        for source in (data, data.get("intent_output", {})):
+        data = mapping(event.get("data"))
+        for source in (data, mapping(data.get("intent_output"))):
             for name in ("run_id", "conversation_id"):
                 if source.get(name) is not None:
                     identifiers.setdefault(name, source[name])
     progress = [e for e in events if e["stage"] == "intent-progress"]
+    deltas = [
+        (e, mapping(mapping(e.get("data")).get("chat_log_delta"))) for e in progress
+    ]
     text = [
         e
-        for e in progress
-        if e.get("data", {}).get("chat_log_delta", {}).get("content")
-        and e["data"]["chat_log_delta"].get("role", "assistant") == "assistant"
+        for e, delta in deltas
+        if delta.get("content") and delta.get("role", "assistant") == "assistant"
     ]
-    calls = [
-        e
-        for e in progress
-        if e.get("data", {}).get("chat_log_delta", {}).get("tool_calls")
-    ]
-    results = [
-        e
-        for e in progress
-        if "tool_result" in e.get("data", {}).get("chat_log_delta", {})
-    ]
+    calls = [e for e, delta in deltas if delta.get("tool_calls")]
+    results = [e for e, delta in deltas if "tool_result" in delta]
     return {
         "test_only": True,
         "turn_id": row["turn_id"],
@@ -687,7 +686,7 @@ async def pipeline_trial(
                     row["events"].append(
                         {
                             "stage": kind,
-                            "data": event.get("data", {}),
+                            "data": mapping(event.get("data")),
                             "t_utc_ns": time.time_ns(),
                             "source": "ha",
                             "request_id": message["id"],
@@ -709,7 +708,7 @@ async def pipeline_trial(
                             injection = asyncio.create_task(inject())
                     elif kind == "error":
                         row["failures"].append(
-                            event.get("data", {}).get("code", "pipeline_error")
+                            row["events"][-1]["data"].get("code", "pipeline_error")
                         )
                     elif kind == "run-end":
                         row["completed_utc_ns"] = time.time_ns()
