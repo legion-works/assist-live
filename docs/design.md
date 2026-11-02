@@ -344,6 +344,43 @@ Reports count unmatched events and show the TTS-only turns that P0 completeness 
 The server stores timing data in SQLite for 30 days by default and supplies metrics and JSON Lines export.
 It does not store audio. Transcript storage uses an explicit option.
 
+### Measurement rules
+
+Each `stage` value has one owner:
+
+| `stage` values | Owner when the server does the work | Owner when HA uses its fallback |
+|---|---|---|
+| `wake_detected`, `mic_open`, `playback_start`, `playback_end`, `barge_in` | device | device |
+| `speech_start`, `end_candidate`, `end_decision`, `stt_partial`, `stt_final` | server | integration |
+| `tts_first_text` | integration | integration |
+| `tts_first_byte`, `tts_sentence`, `tts_last_byte` | server | integration (`tts_first_byte` only) |
+| `fallback_used`, `turn_superseded` | integration | integration |
+| `satellite_state` | integration, with the source `ha_state` | integration, with the source `ha_state` |
+| `stt_failed`, `tts_failed` | server | integration |
+| `speaker_result`, `tts_text_received`, `unmatched` | server | server |
+| `stt_final_received`, `tts_audio_received`, all `late_result_*` values | integration | integration |
+
+- The integration records `stt_final_received` and `tts_audio_received` when it gets a server result. The server records `tts_text_received` when it gets the first text.
+- The server refuses an event from a part that is not the owner of its `stage` value. The response gives the named error `wrong_owner`. The sender removes a refused event, counts it, and sends the next event.
+- A turn has a maximum of 1024 stored events and 1 MiB of stored event data. The server refuses an event after these limits with the named error `turn_event_limit` or `turn_size_limit`.
+- The report uses only the event of the owner. Two events of one `stage` value from the owner give the named error `duplicate_stage`. The recognized transcript comes only from the `stt_final` event of the owner.
+- Each turn has a path: `server`, `fallback_stt`, `fallback_tts`, `fallback_both`, or `baseline`. A complete turn has each `stage` value that is necessary for its path, from the owner of each value.
+- If the server is not available, the integration keeps the turn open request and its events. It sends them when the server is available again. The server keeps the initial open time and marks the turn `late_open`.
+
+- The store keeps codes and numbers only. These are the fallback `reason` and `part`, the `end_decision` rule and source, the satellite state, `onset_ms`, and the TTS `request` number.
+- The start of the voice is the start of the turn audio (`mic_open` minus `pre_roll_ms`) plus `onset_ms`. The uncertainty of a step is the sum of the uncertainties of its two events. An estimate with no uncertainty gives an unknown step uncertainty, not 0.
+- Latency criteria use only the replay set, and pause criteria use only the pause set.
+- Each run records the counters of removed, missing, and unsent events at its start and end. If the report cannot attach a missing event to one turn, no completeness criterion of that run is satisfactory.
+
+Public HA interfaces do not give some values to the STT and TTS entities. These values are the conversation and pipeline run identifiers, the satellite, the first agent text, and tool times. The record keeps them empty in usual turns, and the report names the agent interval "agent and HA wait". A reply from the HA TTS cache does not go to the TTS entity, so the report shows its TTS source as `not_observed`. Test tools that start the pipeline run record these values as test results only.
+
+### TTS sentence timing
+
+- The server records one `tts_sentence` event for each sentence, at the time it sends the last audio byte of the sentence. The data has numbers only: `index`, `text_end`, `text_ms`, `first_byte_ms`, and `audio_ms`. The server measures `text_ms` and `first_byte_ms` from `tts_text_received` with its own clock.
+- At the end of the stream, `tts_last_byte` gives `sentences` (the number of sentences) and `audio_ms` (the full audio time). A turn has a maximum of 256 `tts_sentence` events.
+- For each sentence, the report gives the wait for the agent text (`text_ms` minus the `text_ms` of the sentence before it) and the provider time (`first_byte_ms` minus `text_ms`).
+- The report calculates the playback margin of each sentence from `tts_first_byte`. The margin is the audio time of all earlier sentences minus the time until the first audio byte of this sentence. A negative margin shows a stop in the reply.
+
 ## Late results (P2)
 
 `assist_live.deliver_response` accepts `job_id`, satellite, message, mode (`announce` or `ask`), optional `notify` fallback, and expiry.
