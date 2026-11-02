@@ -249,6 +249,43 @@ If the formats do not agree, the entity ends audio, records `tts_failed`, and fi
 An optional `notify` service receives the full reply.
 The integration does not run the conversation or device control again.
 
+### Spoken replies
+
+The integration has an `llm` platform.
+It gives a prompt part to the HA Assist API (`assist`) and no tools.
+It gives the prompt part only when the request comes from a satellite of the config entry.
+The prompt part tells the agent these rules:
+
+- The satellite speaks the reply aloud.
+- The reply has plain spoken sentences only. It has no Markdown marks, lists, headings, tables, web addresses, code, or emoji.
+- If the agent must get an answer from the user, the reply ends with one question.
+
+HA opens the microphone again only after a reply that ends with a question mark.
+The prompt part applies only when the conversation agent uses the Assist API.
+An agent that does not use the Assist API does not get it.
+The server text rules below apply to all agents.
+
+### Spoken text
+
+Before the server sends text to a TTS provider, it removes the Markdown marks that a person does not say.
+These rules apply to all TTS providers:
+
+- Remove these marks at the start of a line: `#` (heading), `>` (quotation), and the list marks `-`, `*`, `+`, `1.`, and `1)`.
+- Remove the lines that contain only `---`, `***`, or `___`. Remove the lines that start a code area or end it (`` ``` ``).
+- Remove emphasis marks (`*`, `**`, `_`, `__`, `~~`) and inline code marks (`` ` ``) only when they touch a word on one side and not on the other side. Thus `2 * 3` and `snake_case` do not change.
+- Change the Markdown text `[text](address)` to `text`, and `![text](address)` to `text`. Remove HTML tags. Remove table rows that contain only `|`, `-`, `:`, and spaces. Change a `|` between table cells to a comma.
+- The end of a heading line or a list line is the end of a sentence, also when the line has no end punctuation.
+
+Sentence markers, `text_end`, and the sentence timing events use the character positions of the request text, not of the changed text.
+Thus the HA fallback continues at the correct position.
+
+The rules work on streamed text.
+The server holds back a maximum of 2048 characters to find the end of `[text](address)`.
+If it cannot find the end, it sends the held characters without a change.
+The time is linear in the length of the text.
+If the changed text of a sentence has no letters or digits, the server does not send that sentence to the provider.
+The next sentence marker includes its characters.
+
 ## Provider and license selection
 
 Parakeet TDT 0.6B v2 through `onnx-asr` stays the local STT default until a streaming model satisfies replay tests.
