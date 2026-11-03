@@ -122,6 +122,12 @@ def validate(rows: list[Row], labels: list[Row]) -> list[str]:
                 or agreement
             ):
                 failures.append(f"{identifier}: pending transcript state")
+        elif row.get("status") == "unintelligible":
+            if (
+                row.get("source") != "person"
+                or row.get("correct_transcript") is not None
+            ):
+                failures.append(f"{identifier}: unintelligible transcript state")
         elif row.get("status") == "final":
             if not accepted_text(row.get("correct_transcript")):
                 failures.append(f"{identifier}: invalid correct text")
@@ -215,7 +221,8 @@ PAGE = r"""<!doctype html>
 <p>Play each recording. Write the words that you hear, not the prompt.
 A "Use" button copies that text into the input.
 Change the text if it is not correct.</p>
-<p>Keep an input empty if you cannot make a decision.
+<p>Select "Cannot understand" if you cannot understand the words.
+Keep an input empty if you have not made a decision.
 The page keeps your text in this browser if you reload it.
 Export JSON before you close the page.</p>
 <p><button id="export">Export JSON</button> <span id="count"></span></p>
@@ -224,9 +231,11 @@ Export JSON before you close the page.</p>
 <script>
 const rows = JSON.parse(document.getElementById('data').textContent);
 const inputs = new Map();
+const unclear = new Map();
 const key = row => 'correct-transcripts:' + row.row_sha256;
 const count = () => {
-  const written = [...inputs.values()].filter(input => input.value.trim()).length;
+  const written = rows.filter(row => inputs.get(row.id).value.trim() ||
+    unclear.get(row.id).checked).length;
   document.getElementById('count').textContent =
     written + ' of ' + rows.length + ' written';
   return written;
@@ -238,6 +247,15 @@ for (const row of rows) {
   const audio = document.createElement('audio'); audio.controls = true;
   audio.src = row.audio; section.append(audio);
   const input = document.createElement('input'); input.size = 90;
+  const choice = document.createElement('input'); choice.type = 'checkbox';
+  choice.checked = localStorage.getItem(key(row) + ':unintelligible') === 'true';
+  input.disabled = choice.checked;
+  unclear.set(row.id, choice);
+  choice.onchange = () => {
+    input.disabled = choice.checked;
+    localStorage.setItem(key(row) + ':unintelligible', String(choice.checked));
+    input.oninput();
+  };
   input.dataset.id = row.id;
   input.value = localStorage.getItem(key(row)) || '';
   input.oninput = () => {
@@ -249,26 +267,33 @@ for (const row of rows) {
     const p = document.createElement('p');
     const use = document.createElement('button'); use.textContent = 'Use';
     use.dataset.pick = name;
-    use.onclick = () => { input.value = text; input.oninput(); input.focus(); };
+    use.onclick = () => {
+      choice.checked = false; choice.onchange();
+      input.value = text; input.oninput(); input.focus();
+    };
     p.append(use, ' ' + name + ': ' + text); section.append(p);
   }
   const label = document.createElement('label'); label.textContent = 'Correct text: ';
   label.append(input); section.append(label);
+  const decision = document.createElement('label');
+  decision.append(choice, ' Cannot understand'); section.append(decision);
   document.getElementById('clips').append(section);
 }
 count();
 document.getElementById('export').onclick = () => {
   if (!count()) {
-    alert('No text is written. Nothing to export.');
+    alert('No decision is recorded. Nothing to export.');
     return;
   }
   const exported = rows.flatMap(row => {
     const input = inputs.get(row.id);
-    if (!input.value.trim()) return [];
+    const unintelligible = unclear.get(row.id).checked;
+    if (!input.value.trim() && !unintelligible) return [];
     return [{id: row.id, audio_sha256: row.audio_sha256, row_sha256: row.row_sha256,
-             correct_transcript: input.value.trim()}];
+             status: unintelligible ? 'unintelligible' : 'final',
+             correct_transcript: unintelligible ? null : input.value.trim()}];
   });
-  const blob = new Blob([JSON.stringify({version: 1, rows: exported})],
+  const blob = new Blob([JSON.stringify({version: 2, rows: exported})],
                         {type: 'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url;
@@ -313,25 +338,46 @@ def listening_page(
     output.write_text(PAGE.replace("__DATA__", encoded), encoding="utf-8")
 
 
+def mark_unintelligible(rows: list[Row], identifier: str) -> list[Row]:
+    _, clips = split_records(rows)
+    by_id = {row["id"]: row for row in clips}
+    if identifier not in by_id:
+        raise ValueError("unknown listening id")
+    if by_id[identifier]["status"] != "needs_listening":
+        raise ValueError("listening row is already final")
+    return [
+        rows[0],
+        *[
+            {
+                **row,
+                "status": "unintelligible",
+                "source": "person",
+                "correct_transcript": None,
+            }
+            if row["id"] == identifier
+            else row
+            for row in clips
+        ],
+    ]
+
+
 def import_listened(rows: list[Row], document: Any) -> list[Row]:
     if (
         not isinstance(document, dict)
         or set(document) != {"version", "rows"}
         or type(document["version"]) is not int
-        or document["version"] != 1
+        or document["version"] not in (1, 2)
         or not isinstance(document["rows"], list)
     ):
         raise ValueError("invalid listening export")
     _, clips = split_records(rows)
     by_id = {row["id"]: dict(row) for row in clips}
     seen = set()
+    fields = {"id", "audio_sha256", "row_sha256", "correct_transcript"}
+    if document["version"] == 2:
+        fields.add("status")
     for item in document["rows"]:
-        if not isinstance(item, dict) or set(item) != {
-            "id",
-            "audio_sha256",
-            "row_sha256",
-            "correct_transcript",
-        }:
+        if not isinstance(item, dict) or set(item) != fields:
             raise ValueError("invalid listening row")
         identifier = item["id"]
         if not isinstance(identifier, str) or identifier not in by_id:
@@ -346,12 +392,16 @@ def import_listened(rows: list[Row], document: Any) -> list[Row]:
             "row_sha256"
         ] != row_digest(row):
             raise ValueError("stale listening row")
-        if not accepted_text(item["correct_transcript"]):
+        status = item.get("status", "final")
+        if status == "unintelligible":
+            if item["correct_transcript"] is not None:
+                raise ValueError("unintelligible text must be null")
+        elif status != "final" or not accepted_text(item["correct_transcript"]):
             raise ValueError("correct text rejected by words rule")
         row.update(
             correct_transcript=item["correct_transcript"],
             source="person",
-            status="final",
+            status=status,
         )
     return [rows[0], *[by_id[row["id"]] for row in clips]]
 
@@ -359,7 +409,7 @@ def import_listened(rows: list[Row], document: Any) -> list[Row]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("from-engines", "listen", "import", "check"):
+    for name in ("from-engines", "listen", "import", "check", "mark-unintelligible"):
         command = commands.add_parser(name)
         command.add_argument("--labels", type=Path, required=True)
         command.add_argument("--data", type=Path, required=True)
@@ -371,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--output", type=Path, required=True)
         elif name == "import":
             command.add_argument("--input", type=Path, required=True)
+        elif name == "mark-unintelligible":
+            command.add_argument("--id", required=True)
     args = parser.parse_args(argv)
     try:
         labels = load_corpus(args.labels)
@@ -390,8 +442,12 @@ def main(argv: list[str] | None = None) -> int:
             write_data(args.data, rows)
         elif args.command == "listen":
             listening_page(labels, rows, args.audio_root, args.output)
-        elif args.command == "import":
-            updated = import_listened(rows, json.loads(args.input.read_text()))
+        elif args.command in ("import", "mark-unintelligible"):
+            updated = (
+                import_listened(rows, json.loads(args.input.read_text()))
+                if args.command == "import"
+                else mark_unintelligible(rows, args.id)
+            )
             failures = validate(updated, labels)
             if failures:
                 raise ValueError("; ".join(failures))

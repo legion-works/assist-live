@@ -2,7 +2,9 @@
 
 The project is experimental and has no release.
 
-`labels.jsonl` contains 250 human timer replay rows from Timers and Such v1.0.
+`labels.jsonl` contains 251 human timer replay rows from Timers and Such v1.0.
+One held-out row has `status=unintelligible`. The held-out set contains one more recording.
+
 `synthetic.jsonl` also contains 0 rows.
 The pause and prefix sets contain 0 rows.
 The committed digest file does not pin the imported rows.
@@ -184,6 +186,28 @@ The selection uses Python `random.Random` with seed `4662102`:
 8. Shuffle the remaining path-sorted training rows with seed `4662104`, then keep the first 50 rows.
 9. Sort the selected rows by project partition and source path.
 
+For each held-out recording with `status=unintelligible`, keep that recording and select one more recording.
+Continue the same shuffled order in its source part, without a new seed or a change to the session pool.
+The selection uses all 80 test timers, so that part has no more rows.
+
+For one more recording from that part, continue the held-out training order at position 121, then 122, and so on.
+Training-part replacements use that same continuation. Do not use the tuning pool.
+A tuning recording with `status=unintelligible` does not add a held-out recording.
+If a replacement gets `status=unintelligible`, select one more recording.
+
+`tools/timer_selection.py` uses this rule with the initial seeds and filter.
+It checks the archive hash and the correct-transcript data and pin before selection:
+
+```sh
+uv run --locked python tools/timer_selection.py --archive "$TIMER_ARCHIVE" --labels tests/data/labels.jsonl --correct-transcripts tests/data/correct_transcripts.jsonl --output "$REVIEW_DIR/selected.jsonl"
+```
+
+The output contains source rows, `split` assignments, and one-based positions in each part's selection order.
+Keep it external to Git. Use the same import and boundary procedures for the new WAVs and corpus records.
+
+Keep the energy parameters unchanged. Run the two transcript engines on each new recording before a freeze.
+If a pool does not have sufficient rows, selection stops with an error. A different rule must have approval.
+
 Recording IDs use `tas-v1-` plus the first 20 hexadecimal digits of the source-path SHA-256.
 Speaker IDs use `speaker-` plus the first 16 hexadecimal digits of the source-session-ID SHA-256.
 
@@ -220,9 +244,9 @@ Each correct-transcript row has these fields:
 |---|---|
 | `id` | One unique row for each recording ID, with no other IDs |
 | `audio_sha256` | The label's complete WAV SHA-256 |
-| `correct_transcript` | Text accepted by `words`, or `null` before a person's decision |
-| `status` | `final` or `needs_listening` |
-| `source` | `engines_agree` or `person` for `status=final`, or `null` for `status=needs_listening` |
+| `correct_transcript` | Text accepted by `words` for `final`, or `null` for `needs_listening` and `unintelligible` |
+| `status` | `final`, `needs_listening`, or `unintelligible` |
+| `source` | `engines_agree` or `person` for `final`, `person` for `unintelligible`, or `null` for `needs_listening` |
 | `engines` | Two objects, each with `transcript` and an `engine` name from the header |
 
 Each engine identity gives its `family`, `model`, `code_commit`, `model_files` list, and `settings`.
@@ -260,9 +284,13 @@ The page contains only `needs_listening` rows, with embedded audio, the prompt, 
 Its audio check uses `tools/annotate_corpus.py:audio_info`.
 Keep the page external to Git because it contains audio.
 Play each recording and write the words that you hear, not the prompt words.
-Keep an input empty when you cannot make a decision.
 
-Export JSON before you close the page. The page does not save browser state.
+Select **Cannot understand** when you cannot understand the words.
+This selection exports `status=unintelligible` with null correct text.
+Keep an input empty when you have not made a decision.
+
+Export JSON before you close the page. The page keeps text and selections in local browser storage.
+The page exports version 2. Import also accepts version 1 text exports.
 
 Back up the data file and its pin before import:
 
@@ -273,16 +301,31 @@ uv run --locked python tools/correct_transcripts.py import --labels tests/data/l
 Import checks the export version, fields, unique known IDs, audio hashes, and row digests before a write.
 The review commands also check the data pin before use.
 
-Import rejects empty text and text with no tokens from `words`.
-It also rejects a stale row or a row with `status=final`.
-Each accepted row becomes `source=person` and `status=final`. The two engine records stay unchanged.
+For `status=final`, import rejects empty text and text with no tokens from `words`.
+For `status=unintelligible`, correct text must be null.
+Import also rejects a stale row or a row without `status=needs_listening`.
+Each accepted row becomes `source=person` with the selected status. The two engine records stay unchanged.
 Unreviewed rows stay pending.
+
+To record a person's decision without the page, use this command:
+
+```sh
+uv run --locked python tools/correct_transcripts.py mark-unintelligible --labels tests/data/labels.jsonl --data tests/data/correct_transcripts.jsonl --id "$RECORDING_ID"
+```
+
+The command refuses unknown IDs and rows with `status=final` or `status=unintelligible`.
+It sets `source=person`, `status=unintelligible`, and `correct_transcript=null`. The two engine records stay unchanged.
 
 The command updates the data pin, not the corpus freeze.
 
 The report command checks the pin before it reads this file for P1 `accuracy`.
+
 `--correct-transcripts` selects a different checked file with its adjacent `.sha256` pin.
-Without `status=final` for a measured recording, `accuracy` and word error rate are unavailable.
+
+`accuracy` and word error rate do not use `unintelligible` recordings in their numerator or denominator.
+Each JSON and Markdown report gives their recording count for each partition, also when the count is 0.
+Latency measurements continue to use these recordings.
+Without `status=final` for a different measured recording, `accuracy` and word error rate are unavailable.
 Their gates give unsatisfactory results. They do not use the prompt as an alternative.
 
 ### HA intent mapping

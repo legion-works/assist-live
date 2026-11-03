@@ -268,7 +268,7 @@ def test_committed_transcripts_match_labels_and_digest():
     labels = load_corpus(ROOT / "tests/data/labels.jsonl")
     path = ROOT / "tests/data/correct_transcripts.jsonl"
     rows = load_corpus(path)
-    assert len(rows) == 251
+    assert len(rows) == 252
     assert len(rows[0]["engine_identities"]) == 2
     assert not module.validate(rows, labels)
     assert module.check_digest(path)

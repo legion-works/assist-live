@@ -3565,3 +3565,68 @@ Three syntax-valid scratch mutations each gave a named assertion failure:
 - Count an invalid test run as `failed`: `INVALID_NOT_IN_DENOMINATOR`.
 
 No bench change or hardware acceptance result is part of this record.
+
+## Listened transcripts and an `unintelligible` replacement
+
+Date: 2026-11-03 (UTC).
+
+The person import accepted 28 correct transcripts from the listening export.
+Each imported text and audio hash agrees with the export.
+The remaining export row contained a comment, not a transcript. Its text was not imported.
+The operator could not understand the words in recording `tas-v1-a73c7d2f8a71335c7bf9`, also at 27 times its volume.
+It has `status=unintelligible`, `source=person`, and null correct text.
+
+The checker accepts this state only with a person as its source and no correct text.
+The mark command refuses unknown IDs and rows without `status=needs_listening`.
+The listening page exports this selection in version 2. Import also accepts version 1 text exports.
+
+Correct-command `accuracy` and the two word-error-rate paths do not use these rows in their numerator or denominator.
+JSON and Markdown reports give their recording counts for each partition. Latency measurements keep these recordings.
+Pending rows continue to make `accuracy` and word error rate unavailable.
+
+The unchanged source-selection rule reproduced all 250 initial recording IDs and `split` assignments.
+The unintelligible recording is test-real position 73. The selection uses all 80 test timers.
+The approved rule thus continues the held-out train-real order at position 121, with seed `4662103`.
+Training-part replacements continue that same order. The tuning pool stays unchanged.
+
+The new recording is `tas-v1-bfb8bfffb556002b48f5`.
+Its WAV SHA-256 is `2669ac39a650473a7086064478dd3f0273b9c6414cfb686d2da6b7e8c7487e28`.
+The private archive contains the unchanged WAV bytes, with directory mode `700` and file mode `600`.
+The import kept all previous audio.
+
+The engines used the model-file pins and settings from the earlier correct-transcript record:
+
+- Parakeet: "Start the timer for one minute and five seconds."
+- Whisper large-v3: "Start the timer for 1 minute and 5 seconds."
+
+The token lists agree, so this row is `final` with `source=engines_agree`.
+The source prompt and intent stay unchanged.
+The aligner used `MMS_FA` and the initial tuning-only energy parameters, without a new calibration.
+
+The new row keeps its boundary-difference, low-confidence, and transcript-mismatch review flags.
+Its energy boundary is sample `37439`. Its aligned boundary is sample `39036`.
+Manual boundary review is necessary before a freeze.
+
+| Split | Recordings | Engine agreement | Person text | Unintelligible | Pending |
+|---|---:|---:|---:|---:|---:|
+| held_out | 201 | 177 | 23 | 1 | 0 |
+| tuning | 50 | 45 | 5 | 0 | 0 |
+
+The held-out set contains 200 correct transcripts. No correct transcript is missing.
+The correct-transcript file pin is `018221bfa7eda0fe099cb2ac2daa4172329c25a17fbef21e0cc869dbc6aa163c`.
+The 250 previous corpus records stay unchanged. The data pin changed, not the M01 freeze.
+
+`tests/data/corpus.sha256` stays unchanged because pause supply, prefix supply, and boundary review are not complete.
+The corpus check gives replay counts of 201 and 50, and five pause or prefix failures. It refuses a freeze.
+
+Before implementation, the new tests gave six failures against `a402c6b`.
+The corpus, transcript, and report tests then gave `335 passed`.
+The unchanged scratch control gave `6 passed`.
+Three syntax-valid scratch mutations each gave a named assertion failure:
+
+- Count an unintelligible recording as an error: `UNINTELLIGIBLE_COUNTED_AS_ERROR`.
+- Remove the report count: `UNINTELLIGIBLE_REPORT_COUNT_MISSING`.
+- Select a replacement from a different session pool: `REPLACEMENT_FROM_ANOTHER_PART`.
+
+A local page test checked the empty-export refusal, null-text status export, saved selection, and text-button state change.
+No bench change or hardware acceptance result is part of this record.

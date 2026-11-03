@@ -491,12 +491,13 @@ def build_report(
             raise ReplayError(
                 "INVALID_CORRECT_TRANSCRIPTS: " + "; ".join(transcript_errors)
             )
-    references = {
-        row["id"]: final_text(row)
-        for row in (
-            split_records(correct_transcripts)[1] if correct_transcripts else []
-        )
+    transcript_rows = (
+        split_records(correct_transcripts)[1] if correct_transcripts else []
+    )
+    unintelligible = {
+        row["id"] for row in transcript_rows if row["status"] == "unintelligible"
     }
+    references = {row["id"]: final_text(row) for row in transcript_rows}
     rows = [{**row, "set": by_id[row["clip_id"]]["set"]} for row in rows]
     for row in rows:
         counters = row.get("loss_counters", {})
@@ -552,6 +553,13 @@ def build_report(
         "calibration_revision": revision,
         "sample_count": len(primary),
         "input_count": len(rows),
+        "unintelligible": {
+            split: sum(
+                label["id"] in unintelligible and label.get("split") == split
+                for label in labels
+            )
+            for split in ("held_out", "tuning")
+        },
         "exclusions": excluded,
         "profiles": profiles,
         "rows": [
@@ -642,18 +650,21 @@ def build_report(
         prefix_result = rate(
             sum(row.get("pause_cut", True) for row in prefix), len(prefix)
         )
+        measured_replay = [
+            row for row in replay if row["clip_id"] not in unintelligible
+        ]
         correct = sum(
             evidence_complete(row)
             and references.get(row["clip_id"]) is not None
             and words(row["recognized_transcript"])
             == words(references[row["clip_id"]] or "")
             and intent_matches(row["evaluated_intent"], by_id[row["clip_id"]]["intent"])
-            for row in replay
+            for row in measured_replay
         )
-        accuracy = rate(correct, len(replay))
+        accuracy = rate(correct, len(measured_replay))
         accuracy["unavailable"] = sum(
             not evidence_complete(row) or references.get(row["clip_id"]) is None
-            for row in replay
+            for row in measured_replay
         )
         if accuracy["unavailable"]:
             accuracy["rate"] = None
@@ -661,7 +672,7 @@ def build_report(
         wrong = rate(sum(item is not True for item in operations), len(operations))
         wrong["unavailable"] = sum(item is None for item in operations)
         errors = total = baseline_errors = unavailable_wer = 0
-        for row in replay:
+        for row in measured_replay:
             reference = references.get(row["clip_id"])
             if (
                 reference is None
@@ -771,6 +782,9 @@ def markdown(report: Row) -> str:
                     f"{timing_data['missing']} | {timing_data['p50_ms']} | "
                     f"{timing_data['p90_ms']} | {timing_data['quality']} |"
                 )
+    lines.extend(["", "| Split | Unintelligible recordings |", "|---|---:|"])
+    for split, count in report["unintelligible"].items():
+        lines.append(f"| {split} | {count} |")
     lines.extend(
         [
             "",
