@@ -10,6 +10,8 @@ if __package__ in (None, ""):
 
 from tools.calibrate_playback import percentile
 from tools.corpus import load_corpus
+from tools.correct_transcripts import check_digest, final_text, split_records
+from tools.correct_transcripts import validate as validate_transcripts
 from tools.device_replay import (
     DEVICE_STAGES,
     RUN_FIELDS,
@@ -464,6 +466,7 @@ def build_report(
     baseline: Row | None = None,
     faults: Row | None = None,
     latency_profile: str = "safe",
+    correct_transcripts: list[Row] | None = None,
 ) -> Row:
     if latency_profile != "safe":
         raise ReplayError("DEFAULT_SAFE_PROFILE_REQUIRED")
@@ -482,6 +485,18 @@ def build_report(
     ]
     validate_rows(rows, labels, phase)
     by_id = {label["id"]: label for label in labels}
+    if correct_transcripts is not None:
+        transcript_errors = validate_transcripts(correct_transcripts, labels)
+        if transcript_errors:
+            raise ReplayError(
+                "INVALID_CORRECT_TRANSCRIPTS: " + "; ".join(transcript_errors)
+            )
+    references = {
+        row["id"]: final_text(row)
+        for row in (
+            split_records(correct_transcripts)[1] if correct_transcripts else []
+        )
+    }
     rows = [{**row, "set": by_id[row["clip_id"]]["set"]} for row in rows]
     for row in rows:
         counters = row.get("loss_counters", {})
@@ -629,20 +644,29 @@ def build_report(
         )
         correct = sum(
             evidence_complete(row)
+            and references.get(row["clip_id"]) is not None
             and words(row["recognized_transcript"])
-            == words(by_id[row["clip_id"]]["transcript"])
+            == words(references[row["clip_id"]] or "")
             and intent_matches(row["evaluated_intent"], by_id[row["clip_id"]]["intent"])
             for row in replay
         )
         accuracy = rate(correct, len(replay))
-        accuracy["unavailable"] = sum(not evidence_complete(row) for row in replay)
+        accuracy["unavailable"] = sum(
+            not evidence_complete(row) or references.get(row["clip_id"]) is None
+            for row in replay
+        )
+        if accuracy["unavailable"]:
+            accuracy["rate"] = None
         operations = [operation_matches(row, by_id[row["clip_id"]]) for row in safe]
         wrong = rate(sum(item is not True for item in operations), len(operations))
         wrong["unavailable"] = sum(item is None for item in operations)
         errors = total = baseline_errors = unavailable_wer = 0
         for row in replay:
-            if not evidence_complete(row) or not isinstance(
-                row.get("baseline_transcript"), str
+            reference = references.get(row["clip_id"])
+            if (
+                reference is None
+                or not evidence_complete(row)
+                or not isinstance(row.get("baseline_transcript"), str)
             ):
                 unavailable_wer += 1
                 continue
@@ -653,12 +677,8 @@ def build_report(
                 or paired.get("reply_group") != row["reply_group"]
             ):
                 raise ReplayError("PAIRED_BASELINE_TRANSCRIPT_MISMATCH")
-            distance, count = word_errors(
-                by_id[row["clip_id"]]["transcript"], row["recognized_transcript"]
-            )
-            baseline_distance, _ = word_errors(
-                by_id[row["clip_id"]]["transcript"], row["baseline_transcript"]
-            )
+            distance, count = word_errors(reference, row["recognized_transcript"])
+            baseline_distance, _ = word_errors(reference, row["baseline_transcript"])
             errors += distance
             total += count
             baseline_errors += baseline_distance
@@ -772,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--split", choices=("held_out",), required=True)
         command.add_argument("--markdown", type=Path)
         command.add_argument("--check", action="store_true")
+        command.add_argument("--correct-transcripts", type=Path)
         if phase == "p1":
             command.add_argument("--baseline", type=Path, required=True)
             command.add_argument("--faults", type=Path, required=True)
@@ -781,6 +802,14 @@ def main(argv: list[str] | None = None) -> int:
         labels = load_corpus(args.labels)
         if not frozen_corpus(args.labels, args.labels.parent / "corpus.sha256", labels):
             raise ReplayError("BLOCKED corpus not frozen")
+        transcript_path = (
+            args.correct_transcripts or args.labels.parent / "correct_transcripts.jsonl"
+        )
+        correct_transcripts = None
+        if args.phase == "p1" and transcript_path.exists():
+            if not check_digest(transcript_path):
+                raise ReplayError("CORRECT_TRANSCRIPT_DIGEST_MISMATCH")
+            correct_transcripts = load_corpus(transcript_path)
         report = build_report(
             args.phase,
             load_corpus(args.runs),
@@ -791,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.phase == "p1"
             else None,
             faults=json.loads(args.faults.read_text()) if args.phase == "p1" else None,
+            correct_transcripts=correct_transcripts,
         )
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         if args.markdown:

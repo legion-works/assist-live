@@ -39,7 +39,7 @@ The CLI also checks files, records, and the freeze.
 | `alignment_frame_samples` | Archive rows must contain a finite, positive number of waveform samples for each aligner frame, not a boolean. |
 | `alignment_transcript` | Archive rows must contain a non-empty array of normalized known-transcript word strings. Each word uses lowercase ASCII letters with optional internal apostrophes. |
 | `last_voice_annotator_note` | Manual note object with an anonymous `annotator` code, `transcript_differs`, and `transcript_note` |
-| `transcript` | Correct, non-empty transcript |
+| `transcript` | Non-empty source prompt, not the `accuracy` input text |
 | `intent` | Object with an HA intent `name` from the pinned name set and a `slots` object |
 | `executable_prefix` | Boolean, `true` only for a pause command with an executable prefix |
 | `pause_intervals_ms` | Non-empty list of `[start_ms, end_ms]` pairs for pause rows, missing or `[]` for replay rows |
@@ -197,6 +197,93 @@ That separation is correct only if the reports are truthful. Different session I
 
 The source CSV transcript is a prompt, not a manually checked transcript of each recording.
 Timer-only results do not show precision for other HA domains.
+
+### Correct transcripts
+
+`tests/data/labels.jsonl` keeps the source prompt and intent without changes.
+The `accuracy` result uses `tests/data/correct_transcripts.jsonl`, not that prompt.
+Its SHA-256 is in `tests/data/correct_transcripts.sha256`.
+This pin does not freeze the corpus or give approval for its voice boundaries.
+
+Two STT engines from different model families transcribe each complete source recording without name hints.
+The text rule is `tools/result_text.py:words`.
+If the two token lists agree and contain words, their transcript gets `status=final`.
+If they do not agree, a person must listen and write the correct text.
+The intent record stays unchanged, also when the spoken words are different from the prompt.
+
+The first row is a header with `kind=engines` and an `engine_identities` object.
+This object maps two engine names to their identities.
+The file must contain one header before all recording rows.
+Each correct-transcript row has these fields:
+
+| Field | Contract |
+|---|---|
+| `id` | One unique row for each recording ID, with no other IDs |
+| `audio_sha256` | The label's complete WAV SHA-256 |
+| `correct_transcript` | Text accepted by `words`, or `null` before a person's decision |
+| `status` | `final` or `needs_listening` |
+| `source` | `engines_agree` or `person` for `status=final`, or `null` for `status=needs_listening` |
+| `engines` | Two objects, each with `transcript` and an `engine` name from the header |
+
+Each engine identity gives its `family`, `model`, `code_commit`, `model_files` list, and `settings`.
+Each file record has `file` and `file_sha256` fields.
+Model hashes identify the actual local files, not a model name alone.
+A row with `source=engines_agree` must have the same tokens as the two engine transcripts.
+The checker rejects unknown fields, duplicate IDs, inconsistent states, and engines from the same family.
+It also rejects a recording row that names an engine missing from the header.
+
+Keep model execution external to the repository and CI.
+Check audio through `tools/corpus.py:check_audio` and resolve it through `resolve_audio` before the engines run.
+Each engine output is JSON Lines with `id`, `audio_sha256`, `transcript`, and `engine` on each row.
+The two output files must contain all recording IDs and their hashes, without other IDs.
+See [Verification](../verification.md#correct-transcripts-for-replay) for the engine pins and decode commands.
+
+Build the data file from the two output files:
+
+```sh
+uv run --locked python tools/correct_transcripts.py from-engines --labels tests/data/labels.jsonl --engine-a "$PARAKEET_OUTPUT" --engine-b "$WHISPER_OUTPUT" --data tests/data/correct_transcripts.jsonl
+uv run --locked python tools/correct_transcripts.py check --labels tests/data/labels.jsonl --data tests/data/correct_transcripts.jsonl
+```
+
+`from-engines` refuses to replace a data file.
+It writes the SHA-256 pin with the data file.
+Keep engine outputs for subsequent checks.
+Do not change engine settings after you examine held-out errors.
+
+Make the self-contained listening page external to Git:
+
+```sh
+uv run --locked python tools/correct_transcripts.py listen --labels tests/data/labels.jsonl --data tests/data/correct_transcripts.jsonl --audio-root "$CORPUS_AUDIO" --output "$REVIEW_DIR/correct-transcripts.html"
+```
+
+The page contains only `needs_listening` rows, with embedded audio, the prompt, and the two engine texts.
+Its audio check uses `tools/annotate_corpus.py:audio_info`.
+Keep the page external to Git because it contains audio.
+Play each recording and write the words that you hear, not the prompt words.
+Keep an input empty when you cannot make a decision.
+
+Export JSON before you close the page. The page does not save browser state.
+
+Back up the data file and its pin before import:
+
+```sh
+uv run --locked python tools/correct_transcripts.py import --labels tests/data/labels.jsonl --data tests/data/correct_transcripts.jsonl --input "$LISTENING_JSON"
+```
+
+Import checks the export version, fields, unique known IDs, audio hashes, and row digests before a write.
+The review commands also check the data pin before use.
+
+Import rejects empty text and text with no tokens from `words`.
+It also rejects a stale row or a row with `status=final`.
+Each accepted row becomes `source=person` and `status=final`. The two engine records stay unchanged.
+Unreviewed rows stay pending.
+
+The command updates the data pin, not the corpus freeze.
+
+The report command checks the pin before it reads this file for P1 `accuracy`.
+`--correct-transcripts` selects a different checked file with its adjacent `.sha256` pin.
+Without `status=final` for a measured recording, `accuracy` and word error rate are unavailable.
+Their gates give unsatisfactory results. They do not use the prompt as an alternative.
 
 ### HA intent mapping
 

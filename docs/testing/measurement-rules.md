@@ -30,6 +30,14 @@ A timing criterion with the two sets gives `MIXED_CRITERION_SETS`.
 
 Wrong-action checks use the two sets, as specified in the design.
 
+## Correct transcripts
+
+P1 `accuracy` and the two word-error-rate paths use the correct transcript with `status=final`, not the source prompt.
+The [corpus contract](corpus.md#correct-transcripts) specifies engine agreement and listening review.
+The intent check uses the corpus intent record without changes.
+If a measured recording has no correct transcript with `status=final`, the report marks `accuracy` and word error rate as unavailable.
+Their gates give unsatisfactory results, also when the recognized text agrees with the prompt.
+
 ## Uncertainty
 
 A step adds the uncertainty of its two endpoints.

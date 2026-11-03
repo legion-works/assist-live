@@ -135,9 +135,41 @@ def test_report_refuses_invalid_history_before_statistics(history, incomplete):
 def build(rows, labels, **kwargs):
     from tools.report import build_report
 
+    kwargs.setdefault("correct_transcripts", transcript_references(labels))
     return build_report(
         rows[0]["phase"], rows, labels, calibration(), observed_rows(), **kwargs
     )
+
+
+def transcript_references(labels):
+    identities = {
+        family: {
+            "family": family,
+            "model": family + "-fixture",
+            "code_commit": "a" * 40,
+            "model_files": [{"file": "model.bin", "file_sha256": "b" * 64}],
+            "settings": "test fixture",
+        }
+        for family in ("parakeet", "whisper")
+    }
+    clips = [
+        {
+            "id": label["id"],
+            "audio_sha256": label["audio_sha256"],
+            "correct_transcript": label["transcript"],
+            "status": "final",
+            "source": "engines_agree",
+            "engines": [
+                {
+                    "transcript": label["transcript"],
+                    "engine": family,
+                }
+                for family in ("parakeet", "whisper")
+            ],
+        }
+        for label in labels
+    ]
+    return [{"kind": "engines", "engine_identities": identities}, *clips]
 
 
 def test_incomplete_rows_and_missing_events_are_not_excluded():
@@ -409,7 +441,14 @@ def test_each_p1_gate_has_a_known_failing_fixture(acceptance, gate):
     else:
         rows.pop(0)
     result = build_report(
-        "p1", rows, labels, cal, native, baseline=baseline, faults=faults
+        "p1",
+        rows,
+        labels,
+        cal,
+        native,
+        baseline=baseline,
+        faults=faults,
+        correct_transcripts=transcript_references(labels),
     )
     assert not result["gates"][gate]
     assert not result["accepted"]
@@ -498,12 +537,14 @@ def test_cli_check_writes_reports_only_after_validating(tmp_path, capsys):
     assert not paths["output"].exists()
 
 
-def test_p1_emitted_word_method_describes_shared_rule(tmp_path, acceptance):
+def test_p1_emitted_word_method_describes_shared_rule(tmp_path, acceptance, capsys):
     import hashlib
 
+    from tools.correct_transcripts import write_data
     from tools.report import main
 
     labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    write_data(tmp_path / "correct_transcripts.jsonl", transcript_references(labels))
     paths = {
         name: tmp_path / (name + ".json")
         for name in (
@@ -543,6 +584,10 @@ def test_p1_emitted_word_method_describes_shared_rule(tmp_path, acceptance):
         "lowercase; punctuation removed; English number words to digits; "
         "Levenshtein distance over those tokens"
     )
+    reference_path = tmp_path / "correct_transcripts.jsonl"
+    reference_path.write_text(reference_path.read_text() + "\n")
+    assert main(args) == 1, "REPORT_ACCEPTED_CHANGED_DATA_WITH_STALE_PIN"
+    assert "CORRECT_TRANSCRIPT_DIGEST_MISMATCH" in capsys.readouterr().out
 
 
 def test_explicit_failed_attempt_with_missing_operation_evidence_fails_both_gates(
@@ -613,9 +658,11 @@ def test_p1_cli_uses_the_safe_gate_in_the_acceptance_command(
 ):
     import hashlib
 
+    from tools.correct_transcripts import write_data
     from tools.report import main
 
     labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    write_data(tmp_path / "correct_transcripts.jsonl", transcript_references(labels))
     paths = {
         key: tmp_path / (key + ".json")
         for key in (

@@ -3350,3 +3350,159 @@ After the repair, `uv run --locked pytest tests/test_fault_runner.py tests/test_
 `uv run --locked mypy` gave no issues in 33 source files.
 Scratch mutations gave named assertion failures: use of the prompt, the other engine's baseline, and a stop at the window edge.
 No bench trial ran for this change. These unit results do not prove hardware acceptance.
+
+## Correct transcripts for replay
+
+Date: 2026-11-03 (UTC).
+
+Two model families transcribed all 250 complete Timers and Such replay recordings without name hints.
+The audio paths and complete WAV hashes gave satisfactory results from `tools/corpus.py:check_audio` before each run.
+The two engines used `resolve_audio` to select the files.
+No recording, prompt, intent, partition, or corpus-freeze record changed.
+
+The agreement rule is `tools/result_text.py:words`, not equality with the source prompt.
+The data file is `tests/data/correct_transcripts.jsonl`.
+Its SHA-256 is `c73c94a1d5106bb93cbc0a2b234a06fe0dd6996066d402c0f820ff9e32be25da`.
+`tests/data/correct_transcripts.sha256` records this pin independently from the unfinished corpus freeze.
+
+| Partition | Recordings | Engines agree | Needs listening | Agreed text different from prompt |
+|---|---:|---:|---:|---:|
+| All | 250 | 221 | 29 | 42 |
+| `tuning` | 50 | 45 | 5 | 11 |
+| `held_out` | 200 | 176 | 24 | 31 |
+
+The 221 agreement rows have `source=engines_agree` and `status=final`.
+The 29 other rows have `source=null`, `correct_transcript=null`, and `status=needs_listening`.
+No row claims a person's listening decision.
+The self-contained review page contains those 29 recordings.
+The `accuracy` gates stay unavailable for measured recordings without a correct transcript with `status=final`.
+
+### Engine identities
+
+Parakeet used the server's complete-buffer `_decode_final` with its default beam search and no name hints.
+Its code commit is `35b715c6dc46d8e390890caf2a0bc6bdb1b067fa`.
+The source came from `git archive`, not the server's working files.
+The model is `nvidia/parakeet-tdt-0.6b-v2`, with CPU int8 ONNX files.
+
+Whisper used `Systran/faster-whisper-large-v3` at model revision `edaa852ec7e145841d8ffdb056a99866b5f0a478`.
+The installed `faster-whisper==1.2.1` release has source commit `65882eee9f5cdbeeb2d877f1131d48cf241b327d`.
+The release tag resolves to that commit in the upstream repository.
+Its settings were CPU int8, `cpu_threads=4`, `num_workers=1`, beam size 5, English, and temperature 0.
+VAD, previous-text context, prompts, and name hints were off.
+
+The shared scratch runtime had `onnx-asr==0.12.0`, `onnxruntime==1.31.0`, `numpy==2.5.4`, `ctranslate2==4.8.4`, and `tokenizers==0.23.3`.
+The first data row has `kind=engines` and keeps the two engine identities, settings, and model file hashes below.
+Recording rows name those engines. The file pin includes the header and all recording rows.
+
+| Engine | File | SHA-256 |
+|---|---|---|
+| Parakeet | `config.json` | `666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466` |
+| Parakeet | `vocab.txt` | `ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d` |
+| Parakeet | `encoder-model.int8.onnx` | `3e0581fda6ab843888b51e56d7ee78b6d5bc3237ec113af1f732d1d5286aa155` |
+| Parakeet | `decoder_joint-model.int8.onnx` | `a449f49acd68979d418651dd2dcb737cc0f1bf0225e009e29ee326354edbf7d3` |
+| Whisper | `config.json` | `a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9` |
+| Whisper | `model.bin` | `69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1` |
+| Whisper | `preprocessor_config.json` | `7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711` |
+| Whisper | `tokenizer.json` | `6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca` |
+| Whisper | `vocabulary.json` | `c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1` |
+
+### Decode commands
+
+Model execution stays external to the repository and CI.
+Set `STT_PYTHON` to the scratch Python runtime with the versions above.
+Set `PARAKEET_CACHE` to its checked model directory and `WHISPER_SNAPSHOT` to its checked large-v3 snapshot directory.
+Set `CORPUS_AUDIO` to the external audio root and `RUNROOT` to scratch.
+Set `SERVER_REPO` to the server repository and `SERVER_SOURCE` to an empty scratch directory.
+Set `IDLE_RUN` to the local idle-CPU command wrapper.
+
+Read the pinned source into scratch:
+
+```sh
+git -C "$SERVER_REPO" archive --output="$RUNROOT/server.tar" 35b715c6dc46d8e390890caf2a0bc6bdb1b067fa
+tar -xf "$RUNROOT/server.tar" -C "$SERVER_SOURCE"
+export PYTHONPATH="$SERVER_SOURCE/server:$SERVER_SOURCE/client:$PWD"
+```
+
+This command runs the same decode paths and writes compatible engine outputs.
+It reads engine identities from the committed data and checks the model bytes before use.
+Run it from the integration repository with the settings above exported:
+
+```sh
+"$IDLE_RUN" "$STT_PYTHON" - <<'PY'
+import asyncio
+import hashlib
+import json
+import os
+import wave
+from pathlib import Path
+import numpy as np
+from faster_whisper import WhisperModel
+from assist_live_server.providers.parakeet import ParakeetProvider
+from tools.corpus import check_audio, load_corpus, resolve_audio
+
+labels = load_corpus(Path("tests/data/labels.jsonl"))
+root = Path(os.environ["CORPUS_AUDIO"])
+assert not check_audio(labels, root)
+records = load_corpus(Path("tests/data/correct_transcripts.jsonl"))
+identities = list(records[0]["engine_identities"].values())
+for name, identity, variable in zip(
+    ("parakeet", "whisper"), identities,
+    ("PARAKEET_CACHE", "WHISPER_SNAPSHOT"), strict=True,
+):
+    cache = Path(os.environ[variable])
+    for pin in identity["model_files"]:
+        with (cache / pin["file"]).open("rb") as stream:
+            assert hashlib.file_digest(stream, "sha256").hexdigest() == pin["file_sha256"]
+    if name == "parakeet":
+        manifest = Path(os.environ["SERVER_SOURCE"]) / "assets/manifest.json"
+        provider = asyncio.run(ParakeetProvider.load(cache, manifest))
+    else:
+        model = WhisperModel(str(cache), device="cpu", compute_type="int8",
+                             cpu_threads=4, num_workers=1, local_files_only=True)
+    output = Path(os.environ["RUNROOT"]) / (name + ".jsonl")
+    with output.open("w") as stream:
+        for label in labels:
+            with wave.open(str(resolve_audio(root, label["audio_path"]))) as wav:
+                pcm = wav.readframes(wav.getnframes())
+            if name == "parakeet":
+                text = provider._decode_final(pcm)
+            else:
+                audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / np.float32(32768)
+                segments, _ = model.transcribe(
+                    audio, language="en", beam_size=5, temperature=0,
+                    vad_filter=False, condition_on_previous_text=False,
+                )
+                text = " ".join(segment.text.strip() for segment in segments)
+            stream.write(json.dumps(dict(id=label["id"],
+                audio_sha256=label["audio_sha256"], transcript=text,
+                engine=identity)) + "\n")
+PY
+"$IDLE_RUN" uv run --locked python tools/correct_transcripts.py from-engines --labels tests/data/labels.jsonl --engine-a "$RUNROOT/parakeet.jsonl" --engine-b "$RUNROOT/whisper.jsonl" --data "$RUNROOT/rebuilt.jsonl"
+```
+
+### Regression tests
+
+Before implementation, the new tests gave `7 failed` against production code at `9cf62b9`.
+`PROMPT_USED_WITHOUT_CORRECT_TRANSCRIPT` found an `accuracy` result of 1 without correct transcripts.
+The other failures named `TRANSCRIPT_TOOL_MISSING`.
+
+The report tests supply correct-transcript records to their fixtures.
+New tests use different prompt text to check correct-command `accuracy` and the two word-error-rate paths.
+They also check the unchanged intent rule, pending rows, import validation, and stale data pins.
+
+The explicit engine-header test gave `SHARED_ENGINE_HEADER_REJECTED` before the header implementation.
+One header must be first. The schema checks reject unknown engine names on recording rows.
+The review commands also reject a changed data file with an unchanged pin.
+
+Four syntax-valid scratch mutations each gave a named assertion failure:
+
+- Use the prompt for `accuracy`: `ACCURACY_USED_PROMPT`.
+- Count a pending engine result as correct: `PENDING_COUNTED_AS_CORRECT`.
+- Accept an unknown listening ID: `UNKNOWN_LISTENING_ID_ACCEPTED`.
+- Accept an engine name missing from the header: `UNKNOWN_ENGINE_NAME_ACCEPTED`.
+
+The unchanged scratch control gave `19 passed`.
+Only `tools/report.py` calculated prompt-based `accuracy` results.
+The replay runner's observed-transcript consistency check does not calculate `accuracy`.
+The virtual text-input check keeps the prompt, and the fault runner stays unchanged in this change.
+No bench change or hardware acceptance result is part of this record.
