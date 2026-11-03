@@ -58,6 +58,8 @@ A different engine identity, `clip_id`, or audio SHA-256 also makes the baseline
 
 ## Recorded causes
 
+This section gives the simulated-mode rules. The hardware section gives its own turn-specific cause rules.
+
 Each trial downloads public diagnostics for the pipeline STT config entry before and after the turn.
 The runner keeps the `fallback_reasons` counts and their delta.
 It records `server_container_stopped` in `injected_fault` and the integration cause in `failure_cause`.
@@ -148,6 +150,126 @@ The shared summary in `faults.stages` gives these counts for each fault point:
 For the fault points without a window, the stop and baseline checks continue to select counted trials.
 The overall rate and the report use only counted trials, not invalid test runs or unavailable slots.
 Ten satisfactory counted trials for each of the four fault points are necessary for acceptance.
+
+## Hardware trials
+
+The [design](../design.md#phases-and-gates) gives the hardware fault criterion.
+Get approval before playback or a server stop. Use only the isolated bench and approved test audio.
+Each argument below is necessary. Do not use hardware mode with `--simulate` or `--native-matrix`.
+
+```sh
+uv run --locked python tools/fault_runner.py --hardware \
+  --satellite "$SATELLITE" --playback-sink "$PLAYBACK_SINK" \
+  --wake-audio "$WAKE_WAV" --ha-container "$HA_CONTAINER" \
+  --turn-audio-archive "$PRIVATE_ARCHIVE" \
+  --token-file "$ASSIST_LIVE_TEST_TOKEN_FILE" --pipeline "$TEST_PIPELINE" \
+  --audio-root "$AUDIO_ROOT" --temporary-agent-pipeline \
+  --output "$FAULT_RESULTS" --check
+```
+
+Supply the wake WAV in an external directory. It must contain mono PCM16 audio at 16 kHz.
+The runner connects its PCM directly to the corpus PCM in one WAV, without a pause.
+One `pw-play` process sends this stream to the explicit PipeWire sink.
+The runner keeps each playback WAV. It does not remove audio.
+
+Enable HA pipeline debug recordings in `/config/pipeline_recordings` before the run.
+The container must have `python3`, and the runner host must have `docker cp`.
+The archive must be external to the repository. Its directory mode is `700`, and each WAV has mode `600`.
+The runner copies the turn WAV immediately after the HA run ends.
+
+SHA-256 checks compare the source before and after the copy with the archived bytes.
+The source stays in HA, and an unsatisfactory copy stays in the archive.
+Private results contain recording paths, transcripts, and entity IDs. Do not publish them.
+
+### Satellite state and turn identity
+
+The runner finds the satellite device through the entity registry.
+The public `assist_pipeline/device/list` command supplies its pipeline select.
+The same device must have one microphone mute switch with a recognized registry name or translation key.
+The satellite must be `idle`, and mute must be `off`. An unknown mute state stops the run.
+The runner does not operate mute.
+
+The runner records the initial pipeline select, selects the temporary test-agent pipeline, and checks its state.
+A cancellation-safe `finally` puts back the initial selection and checks it before temporary-pipeline cleanup.
+An unsatisfactory `restore` stops the run.
+
+Before playback, the runner snapshots the debug run IDs, turn sensor, and WAV paths for the device and selected pipeline.
+One new debug run, one new voice turn ID, and one new WAV are necessary.
+The run's `run-start` must name this satellite.
+The turn ID comes from the latency sensor, not a timestamp.
+The archive record keeps the turn ID and `pipeline_run_id`.
+More than one possible run, turn, or WAV gives `unavailable`.
+
+In HA `2026.10.1` and `2026.10.4`, `assist_pipeline/websocket_api.py:273-307` gives the schema of `assist_pipeline/pipeline_debug/list`.
+Its response contains `pipeline_runs` with `pipeline_run_id` and `timestamp`.
+Lines `339-379` give `assist_pipeline/pipeline_debug/get`, with `pipeline_id` and `pipeline_run_id` as input and `events` as output.
+The installed-HA contract test checks these response shapes and the satellite field.
+
+These administrator-only commands belong to the test runner, not to the integration.
+HA stores WAVs in the device and pipeline directories, not in a directory with the debug run ID.
+Thus a unique result and recording correlation supply the connection. Time alone cannot supply it.
+
+### Correlation and fault position
+
+The runner uses first differences to decrease low-frequency room energy, then energy-normalized FFT cross-correlation.
+It accepts positive and negative signal polarity. The minimum whole-reference overlap is 55%.
+The absolute peak minimum is `0.18`. The second-peak ratio minimum is `1.15`.
+The second peak must be more than 640 samples from the maximum peak.
+
+Three high-energy windows, one from each third of the source, check the offset with the same thresholds.
+Each window must agree with a maximum difference of 640 samples (40 ms) for a complete recording.
+A minimum of two windows must agree before an offset can identify `early_end`.
+The result records the peaks, ratios, window offsets, and largest offset difference.
+No reliable correlation gives `unavailable`, unless the turn WAV is shorter than the complete source recording.
+
+For a fault during `speech` or `pause`, diagnostics supply `server_audio_samples` and `server_audio_last_chunk_samples`.
+The possible-send interval is `[server_audio_samples - server_audio_last_chunk_samples, server_audio_samples]`.
+Subtract the correlation offset from the two edges to get recording samples.
+The complete interval, expanded by the largest window-offset difference, must fit in the labelled window.
+The window includes its first sample but not its end sample.
+
+Missing counts give `unavailable`. Host clocks do not prove a fault position.
+
+### Schedule and baselines
+
+The stop-latency calibration stays unchanged.
+For `speech` or `pause`, the runner first makes a maximum of three no-fault hardware tries to calibrate the playback interval.
+The initial interval is the HA STT-start time plus the correlated offset, minus playback launch and the wake length.
+
+Subsequent tries add an interval sample from the stop end, the possible-send interval midpoint, and the correlated offset.
+The next schedule uses the median of all available interval samples, with invalid tries.
+Each try keeps its input samples. These estimates schedule stops only.
+The calibration tries are not trials, and the counted results do not include them.
+
+Before each playback, the runner waits 6.2 s, because the satellite ignores a wake word for a short time after its last turn.
+If the SHA-256 of an archived turn audio file does not agree with its record, the run stops, and the archive keeps all copies.
+
+The `speech` schedule is playback launch plus wake length, window midpoint, and calibrated interval, minus measured stop latency.
+The `pause` schedule keeps the quarter-window target.
+The `before` fault stops the server before playback.
+The `after-final` fault stops only after the public debug events contain `stt-end` for that run.
+
+The recognized text, intent, operations, and deadline use the same acceptance checks as simulated mode.
+The deadline stays at 20 s.
+
+Hardware cause checks use only the trial's diagnostic turn row, not the aggregate `fallback_reasons_delta`.
+The `stt_fallback` cause must agree with the fault type. An `after-final` trial must have no STT fallback.
+
+TTS fallback is correct behavior after a hardware fault. The result reports its cause in `tts_failure_cause`.
+The HA debug run must have one `run-end` and no `error` event.
+A reply error makes the trial unsatisfactory.
+
+Each hardware try with archived audio gets its own no-fault baselines through the shared HA pipeline sender.
+The baseline input is that turn WAV, not the initial corpus WAV.
+The diagnostics cause selects the engine, as in simulated mode.
+The trial keeps the source hash independently. Its baseline hash names the archived turn audio.
+
+No wake word, `early_end`, or a fault not in its window gives an invalid try.
+The shared test-run loop replaces it with the same recording in the same slot, with a maximum of three tries.
+These rules also apply to `before` and `after-final`.
+The wake and complete-recording checks continue to apply.
+Transcript or device-operation results do not select replacements.
+Exhaustion gives `unavailable`, which makes the hardware gate unsatisfactory.
 
 ## Append-only records
 

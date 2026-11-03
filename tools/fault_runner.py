@@ -134,6 +134,10 @@ def stt_reason_for_turn(trial: Row) -> tuple[bool, str | None]:
 
 
 def recorded_reason_matches(trial: Row) -> bool:
+    if trial.get("scope") == "hardware":
+        from tools.fault_hardware import recorded_reason_matches as hardware_reasons
+
+        return hardware_reasons(trial)
     delta = reason_delta(
         trial.get("fallback_reasons_before"), trial.get("fallback_reasons_after")
     )
@@ -184,6 +188,10 @@ def selected_baseline(trial: Row) -> Row | None:
 
 
 def injection_status(trial: Row) -> str:
+    if trial.get("scope") == "hardware":
+        from tools.fault_hardware import injection_status as hardware_injection_status
+
+        return hardware_injection_status(trial)
     if trial.get("stage") not in ("speech", "pause"):
         return "verified"
     try:
@@ -206,6 +214,15 @@ def trial_status(trial: Row) -> str:
 
 
 def acceptable(trial: Row) -> bool:
+    if trial.get("scope") == "hardware":
+        events = trial.get("events", [])
+        if (
+            not isinstance(events, list)
+            or any(not isinstance(event, dict) for event in events)
+            or sum(event.get("stage") == "run-end" for event in events) != 1
+            or any(event.get("stage") == "error" for event in events)
+        ):
+            return False
     if injection_status(trial) != "verified":
         return False
     baseline = selected_baseline(trial)
@@ -1255,12 +1272,19 @@ def validate_output(path: Path, *, simulated: bool, check: bool) -> None:
 
 async def run(args: argparse.Namespace) -> Row:
     validate_output(args.output, simulated=args.simulate, check=args.check)
+    from tools.fault_hardware import Hardware
+
+    hardware = Hardware(args) if getattr(args, "hardware", False) else None
+    if hardware is not None:
+        async with aiohttp.ClientSession() as session:
+            async with control_command(session, args.token_file) as command:
+                await hardware.preflight(command)
     labels = load_corpus(args.labels)
     if args.native_matrix:
         validate_matrix_document(args.native_matrix.read_text())
     result: Row = {
         "schema_version": 2,
-        "scope": "simulated",
+        "scope": "hardware" if hardware else "simulated",
         "trials": [],
         "attempts": [],
         "stage_status": {
@@ -1350,7 +1374,7 @@ async def run(args: argparse.Namespace) -> Row:
                     result["baseline_engine_error"] = type(error).__name__
                 result["stt_engines"] = engines
                 cache: Row = {}
-                for planned in plans.values():
+                for planned in [] if hardware else plans.values():
                     for label, pcm in planned:
                         if label["id"] not in cache:
                             cache[label["id"]] = await collect_baselines(
@@ -1365,27 +1389,76 @@ async def run(args: argparse.Namespace) -> Row:
                                 turn_sensor=sensor,
                             )
                 result["baselines"] = cache
+                if hardware and any(stage in plans for stage in ("speech", "pause")):
+                    label, pcm = next(iter(plans.values()))[0]
+                    result["playback_calibration_attempts"] = []
+                    for _ in range(MAX_SLOT_ATTEMPTS):
+                        calibration = await hardware.trial(
+                            session,
+                            args.token_file,
+                            pipeline,
+                            label,
+                            pcm,
+                            "baseline",
+                            server,
+                            stop_latency_seconds=result["stop_latency_seconds"],
+                            stop_margin_seconds=result["stop_margin_seconds"],
+                            sensor=sensor or "",
+                        )
+                        result["playback_calibration_attempts"].append(calibration)
+                        write_result(args.output, result)
+                        if (calibration.get("correlation") or {}).get("complete"):
+                            break
                 for stage in args.stages.split(","):
                     for index, (label, pcm) in enumerate(plans[stage]):
                         for attempt in range(1, MAX_SLOT_ATTEMPTS + 1):
                             used_samples = list(samples)
                             latency = statistics.median(used_samples)
                             margin = (max(used_samples) - min(used_samples)) / 2 + 0.02
-                            row = await pipeline_trial(
-                                session,
-                                args.token_file,
-                                pipeline,
-                                label,
-                                pcm,
-                                stage,
-                                server,
-                                stop_latency_seconds=latency,
-                                stop_margin_seconds=margin,
-                                device_id=device_id,
-                                turn_sensor=sensor,
-                                baselines=cache[label["id"]],
-                                stt_engines=engines,
-                            )
+                            if hardware:
+                                row = await hardware.trial(
+                                    session,
+                                    args.token_file,
+                                    pipeline,
+                                    label,
+                                    pcm,
+                                    stage,
+                                    server,
+                                    stop_latency_seconds=latency,
+                                    stop_margin_seconds=margin,
+                                    sensor=sensor or "",
+                                )
+                                await hardware.baselines(
+                                    session,
+                                    args.token_file,
+                                    pipeline,
+                                    label,
+                                    pcm,
+                                    engines,
+                                    server,
+                                    row,
+                                    sensor or "",
+                                )
+                                row["stt_engines"] = engines
+                                result["playback_delay_samples_seconds"] = list(
+                                    hardware.delay_samples
+                                )
+                            else:
+                                row = await pipeline_trial(
+                                    session,
+                                    args.token_file,
+                                    pipeline,
+                                    label,
+                                    pcm,
+                                    stage,
+                                    server,
+                                    stop_latency_seconds=latency,
+                                    stop_margin_seconds=margin,
+                                    device_id=device_id,
+                                    turn_sensor=sensor,
+                                    baselines=cache[label["id"]],
+                                    stt_engines=engines,
+                                )
                             row.update(
                                 trial_slot=index + 1,
                                 attempt=attempt,
@@ -1421,7 +1494,7 @@ async def run(args: argparse.Namespace) -> Row:
                                 )
                             write_result(args.output, result)
                             print(
-                                f"{row['status'].upper()} simulated {stage} "
+                                f"{row['status'].upper()} {result['scope']} {stage} "
                                 f"{index + 1} attempt {attempt}: "
                                 + ",".join(row["failures"]),
                                 flush=True,
@@ -1453,7 +1526,13 @@ async def run(args: argparse.Namespace) -> Row:
                         device_id,
                         sensor,
                     ):
-                        await trials(pipeline, device_id, sensor)
+                        if hardware:
+                            async with hardware.selected(
+                                fresh_command, pipeline, result
+                            ):
+                                await trials(pipeline, hardware.device_id, sensor)
+                        else:
+                            await trials(pipeline, device_id, sensor)
             else:
                 await trials(args.pipeline)
         if args.native_matrix:
@@ -1523,6 +1602,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--simulate", action="store_true")
+    parser.add_argument("--hardware", action="store_true")
+    parser.add_argument("--satellite")
+    parser.add_argument("--playback-sink")
+    parser.add_argument("--wake-audio", type=Path)
+    parser.add_argument("--ha-container")
+    parser.add_argument("--turn-audio-archive", type=Path)
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--pipeline")
     parser.add_argument("--labels", type=Path, default=Path("tests/data/labels.jsonl"))
@@ -1530,6 +1615,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-matrix", type=Path)
     parser.add_argument("--temporary-agent-pipeline", action="store_true")
     args = parser.parse_args(argv)
+    if args.hardware and (
+        args.simulate
+        or args.native_matrix
+        or not args.temporary_agent_pipeline
+        or not all(
+            (
+                args.satellite,
+                args.playback_sink,
+                args.wake_audio,
+                args.ha_container,
+                args.turn_audio_archive,
+                args.token_file,
+                args.pipeline,
+                args.audio_root,
+            )
+        )
+    ):
+        parser.error(
+            "hardware requires --satellite, --playback-sink, --wake-audio, "
+            "--ha-container, --turn-audio-archive, --token-file, --pipeline, "
+            "--audio-root, and --temporary-agent-pipeline; "
+            "do not combine with --simulate or --native-matrix"
+        )
     try:
         validate_output(args.output, simulated=args.simulate, check=args.check)
     except ValueError as error:
@@ -1546,14 +1654,14 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
     if (
-        not args.simulate
+        not (args.simulate or args.hardware)
         or not args.token_file
         or not args.pipeline
         or not args.audio_root
     ):
         parser.error(
             "use --simulate with --token-file, --pipeline, and --audio-root; "
-            "hardware is not implemented"
+            "or use --hardware with its explicit bench arguments"
         )
     if (
         args.each <= 0
@@ -1566,8 +1674,13 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(run(args))
         summary = fault_gate(result)
         print(
-            f"NOTE simulated faults {summary['count']}/{summary['denominator']}; "
-            "hardware acceptance NOT RUN"
+            f"NOTE {'hardware' if args.hardware else 'simulated'} faults "
+            f"{summary['count']}/{summary['denominator']}; "
+            + (
+                "hardware gate " + str(summary["passed"])
+                if args.hardware
+                else "hardware acceptance NOT RUN"
+            )
         )
         for stage, counts in summary["stages"].items():
             print(f"NOTE {stage}: " + json.dumps(counts, sort_keys=True))

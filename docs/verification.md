@@ -3666,3 +3666,44 @@ Three syntax-valid production mutations in different scratch copies gave named a
 - Keep the count across turns: `sample_count_is_per_turn`.
 
 No client dependency, bench setting, deployment, or hardware acceptance result changed.
+
+## Hardware fault runner mode
+
+Date: 2026-11-03 (UTC).
+
+The runner has an explicit `--hardware` mode for the fault trials in the design.
+It connects wake and corpus PCM without a pause and keeps each HA turn WAV in a private archive.
+Pipeline selection has a cancellation-safe cleanup with state read-back. Mute stays unchanged.
+New debug run IDs, satellite identity, the turn sensor, and unique recording paths supply turn identity.
+The archive keeps the turn ID, debug run ID, and SHA-256.
+
+Correlation supplies the corpus offset in the turn audio, with three high-energy window checks.
+The possible-send interval uses `server_audio_samples` and `server_audio_last_chunk_samples`, minus that offset.
+The complete interval must fit in the labelled window, with the measured correlation differences.
+Clock estimates schedule stops but do not prove their audio positions.
+Each trial's no-fault baseline uses its archived turn PCM through the shared HA sender, not the source WAV.
+
+The initial tests gave `21 failed, 2 passed, 7 errors` against the unchanged runner at `44df2e3`.
+The hardware tests gave `75 passed`, and the hardware and simulated fault suites together gave `290 passed`.
+The installed-HA contract test checks debug list/get responses and the satellite field.
+The shared three-try limit and outcome-independent replacement rules apply to hardware mode.
+
+Hardware cause checks use the trial's own STT fallback cause, not aggregate fallback counts.
+TTS fallback is correct behavior, and the result records its cause.
+The debug run must end without an error event. Simulated cause checks stay unchanged.
+Before this change, the new reply tests gave `2 failed, 1 passed`.
+They found an incorrect refusal of TTS fallback and an incorrect acceptance of a reply error.
+
+```sh
+uv run --locked pytest tests/test_fault_hardware.py tests/test_fault_runner.py tests/test_fault_attempts.py tests/test_fault_calibration.py tests/test_fault_baselines.py -q
+```
+
+The unchanged scratch control gave `75 passed`.
+Three scratch mutations each gave a named assertion failure:
+
+- Baseline on source PCM: `BASELINE_ON_TURN_AUDIO_NOT_SOURCE`.
+- Fault interval without the correlation offset: `OFFSET_REQUIRED`.
+- No pipeline selection cleanup after an error: `PIPELINE_RESTORED_ON_ERROR`.
+
+No audio deletion, bench run, commit, or publication is part of this record.
+Hardware acceptance is not a result of these fake tests.
