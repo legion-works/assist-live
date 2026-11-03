@@ -35,7 +35,10 @@ Wrong-action checks use the two sets, as specified in the design.
 P1 `accuracy` and the two word-error-rate paths use the correct transcript with `status=final`, not the source prompt.
 The [corpus contract](corpus.md#correct-transcripts) specifies engine agreement and listening review.
 The intent check uses the corpus intent record without changes.
-If a measured recording has no correct transcript with `status=final`, the report marks `accuracy` and word error rate as unavailable.
+
+A recording with `status=unintelligible` is not in the numerator or the denominator of `accuracy` and word error rate.
+The report shows the number of such recordings in each corpus part, and the latency measurements continue to use them.
+If a different measured recording has no correct transcript with `status=final`, the report marks `accuracy` and word error rate as unavailable.
 Their gates give unsatisfactory results, also when the recognized text agrees with the prompt.
 
 ## Uncertainty

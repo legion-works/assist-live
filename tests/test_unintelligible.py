@@ -62,6 +62,9 @@ def test_mark_command_refuses_unknown_and_final_without_writes(tmp_path, capsys)
     assert marked[1] == unintelligible(labels[0])
     assert transcripts.check_digest(data)
     assert transcripts.main([*args, labels[0]["id"]]) == 1, "MARKED_ROW_REOPENED"
+    assert "already unintelligible" in capsys.readouterr().out, (
+        "MARK_REFUSAL_NAMES_THE_STATE"
+    )
 
 
 def test_listening_v2_exports_unintelligible_and_checks_stale_rows():

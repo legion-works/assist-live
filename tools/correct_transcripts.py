@@ -343,8 +343,9 @@ def mark_unintelligible(rows: list[Row], identifier: str) -> list[Row]:
     by_id = {row["id"]: row for row in clips}
     if identifier not in by_id:
         raise ValueError("unknown listening id")
-    if by_id[identifier]["status"] != "needs_listening":
-        raise ValueError("listening row is already final")
+    status = by_id[identifier]["status"]
+    if status != "needs_listening":
+        raise ValueError(f"listening row is already {status}")
     return [
         rows[0],
         *[
