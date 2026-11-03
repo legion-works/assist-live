@@ -528,6 +528,11 @@ If the two transcripts are the same after the text rule, that text is the correc
 If they are not the same, a person listens to the recording and writes the correct transcript.
 The measurements of correct commands and of the word error rate use the correct transcript, not the prompt text.
 
+If a person cannot understand the words, the recording gets the status `unintelligible`.
+The measurements of correct commands and of the word error rate do not use that recording, and each report shows the number of such recordings.
+For each such recording in the held-out set, the held-out set gets one more recording from the same source with the same selection rules.
+The latency measurements continue to use the recording.
+
 Reports show replies of 60 characters or less in a different group from longer replies.
 Each rate has its denominator and 95% confidence interval.
 
