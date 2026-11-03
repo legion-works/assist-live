@@ -92,14 +92,15 @@ After each sample, it restarts the server and waits for `Running=True` and `Heal
 The measurement does not include server restoration time.
 
 The output keeps all measured stop latencies in `stop_latency_samples_seconds`.
-This list includes the calibration stops and each test run, also an invalid test run.
+This list includes the calibration stops and each test run with a measured stop, also an invalid test run.
 Each test run keeps a copy of the samples that its plan used in the same field.
 It keeps its own stop latency in `measured_stop_latency_seconds`.
 
 For each subsequent plan, latency `L` is the median of all samples collected so far.
 Margin `M` is half the difference between the maximum and minimum samples, plus 20 ms.
 The same sample list supplies `L` and `M`.
-For `speech`, the first plan uses the five calibration samples.
+For `speech`, the first plan uses the five calibration samples and the stop latency of each earlier test run.
+For example, if `before` runs first, the first attempt of the first `speech` plan uses 15 samples.
 
 The planned request is the voice-window midpoint minus `L`.
 The request can be before the voice window, also when `L` is larger than that window.
