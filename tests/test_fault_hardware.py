@@ -723,6 +723,7 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
         "HARDWARE_EXHAUSTION_UNAVAILABLE_OR_VALID_FAILURE_NOT_REPLACED"
     )
     assert not result["faults"]["passed"], "HARDWARE_UNAVAILABLE_FAILS_GATE"
+    assert result["trials"][0].get("failure_messages"), "UNSUCCESSFUL_ROW_HAS_CAUSE"
 
 
 def test_calibration_accumulates_media_counts_and_does_not_use_before_stop(tmp_path):
@@ -790,6 +791,8 @@ def cancel_fakes(tmp_path, monkeypatch):
         "gets": 0,
         "row": None,
         "stop_with": None,
+        "satellite_state": lambda: "idle",
+        "mute_state": lambda: "off",
     }
 
     async def command(kind, **fields):
@@ -810,10 +813,14 @@ def cancel_fakes(tmp_path, monkeypatch):
                     "state": state["selects"]["select.pipeline"],
                     "attributes": {},
                 },
-                {"entity_id": "switch.mute", "state": "off", "attributes": {}},
+                {
+                    "entity_id": "switch.mute",
+                    "state": state["mute_state"](),
+                    "attributes": {},
+                },
                 {
                     "entity_id": "assist_satellite.test",
-                    "state": "idle",
+                    "state": state["satellite_state"](),
                     "attributes": {},
                 },
                 {
@@ -1093,7 +1100,7 @@ def run_bench(tmp_path, monkeypatch):
     labels = tmp_path / "labels.jsonl"
     labels.write_text(json.dumps(state["label"]) + "\n")
 
-    async def run(stage):
+    async def run(stage, each=1):
         options = Namespace(
             hardware=True,
             satellite="assist_satellite.test",
@@ -1107,7 +1114,7 @@ def run_bench(tmp_path, monkeypatch):
             labels=labels,
             native_matrix=None,
             stages=stage,
-            each=1,
+            each=each,
             audio_root=tmp_path,
             token_file=state["token"],
             temporary_agent_pipeline=True,
@@ -1235,3 +1242,226 @@ async def test_cancel_of_a_full_hardware_run_leaves_no_service_running(run_bench
     written = json.loads(state["output"].read_text())
     assert written.get("restored_healthy") is True, "RESTORED_HEALTHY_AFTER_CANCEL"
     assert written.get("temporary_pipeline"), "TEMPORARY_PIPELINE_WAS_CREATED"
+
+
+@pytest.fixture
+def readiness_clock(tmp_path, monkeypatch):
+    module = hardware_module()
+    original_sleep = asyncio.sleep
+    clock = SimpleNamespace(now=0.0, sleeps=[], polls=[])
+
+    async def sleep(delay):
+        clock.sleeps.append((clock.now, delay))
+        clock.now += delay
+        await original_sleep(0)
+
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock.now, time_ns=time.time_ns),
+    )
+    monkeypatch.setattr(module.asyncio, "sleep", sleep)
+    return clock
+
+
+@pytest.mark.parametrize(
+    "busy_at", ["entry", "before-playback", "during-cooldown", "muted-cooldown"]
+)
+async def test_responding_satellite_waits_then_gets_full_cooldown(
+    tmp_path, monkeypatch, readiness_clock, busy_at
+):
+    state = cancel_fakes(tmp_path, monkeypatch)
+    clock = readiness_clock
+    original_sleep = asyncio.sleep
+
+    async def sleep(delay):
+        clock.sleeps.append((clock.now, delay))
+        clock.now += delay
+        await original_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    polls = 0
+
+    def satellite_state():
+        nonlocal polls
+        polls += 1
+        if busy_at in ("during-cooldown", "muted-cooldown"):
+            return "responding" if 6.2 <= clock.now < 8.2 else "idle"
+        if busy_at == "before-playback" and polls == 1:
+            return "idle"
+        return "responding" if clock.now < 2 else "idle"
+
+    state["satellite_state"] = satellite_state
+    if busy_at == "muted-cooldown":
+        state["mute_state"] = lambda: "on" if clock.now >= 6.2 else "off"
+    state["trial_finished"] = True
+    hardware = hardware_module().Hardware(arguments(tmp_path))
+    hardware.device_id = "physical"
+    hardware.mute_entity = "switch.mute"
+    row = await hardware.trial(
+        None,
+        state["token"],
+        "source",
+        state["label"],
+        state["pcm"],
+        "baseline",
+        state["server"](),
+        sensor="sensor.turn",
+        stop_latency_seconds=0.1,
+        stop_margin_seconds=0.02,
+    )
+    if busy_at == "muted-cooldown":
+        assert state["playback"] is None, "MUTE_CHECKED_AFTER_COOLDOWN"
+        assert row["failure_messages"] == [
+            "ValueError: satellite microphone muted or unknown"
+        ], "COOLDOWN_MUTE_REASON_RETAINED"
+        return
+    expected_idle = 8.2 if busy_at == "during-cooldown" else 2.0
+    assert state["playback"] is not None, "RESPONDING_WAIT_REACHES_PLAYBACK"
+    assert row["audio_started_monotonic"] == pytest.approx(expected_idle + 6.2), (
+        "FULL_COOLDOWN_AFTER_IDLE"
+    )
+    assert (expected_idle, 6.2) in clock.sleeps, "COOLDOWN_STARTS_AT_IDLE"
+    assert row["pipeline_run_id"] == "run-new", "WAITED_ATTEMPT_RUNS"
+
+
+async def test_satellite_idle_timeout_names_reason_and_next_slot_runs(
+    run_bench, monkeypatch, readiness_clock
+):
+    state, clock = run_bench, readiness_clock
+    polls = 0
+    timed_out = False
+
+    def satellite_state():
+        nonlocal polls, timed_out
+        if state["selects"]["select.pipeline"] != "Temporary":
+            return "idle"
+        polls += 1
+        if polls <= 1 or timed_out:
+            return "idle"
+        clock.polls.append(clock.now)
+        if clock.now >= 30:
+            timed_out = True
+        return "responding"
+
+    async def baselines(*_):
+        pass
+
+    state["satellite_state"] = satellite_state
+    state["trial_finished"] = True
+    monkeypatch.setattr(hardware_module().Hardware, "baselines", baselines)
+    result = await state["run"]("before", each=2)
+    first, second = result["trials"]
+    assert first.get("unavailable_reason") == "satellite_not_idle", (
+        "IDLE_TIMEOUT_NAMED_IN_ROW"
+    )
+    assert first["status"] == "unavailable", "IDLE_TIMEOUT_UNAVAILABLE"
+    assert clock.polls[-1] == 30, "IDLE_WAIT_BOUNDED_AT_THIRTY_SECONDS"
+    assert len(clock.polls) == 121, "READINESS_POLLS_EVERY_QUARTER_SECOND"
+    assert len(result["attempts"]) == 2, "IDLE_TIMEOUT_NOT_RETRIED_AS_INVALID"
+    assert second.get("pipeline_run_id") == "run-new", "NEXT_SLOT_RUNS_AFTER_TIMEOUT"
+    assert state["playback"] is not None, "NEXT_SLOT_PLAYS_AFTER_TIMEOUT"
+
+
+async def test_mute_turns_on_during_idle_wait_raises_immediately(
+    satellite_bench, monkeypatch, readiness_clock
+):
+    hardware, command, states, _ = satellite_bench
+    await hardware.preflight(command)
+    states["assist_satellite.test"] = "responding"
+    clock = readiness_clock
+
+    async def changing_command(kind, **fields):
+        if clock.now >= 0.5:
+            states["switch.mute"] = "on"
+        return await command(kind, **fields)
+
+    with pytest.raises(ValueError, match="microphone"):
+        await hardware.ready(changing_command)
+    assert clock.now == 0.5, "MUTE_CHECKED_AT_EVERY_POLL"
+
+
+@pytest.mark.parametrize("message", ["x", "x" * 700])
+@pytest.mark.parametrize("scope", ["hardware", "simulated"])
+async def test_trial_keeps_bounded_exception_message(
+    tmp_path, monkeypatch, message, scope
+):
+    state = cancel_fakes(tmp_path, monkeypatch)
+    module = hardware_module()
+
+    @asynccontextmanager
+    async def refused(*_):
+        raise ValueError(message)
+        yield
+
+    monkeypatch.setattr(fault_runner, "control_command", refused)
+    hardware = module.Hardware(arguments(tmp_path))
+
+    async def connect(*_):
+        raise ValueError(message)
+
+    monkeypatch.setattr(fault_runner, "connect", connect)
+    trial_function = (
+        hardware.trial if scope == "hardware" else fault_runner.pipeline_trial
+    )
+    row = await trial_function(
+        None,
+        state["token"],
+        "source",
+        state["label"],
+        state["pcm"],
+        "before",
+        state["server"](),
+        **({"sensor": "sensor.turn"} if scope == "hardware" else {}),
+        stop_latency_seconds=0.1,
+        stop_margin_seconds=0.02,
+    )
+    expected = (
+        "ValueError: x"
+        if message == "x"
+        else (("ValueError: " + message)[:488] + " [truncated]")
+    )
+    assert row.get("failure_messages") == [expected], "TRIAL_EXCEPTION_MESSAGE_RETAINED"
+    assert row["failures"] == (
+        ["ValueError"]
+        if scope == "hardware"
+        else [
+            "ValueError",
+            "MISSING_OR_UNEXPECTED_FALLBACK_REASON",
+            "BASELINE_UNAVAILABLE",
+        ]
+    ), "FAILURE_CLASSES_UNCHANGED"
+
+
+async def test_cancel_during_idle_wait_leaves_nothing_running(run_bench, monkeypatch):
+    state = run_bench
+    waiting = asyncio.Event()
+    polls = 0
+    original_sleep = asyncio.sleep
+
+    def satellite_state():
+        nonlocal polls
+        if state["selects"]["select.pipeline"] != "Temporary":
+            return "idle"
+        polls += 1
+        return "idle" if polls <= 1 else "responding"
+
+    async def sleep(delay):
+        if delay == 0.25:
+            waiting.set()
+            await asyncio.Event().wait()
+        await original_sleep(delay)
+
+    state["satellite_state"] = satellite_state
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    before = await stop_run(state, "before", waiting, timeout=2)
+    assert state["playback"] is None, "CANCEL_DURING_IDLE_WAIT_NEVER_PLAYS"
+    assert state["server_stops"] == 1, "IDLE_WAIT_DOES_NOT_INJECT_FAULT"
+    assert state["server_running"] is True, "IDLE_WAIT_SERVER_RESTORED"
+    assert [row["id"] for row in state["pipelines"]] == ["source"], (
+        "IDLE_WAIT_TEMPORARY_PIPELINE_REMOVED"
+    )
+    assert state["selects"]["select.pipeline"] == "Original", (
+        "IDLE_WAIT_SELECT_RESTORED"
+    )
+    assert not asyncio.all_tasks() - before, "IDLE_WAIT_NO_PENDING_TASKS"

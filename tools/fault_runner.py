@@ -545,6 +545,23 @@ def scrub_cleanup_error(error: Exception, redactions: tuple[str, ...] = ()) -> s
     return message[:1000]
 
 
+def failure_message(error: BaseException) -> str:
+    message = f"{type(error).__name__}: {error}"
+    return message if len(message) <= 500 else message[:488] + " [truncated]"
+
+
+def complete_failure_messages(row: Row) -> None:
+    if not row.get("failure_messages"):
+        causes = row.get("failures") or [
+            row.get("unavailable_reason")
+            or row.get("hardware_invalid_reason")
+            or "trial evidence or acceptance unavailable"
+        ]
+        row["failure_messages"] = [
+            failure_message(ValueError(cause)) for cause in causes
+        ]
+
+
 async def fallback_snapshot(
     session: aiohttp.ClientSession, token_file: Path, pipeline: str
 ) -> Row | None:
@@ -671,6 +688,7 @@ async def pipeline_trial(
         action_trace_complete=False,
         complete=False,
         failures=[],
+        failure_messages=[],
         fault_injected=False,
         failure_cause=None,
         injected_fault=None,
@@ -702,9 +720,10 @@ async def pipeline_trial(
             stop_latency_seconds=stop_latency_seconds,
             stop_margin_seconds=stop_margin_seconds,
         )
-    except ValueError:
+    except ValueError as error:
         row.update(status="unavailable", acceptable=False)
         row["failures"].append("FAULT_WINDOW_MARGIN_UNAVAILABLE")
+        row["failure_messages"].append(failure_message(error))
         return row
     row["fault_planned_audio_sample"] = offset
 
@@ -849,6 +868,9 @@ async def pipeline_trial(
                         row["failures"].append(
                             row["events"][-1]["data"].get("code", "pipeline_error")
                         )
+                        row["failure_messages"].append(
+                            failure_message(ValueError(str(row["events"][-1]["data"])))
+                        )
                     elif kind == "run-end":
                         row["completed_utc_ns"] = time.time_ns()
                         await ws.send_json({"id": 4, "type": "get_states"})
@@ -896,6 +918,7 @@ async def pipeline_trial(
         aiohttp.ClientError,
     ) as error:
         row["failures"].append(type(error).__name__)
+        row["failure_messages"].append(failure_message(error))
     finally:
         if sender is not None:
             sender.cancel()
@@ -904,8 +927,9 @@ async def pipeline_trial(
             if injection is not None:
                 try:
                     await injection
-                except ValueError, TimeoutError:
+                except (ValueError, TimeoutError) as error:
                     row["failures"].append("FAULT_INJECTION_FAILED")
+                    row["failure_messages"].append(failure_message(error))
         finally:
             try:
                 after = await fallback_snapshot(session, token_file, pipeline)
@@ -944,6 +968,8 @@ async def pipeline_trial(
     row["test_pipeline"] = pipeline_observations(row)
     if not row["acceptable"] and not row["failures"]:
         row["failures"].append("INCORRECT_TRANSCRIPT_OR_OPERATIONS")
+    if not row["acceptable"]:
+        complete_failure_messages(row)
     return row
 
 
@@ -1478,6 +1504,8 @@ async def run(args: argparse.Namespace) -> Row:
                             missed = injection_status(row) == "invalid_injection"
                             row["status"] = trial_status(row)
                             row["acceptable"] = row["status"] == "passed"
+                            if not row["acceptable"]:
+                                complete_failure_messages(row)
                             result["attempts"].append(row)
                             if not missed:
                                 result["trials"].append(row)

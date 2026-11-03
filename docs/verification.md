@@ -3844,3 +3844,24 @@ The lifecycle set then gave `26 passed`.
 The three current server citations use `d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3`.
 The server source at that commit contains the privacy sentence, provider selection rules, and text-position rules.
 Historical verification citations stay unchanged.
+
+## Hardware readiness and private failure messages
+
+Date: 2026-11-03 (UTC).
+
+Fake-clock tests on `2c207c0` gave `17 failed, 73 deselected` before the repair.
+The hardware and fault-runner tests then gave `270 passed`.
+These tests check a 2 s reply, the full 6.2 s cool-down after `idle`, and the 30 s readiness limit.
+They also check a mute change during the wait, the next slot after a timeout, private error messages, and cancellation cleanup.
+The last state check refuses playback after a mute change during the cool-down.
+A satellite that becomes busy during the cool-down must become `idle` and get one more full cool-down before playback.
+
+Three mutations in isolated scratch copies gave named assertion failures:
+
+- No wait: `RESPONDING_WAIT_REACHES_PLAYBACK`.
+- Cool-down before the wait: `FULL_COOLDOWN_AFTER_IDLE`.
+- No error message: `TRIAL_EXCEPTION_MESSAGE_RETAINED`.
+
+Private results keep bounded `failure_messages` without a change to the `failures` format.
+The `idle` timeout names `satellite_not_idle` in the row.
+No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.

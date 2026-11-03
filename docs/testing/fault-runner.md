@@ -58,6 +58,12 @@ A different engine identity, `clip_id`, or audio SHA-256 also makes the baseline
 
 ## Recorded causes
 
+Each trial with `status: failed` or `status: unavailable` keeps `failure_messages` in the private results.
+The list uses the string format `<Class>: <message>`. The `failures` list keeps its previous format.
+Each message has a maximum of 500 characters. The class name and the ` [truncated]` marker are part of this limit.
+
+Error text from HA responses has the same limit. Do not publish these private messages.
+
 This section gives the simulated-mode rules. The hardware section gives its own turn-specific cause rules.
 
 Each trial downloads public diagnostics for the pipeline STT config entry before and after the turn.
@@ -186,8 +192,16 @@ Private results contain recording paths, transcripts, and entity IDs. Do not pub
 The runner finds the satellite device through the entity registry.
 The public `assist_pipeline/device/list` command supplies its pipeline select.
 The same device must have one microphone mute switch with a recognized registry name or translation key.
-The satellite must be `idle`, and mute must be `off`. An unknown mute state stops the run.
+
+The runner polls `get_states` at 0.25 s intervals until the satellite is `idle`, for a maximum of 30 s.
+Mute must be `off` at each poll. If mute is not `off`, the runner gives an error immediately.
 The runner does not operate mute.
+
+If the satellite does not become `idle`, the test run gives `unavailable` with `unavailable_reason: satellite_not_idle`.
+This cause does not select a replacement test run. The runner continues to the next slot with the usual rules.
+The full 6.2 s wake cool-down starts after the satellite becomes `idle`, not while a previous reply continues.
+After the cool-down, the runner checks mute and satellite state again before playback.
+If the satellite is busy again, the runner starts the readiness wait and the full cool-down again.
 
 The runner records the initial pipeline select, selects the temporary test-agent pipeline, and checks its state.
 A cancellation-safe `finally` puts back the initial selection and checks it before temporary-pipeline cleanup.

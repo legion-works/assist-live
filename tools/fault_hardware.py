@@ -31,6 +31,10 @@ WINDOW_TOLERANCE_SAMPLES = 640
 RECORDINGS = PurePosixPath("/config/pipeline_recordings")
 
 
+class SatelliteNotIdleError(TimeoutError):
+    pass
+
+
 def read_pcm(path: Path) -> bytes:
     with wave.open(str(path), "rb") as wav:
         if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (
@@ -325,12 +329,23 @@ class Hardware:
         await self.ready(command)
 
     async def ready(self, command: Command) -> Row:
-        states = {row["entity_id"]: row for row in await command("get_states")}
-        if states.get(self.mute_entity, {}).get("state") != "off":
-            raise ValueError("satellite microphone muted or unknown")
-        if states.get(self.satellite, {}).get("state") != "idle":
-            raise ValueError("satellite must be idle")
-        return states
+        deadline = time.monotonic() + 30
+        try:
+            async with asyncio.timeout(30):
+                while True:
+                    states = {
+                        row["entity_id"]: row for row in await command("get_states")
+                    }
+                    if states.get(self.mute_entity, {}).get("state") != "off":
+                        raise ValueError("satellite microphone muted or unknown")
+                    if states.get(self.satellite, {}).get("state") == "idle":
+                        return states
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    await asyncio.sleep(min(0.25, remaining))
+        except TimeoutError as error:
+            raise SatelliteNotIdleError("satellite_not_idle") from error
 
     async def select(self, command: Command, option: str) -> None:
         await command(
@@ -533,6 +548,7 @@ class Hardware:
             "recognized_transcript": None,
             "evaluated_intent": None,
             "failures": [],
+            "failure_messages": [],
             "fault_injected": False,
             "injected_fault": None,
             "failure_cause": None,
@@ -633,8 +649,16 @@ class Hardware:
                         "wake_samples": len(self.wake) // 2,
                         "gap_samples": 0,
                     }
-                    await asyncio.sleep(6.2)
-                    await self.ready(command)
+                    while True:
+                        await self.ready(command)
+                        await asyncio.sleep(6.2)
+                        states = {
+                            row["entity_id"]: row for row in await command("get_states")
+                        }
+                        if states.get(self.mute_entity, {}).get("state") != "off":
+                            raise ValueError("satellite microphone muted or unknown")
+                        if states.get(self.satellite, {}).get("state") == "idle":
+                            break
                     launched = time.monotonic()
                     row.update(
                         audio_started_monotonic=launched,
@@ -709,6 +733,13 @@ class Hardware:
                                         "request_id": 1,
                                     }
                                     for event in events
+                                ]
+                                row["failure_messages"] = [
+                                    runner.failure_message(
+                                        ValueError(str(event["data"]))
+                                    )
+                                    for event in row["events"]
+                                    if event["stage"] == "error"
                                 ]
                                 row["fallback_deadline_utc_ns"] = (
                                     event_ns(starts[0]) + runner.FALLBACK_LIMIT_NS
@@ -826,6 +857,9 @@ class Hardware:
             aiohttp.ClientError,
         ) as error:
             row["failures"].append(type(error).__name__)
+            row["failure_messages"].append(runner.failure_message(error))
+            if isinstance(error, SatelliteNotIdleError):
+                row["unavailable_reason"] = "satellite_not_idle"
         finally:
             try:
                 if playback is not None and playback.returncode is None:
@@ -844,6 +878,7 @@ class Hardware:
                     ]
                     if isinstance(outcome, BaseException):
                         row["failures"].append("FAULT_INJECTION_FAILED")
+                        row["failure_messages"].append(runner.failure_message(outcome))
                 after = await runner.fallback_snapshot(session, token_file, pipeline)
                 loss_end = await capture_loss(
                     None, satellites=[self.device_id], integration_data=after
@@ -890,4 +925,6 @@ class Hardware:
                     row["hardware_invalid_reason"] = "fault_outside_window"
             finally:
                 await server.restore()
+        if injection_status(row) != "verified":
+            runner.complete_failure_messages(row)
         return row
