@@ -314,6 +314,183 @@ async def test_setup_succeeds_with_both_fallbacks_absent(
             assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "different_entity",
+        "malformed_container",
+        "malformed_entries",
+        "malformed_languages",
+        "malformed_optional",
+        "missing_fields",
+        "unknown_part",
+    ],
+)
+async def test_stored_metadata_edges(
+    pipeline_hass,  # noqa: F811
+    client,
+    enable_custom_integrations,
+    case,
+):
+    from homeassistant.helpers.storage import Store
+
+    hass = pipeline_hass
+    cases = {
+        "different_entity": {
+            "stt": {"entity_id": "stt.other_engine", "languages": ["zz"]},
+            "tts": {
+                "entity_id": "tts.other_engine",
+                "languages": ["zz"],
+                "default_language": "zz",
+                "default_options": {"voice": "other-voice"},
+            },
+        },
+        "malformed_container": "invalid",
+        "malformed_entries": {"stt": False, "tts": []},
+        "malformed_languages": {
+            "stt": {"entity_id": "stt.not_started", "languages": "en"},
+            "tts": {"entity_id": "tts.not_started", "languages": [1]},
+        },
+        "malformed_optional": {
+            "stt": {
+                "entity_id": "stt.not_started",
+                "languages": ["en"],
+                "default_language": 1,
+            },
+            "tts": {
+                "entity_id": "tts.not_started",
+                "languages": ["en"],
+                "default_options": {"voice": 1},
+            },
+        },
+        "missing_fields": {
+            "stt": {"languages": ["en"]},
+            "tts": {"entity_id": "tts.not_started"},
+        },
+        "unknown_part": {
+            "stt": {"entity_id": "stt.not_started", "languages": ["en"]},
+            "tts": {
+                "entity_id": "tts.not_started",
+                "languages": ["en"],
+                "default_language": "en",
+            },
+            "future_part": None,
+        },
+    }
+
+    async def events(*args, **kwargs):
+        await asyncio.Event().wait()
+        yield
+
+    client.events = events
+    entry = MockConfigEntry(
+        domain="assist_live",
+        data={
+            "url": "https://server.example",
+            "token": "test-only",
+            "fallback_stt": "stt.not_started",
+            "fallback_tts": "tts.not_started",
+            "satellites": {"device-a": "satellite-a"},
+        },
+    )
+    entry.add_to_hass(hass)
+    store = Store(hass, 1, f"assist_live.{entry.entry_id}.turns")
+    await store.async_save(
+        {"version": 1, "turns": [], "cursors": {}, "fallback_metadata": cases[case]}
+    )
+    with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
+        assert await hass.config_entries.async_setup(entry.entry_id), (
+            "STORED_METADATA_BLOCKED_SETUP"
+        )
+        try:
+            runtime = hass.data["assist_live"][entry.entry_id]
+            expected = ["en"] if case == "unknown_part" else []
+            for part in ("stt", "tts"):
+                forward = getattr(runtime, part)["device-a"]
+                assert forward.supported_languages == expected, (
+                    "VALID_METADATA_PART_LOST"
+                    if case == "unknown_part"
+                    else "INVALID_OR_DIFFERENT_ENTITY_METADATA_USED"
+                )
+                if case != "unknown_part":
+                    assert runtime.fallback_metadata[part] == {
+                        "entity_id": f"{part}.not_started",
+                        "languages": [],
+                    }, "INVALID_METADATA_FIELDS_RETAINED"
+            invalid = ir.async_get(hass).async_get_issue(
+                "assist_live", f"{entry.entry_id}_invalid_stored_state"
+            )
+            if case in ("different_entity", "unknown_part"):
+                assert invalid is None, "IGNORED_METADATA_MARKED_STORE_INVALID"
+            else:
+                assert invalid is not None, "MALFORMED_METADATA_NOT_REPORTED"
+        finally:
+            assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_reload_clears_old_fallback_repair_before_new_setup(fallback_entry):  # noqa: F811
+    import custom_components.assist_live as integration
+
+    hass, entry = fallback_entry
+    runtime = hass.data["assist_live"][entry.entry_id]
+    with (
+        patch(
+            "homeassistant.components.stt.async_get_speech_to_text_entity",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.assist_live.tts.get_engine_instance", return_value=None
+        ),
+    ):
+        runtime._health_due = 0
+        await runtime.refresh_health()
+    for part in ("stt", "tts"):
+        assert issue(hass, entry, part).translation_placeholders == {
+            "entity": f"{part}.contract_{part}"
+        }
+
+    before_setup = []
+    original_setup = integration.async_setup_entry
+
+    async def setup(hass, entry):
+        before_setup.append({part: issue(hass, entry, part) for part in ("stt", "tts")})
+        return await original_setup(hass, entry)
+
+    with patch.object(integration, "async_setup_entry", side_effect=setup):
+        hass.config_entries.async_update_entry(
+            entry,
+            options={
+                "fallback_stt": "stt.alternate_stt",
+                "fallback_tts": "tts.alternate_tts",
+            },
+        )
+        await hass.async_block_till_done()
+    assert len(before_setup) == 1, "OPTIONS_CHANGE_DID_NOT_RELOAD"
+    assert all(value is None for value in before_setup[0].values()), (
+        "UNLOAD_RETAINED_OLD_FALLBACK_REPAIR"
+    )
+    reloaded = hass.data["assist_live"][entry.entry_id]
+    assert reloaded is not runtime
+    for part in ("stt", "tts"):
+        assert issue(hass, entry, part) is None, "HEALTHY_ENGINE_RECREATED_REPAIR"
+
+    with (
+        patch(
+            "homeassistant.components.stt.async_get_speech_to_text_entity",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.assist_live.tts.get_engine_instance", return_value=None
+        ),
+    ):
+        reloaded._health_due = 0
+        await reloaded.refresh_health()
+    for part in ("stt", "tts"):
+        assert issue(hass, entry, part).translation_placeholders == {
+            "entity": f"{part}.alternate_{part}"
+        }, "RELOADED_REPAIR_NAMES_OLD_ENGINE"
+
+
 async def test_setup_error_unloads_platforms_and_next_setup_succeeds(
     pipeline_hass,  # noqa: F811
     client,

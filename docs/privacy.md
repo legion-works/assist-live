@@ -50,7 +50,7 @@ The failure counter and error-class log contain no names. See [configuration](co
 
 ## Content and records
 
-The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/8339feea795eac71008cbaa3f8046706a14602b6/docs/protocol.md) states:
+The [pinned protocol](https://github.com/legion-works/assist-live-server/blob/d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3/docs/protocol.md) states:
 "This message does not change transcript bytes."
 This rule applies to `speaker_result`.
 HA sends the transcript to its pipeline when it gets `final`. It does not wait for speaker metadata.

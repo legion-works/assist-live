@@ -3826,3 +3826,21 @@ Engine recovery continues to delete the issue on the next lookup.
 Before this startup change, the six new cases gave `4 failed, 2 passed` on the prepared tree.
 The lifecycle set then gave `18 passed`. The isolated startup control gave `6 passed`.
 A scratch mutation without the startup check gave `BOOT_MAINTENANCE_CREATED_REPAIR` for STT and TTS.
+
+## Fallback metadata and reload repair checks
+
+The integration does not use stored fallback metadata for a different entity ID.
+It does not use malformed metadata, and setup continues.
+Unknown metadata part keys do not make a stored-state repair issue. Correct STT and TTS values stay available.
+
+`async_unload_entry` deletes fallback repair issues for the two parts before the next setup.
+The next due maintenance health read makes them only if the current engine is missing.
+The reload test checks the issue placeholders after a change to the fallback selections.
+
+The first eight repository cases gave `2 failed, 6 passed` at `8d39818`.
+The named failures were `IGNORED_METADATA_MARKED_STORE_INVALID` and `UNLOAD_RETAINED_OLD_FALLBACK_REPAIR`.
+The lifecycle set then gave `26 passed`.
+
+The three current server citations use `d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3`.
+The server source at that commit contains the privacy sentence, provider selection rules, and text-position rules.
+Historical verification citations stay unchanged.

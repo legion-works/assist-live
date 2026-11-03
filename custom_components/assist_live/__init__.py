@@ -265,9 +265,10 @@ class Runtime:
             metadata = {}
             invalid = True
         for part, values in metadata.items():
+            if part not in ("stt", "tts"):
+                continue
             if (
-                part not in ("stt", "tts")
-                or not isinstance(values, dict)
+                not isinstance(values, dict)
                 or not isinstance(values.get("entity_id"), str)
                 or not isinstance(values.get("languages"), list)
                 or not all(isinstance(lang, str) for lang in values["languages"])
@@ -521,4 +522,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     await runtime.stop()
+    settings = effective_settings(entry)
+    for part in ("stt", "tts"):
+        fallback_issue(
+            hass, entry.entry_id, part, settings.get(f"fallback_{part}", ""), False
+        )
     return True
