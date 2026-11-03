@@ -67,6 +67,8 @@ class Record:
     audio_format: dict[str, Any] | None = None
     server_refusals: dict[str, str] = field(default_factory=dict)
     fallback_reasons: dict[str, FallbackReason] = field(default_factory=dict)
+    server_audio_samples: int | None = None
+    server_audio_last_chunk_samples: int = 0
     open_failure: FallbackReason = "open_error"
     open_error_class: str = "None"
     last_activity: float | None = None
@@ -306,6 +308,8 @@ class TurnLedger:
         *,
         reason: FallbackReason,
         error_class: str = "None",
+        server_audio_samples: int | None = None,
+        server_audio_last_chunk_samples: int | None = None,
     ) -> None:
         entity_id = entity_id or "unknown"
         mode = (
@@ -314,6 +318,13 @@ class TurnLedger:
         self.used(turn_id, part, entity_id, mode)
         if record := self.records.get(turn_id):
             record.fallback_reasons[part.removesuffix("_fallback")] = reason
+            if (
+                part == "stt_fallback"
+                and server_audio_samples is not None
+                and server_audio_last_chunk_samples is not None
+            ):
+                record.server_audio_samples = server_audio_samples
+                record.server_audio_last_chunk_samples = server_audio_last_chunk_samples
         self.mark(turn_id, "fallback_used", reason=reason)
         _LOGGER.debug("fallback_used reason=%s error=%s", reason, error_class)
 

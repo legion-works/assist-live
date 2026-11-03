@@ -111,6 +111,14 @@ They include counts, destination categories, timing quality, and selected audio-
 The per-turn service list includes each used fallback, not only the configured engines.
 HA keeps one last-turn summary for each satellite in memory. It does not keep that summary after a restart.
 
+After STT fallback, `server_audio_samples` counts 16 kHz mono samples handed to the server client before failure.
+`server_audio_last_chunk_samples` counts the last chunk in that hand-over.
+The two values are nonnegative integers, not audio or text. They are 0 if no audio went to the client.
+They contain no fallback replay samples and do not change during fallback.
+
+Without STT fallback, the row does not have these fields.
+The count does not prove server receipt. See the [write bound](configuration.md#fallback-and-timing).
+
 TTS failure events can contain the full reply text.
 The optional failure notification can also show that text.
 These are not part of default diagnostics. Use content privacy rules for event listeners.

@@ -284,6 +284,8 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                     getattr(self.fallback, "entity_id", "unknown"),
                     reason=reason,
                     error_class=error_class,
+                    server_audio_samples=audio.server_audio_samples,
+                    server_audio_last_chunk_samples=audio.server_audio_last_chunk_samples,
                 )
 
                 async def local_audio() -> AsyncGenerator[bytes]:

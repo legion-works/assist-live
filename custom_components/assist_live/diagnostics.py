@@ -88,6 +88,16 @@ async def async_get_config_entry_diagnostics(
         turns.append(
             {
                 "turn_id": record.turn.turn_id,
+                **(
+                    {
+                        "server_audio_samples": record.server_audio_samples,
+                        "server_audio_last_chunk_samples": (
+                            record.server_audio_last_chunk_samples
+                        ),
+                    }
+                    if record.server_audio_samples is not None
+                    else {}
+                ),
                 "satellite": safe_label(record.turn.satellite),
                 "destinations": [
                     {

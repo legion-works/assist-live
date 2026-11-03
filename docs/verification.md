@@ -3630,3 +3630,39 @@ Three syntax-valid scratch mutations each gave a named assertion failure:
 
 A local page test checked the empty-export refusal, null-text status export, saved selection, and text-button state change.
 No bench change or hardware acceptance result is part of this record.
+
+## Server audio sample counts before STT fallback
+
+Date: 2026-11-03 (UTC).
+
+Each diagnostic turn row with STT fallback gives `server_audio_samples` and `server_audio_last_chunk_samples`.
+These nonnegative integers count 16 kHz mono samples, not audio or text.
+They are 0 if the server is not available at turn start. Without STT fallback, the row does not have these fields.
+
+The integration counts correct PCM samples when it hands a chunk to the pinned client.
+The client awaits each socket write before it requests the next chunk. It has no audio queue between these steps.
+
+The last chunk can be in flight at failure.
+Thus completed local writes contain between `server_audio_samples - server_audio_last_chunk_samples` and `server_audio_samples` samples.
+Socket buffers and the server can have different audio positions. These counts do not prove server receipt.
+
+The ledger keeps the count at fallback entry. Buffered audio, fallback replay, and subsequent input do not add to it.
+Each turn has its own count and last-chunk bound.
+The pinned client's PCM rule refuses an odd byte count. The integration refuses that chunk before it adds samples.
+
+Before implementation, the new tests gave `3 failed, 1 passed` with production code from `44df2e3`.
+The named assertions were `unavailable_server_sent_no_samples`, `only_handed_over_samples_not_bytes_or_buffer`, and `odd_pcm_is_not_a_sent_sample`.
+After implementation, the unchanged scratch control gave `7 passed`.
+The tests also use the pinned client with an in-flight socket write at three different chunk sizes.
+
+```sh
+uv run --locked pytest tests/test_server_audio_samples.py -q
+```
+
+Three syntax-valid production mutations in different scratch copies gave named assertion failures:
+
+- Count bytes as samples: `only_handed_over_samples_not_bytes_or_buffer`.
+- Count buffered but unsent audio: `only_handed_over_samples_not_bytes_or_buffer`.
+- Keep the count across turns: `sample_count_is_per_turn`.
+
+No client dependency, bench setting, deployment, or hardware acceptance result changed.

@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from contextlib import suppress
 
+from assist_live_client.protocol import ProtocolError
 from pymicro_vad import MicroVad
 
 
@@ -22,6 +23,8 @@ class FallbackAudio:
         self._changed = asyncio.Condition()
         self._done = False
         self._error: Exception | None = None
+        self.server_audio_samples = 0
+        self.server_audio_last_chunk_samples = 0
         self._producer = asyncio.create_task(self._collect())
 
     async def _collect(self) -> None:
@@ -45,6 +48,16 @@ class FallbackAudio:
                 self._changed.notify_all()
 
     async def server_audio(self) -> AsyncIterator[bytes]:
+        async for chunk in self._audio():
+            if len(chunk) % 2:
+                raise ProtocolError("invalid PCM length", kind="malformed")
+            # The client awaits each write before it requests the next chunk.
+            # The last chunk can be in flight, not a completed socket write.
+            self.server_audio_last_chunk_samples = len(chunk) // 2
+            self.server_audio_samples += self.server_audio_last_chunk_samples
+            yield chunk
+
+    async def _audio(self) -> AsyncIterator[bytes]:
         offset = 0
 
         def available() -> bool:
@@ -67,7 +80,7 @@ class FallbackAudio:
         quiet = 0
         count = 0
         # Replay also supplies the voice history for the local end decision.
-        async for chunk in self.server_audio():
+        async for chunk in self._audio():
             buffer.extend(chunk)
             while len(buffer) >= 320:
                 frame = bytes(buffer[:320])

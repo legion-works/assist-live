@@ -175,6 +175,19 @@ These diagnostic correlation IDs contain no transcript or audio content.
 Each diagnostic turn row includes the latency sensor's `turn_id` attribute value, a correlation ID with no content.
 HA does not include these two attributes in recorder history.
 
+After STT fallback, the same row includes two nonnegative integers:
+
+- `server_audio_samples`: 16 kHz mono samples handed to the server client before the failure that caused fallback.
+- `server_audio_last_chunk_samples`: samples in the last chunk handed to that client.
+
+The two values are 0 when the server is not available at turn start. Without STT fallback, the row does not have these fields.
+Audio kept only for fallback does not add to these values. Fallback replay and subsequent input do not change them.
+
+The client awaits each socket write before it requests the next chunk. The last chunk can be in flight at stream failure.
+Thus the completed local write count is in `[server_audio_samples - server_audio_last_chunk_samples, server_audio_samples]`.
+The maximum chunk is 16000 samples (1 s), but the second field gives the actual bound for that turn.
+Socket buffers can accept writes after the server stops. These counts do not prove server receipt or the sample where the server stopped.
+
 ## Transcript storage and release checks
 
 The `record_transcripts` option defaults to `false`.
