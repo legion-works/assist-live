@@ -283,10 +283,24 @@ def acceptance_fixture():
     fast = copy.deepcopy(safe)
     for row in fast:
         row["profile"] = "fast"
+    fault_baselines = {
+        engine: {
+            "engine_id": "stt." + engine,
+            "clip_id": labels[0]["id"],
+            "audio_sha256": labels[0]["audio_sha256"],
+            "status": "available",
+            "transcript": "Turn on test light.",
+        }
+        for engine in ("server", "fallback")
+    }
     faults = {
         "trials": [
             {
                 "stage": stage,
+                "clip_id": labels[0]["id"],
+                "audio_sha256": labels[0]["audio_sha256"],
+                "stt_engines": {"server": "stt.server", "fallback": "stt.fallback"},
+                "baselines": copy.deepcopy(fault_baselines),
                 "turn_id": f"fault-{stage}-{i}",
                 "correct_transcript": True,
                 "operations_correct": True,

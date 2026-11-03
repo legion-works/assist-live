@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import aiohttp
 import pytest
 from aiohttp import web
+from test_pipeline_contract import pipeline_hass as configured_hass  # noqa: F401
 
 from tests.test_fault_runner import cleanup_bench as cleanup_bench
 from tools import fault_runner
@@ -160,7 +161,12 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
 
     token_file, sockets, deletes, _, _ = ha_socket
     row = trial()
-    label = {"id": "clip", "split": "held_out", **row["label"]}
+    label = {
+        "id": "clip",
+        "audio_sha256": "a" * 64,
+        "split": "held_out",
+        **row["label"],
+    }
     monkeypatch.setattr(fault_runner, "load_corpus", lambda _: [label])
     monkeypatch.setattr(fault_runner, "audio_input", lambda *_: b"synthetic")
 
@@ -177,6 +183,15 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
     monkeypatch.setattr(fault_runner.TestServer, "restore", restore)
     monkeypatch.setattr(fault_runner.TestServer, "measure_stop_latency", measure)
     monkeypatch.setattr(fault_runner, "pipeline_trial", pipeline_trial)
+
+    async def engines(*_):
+        return row["stt_engines"]
+
+    async def baselines(*_, **kwargs):
+        return row["baselines"]
+
+    monkeypatch.setattr(fault_runner, "baseline_engines", engines)
+    monkeypatch.setattr(fault_runner, "collect_baselines", baselines)
     result = await fault_runner.run(
         Namespace(
             output=tmp_path / "result.json",
@@ -196,6 +211,261 @@ async def test_runner_wires_fresh_cleanup_after_control_disconnect(
     assert result["restored_healthy"] is True
     assert result["stop_latency_seconds"] == 0.125
     assert len(deletes) == 1 and deletes[0] is not sockets[0]
+
+
+@pytest.mark.usefixtures(
+    "configured_hass", "enable_custom_integrations", "available_fallbacks"
+)
+async def test_actual_ha_options_discovery_keeps_entry_options_byte_identical(
+    hass,
+):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain="assist_live",
+        data={"fallback_stt": "stt.original", "fallback_tts": "tts.standard"},
+        options={"fallback_stt": "stt.selected", "record_transcripts": False},
+    )
+    entry.add_to_hass(hass)
+    before = json.dumps(dict(entry.options), separators=(",", ":")).encode()
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    try:
+        fallback = next(
+            key for key in form["data_schema"].schema if key == "fallback_stt"
+        )
+        assert fallback.default() == "stt.selected", "OPTIONS_OVERRIDE_ENTRY_DATA"
+    finally:
+        hass.config_entries.options.async_abort(form["flow_id"])
+    after = json.dumps(dict(entry.options), separators=(",", ":")).encode()
+    assert after == before, "HA_OPTIONS_BYTE_IDENTICAL_AFTER_DISCOVERY"
+    assert not hass.config_entries.options.async_progress(), "HA_OPTIONS_FLOW_DELETED"
+
+
+@pytest.mark.parametrize(
+    "form_case",
+    [
+        "valid",
+        "no-default",
+        "denied",
+        "non-mapping",
+        "delete-fails-after-success",
+        "delete-fails-after-error",
+    ],
+)
+async def test_baseline_entity_uses_public_options_form_without_saved_change(
+    form_case, tmp_path, socket_enabled, unused_tcp_port, monkeypatch
+):
+    options = b'{"fallback_stt":"stt.fallback","record_transcripts":false}'
+    before = options
+    flows = set()
+    requests = []
+
+    async def form(request):
+        nonlocal options
+        requests.append((request.method, request.path))
+        assert request.headers["Authorization"] == "Bearer synthetic"
+        if request.method == "DELETE":
+            if form_case.startswith("delete-fails"):
+                return web.Response(status=500)
+            flows.remove(request.match_info["flow_id"])
+            return web.json_response({"message": "Flow aborted"})
+        assert await request.json() == {"handler": "entry"}
+        if form_case == "denied":
+            return web.Response(status=403)
+        if form_case == "non-mapping":
+            return web.json_response([])
+        flows.add("flow")
+        return web.json_response(
+            {
+                "type": "form",
+                "flow_id": "flow",
+                "data_schema": [
+                    {
+                        "name": "fallback_stt",
+                        **(
+                            {"default": json.loads(options)["fallback_stt"]}
+                            if form_case in ("valid", "delete-fails-after-success")
+                            else {}
+                        ),
+                    }
+                ],
+            }
+        )
+
+    @asynccontextmanager
+    async def command(*_):
+        async def call(kind):
+            if kind == "assist_pipeline/pipeline/list":
+                return {
+                    "pipelines": [
+                        {
+                            "id": "trial",
+                            "stt_engine": "stt.server",
+                            "stt_language": "en",
+                        }
+                    ]
+                }
+            assert kind == "config/entity_registry/list"
+            return [
+                {
+                    "entity_id": "stt.server",
+                    "platform": "assist_live",
+                    "config_entry_id": "entry",
+                }
+            ]
+
+        yield call
+
+    app = web.Application()
+    app.router.add_post("/api/config/config_entries/options/flow", form)
+    app.router.add_delete("/api/config/config_entries/options/flow/{flow_id}", form)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "localhost", unused_tcp_port).start()
+    monkeypatch.setattr(fault_runner, "control_command", command)
+    monkeypatch.setattr(fault_runner, "URL", f"http://localhost:{unused_tcp_port}")
+    token_file = tmp_path / "authentication.json"
+    token_file.write_text(json.dumps({"token": "synthetic"}))
+    try:
+        async with aiohttp.ClientSession() as session:
+            if form_case == "valid":
+                assert await fault_runner.baseline_engines(
+                    session, token_file, "trial"
+                ) == {
+                    "server": "stt.server",
+                    "fallback": "stt.fallback",
+                    "language": "en",
+                }
+            elif form_case == "delete-fails-after-success":
+                with pytest.raises(aiohttp.ClientResponseError):
+                    await fault_runner.baseline_engines(session, token_file, "trial")
+            elif form_case == "delete-fails-after-error":
+                with pytest.raises(ValueError) as caught:
+                    await fault_runner.baseline_engines(session, token_file, "trial")
+                assert str(caught.value) == "fallback STT entity unavailable", (
+                    "DELETE_FAILURE_KEEPS_FIRST_ERROR"
+                )
+                assert caught.value.__notes__ == [
+                    "options flow delete failed: ClientResponseError"
+                ], "DELETE_FAILURE_NOTED_ON_FIRST_ERROR"
+            else:
+                with pytest.raises((ValueError, aiohttp.ClientError)):
+                    await fault_runner.baseline_engines(session, token_file, "trial")
+        assert options == before, "OPTIONS_BYTE_IDENTICAL_AFTER_UNSUBMITTED_FLOW"
+        if not form_case.startswith("delete-fails"):
+            assert not flows, "OPTIONS_FLOW_ALWAYS_DELETED"
+        assert [method for method, _ in requests] == (
+            ["POST"] if form_case in ("denied", "non-mapping") else ["POST", "DELETE"]
+        )
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.parametrize(
+    "result", ["success", "error", "missing", "denied", "non-mapping"]
+)
+async def test_fallback_baseline_posts_complete_pcm_to_selected_entity(
+    result, tmp_path, socket_enabled, unused_tcp_port, monkeypatch
+):
+    pcm = bytes(range(256)) * 20
+
+    async def recognize(request):
+        assert request.path == "/api/stt/stt.selected"
+        assert request.headers["Authorization"] == "Bearer synthetic"
+        assert request.headers["X-Speech-Content"] == (
+            "format=wav; codec=pcm; sample_rate=16000; bit_rate=16; "
+            "channel=1; language=en"
+        )
+        assert await request.read() == pcm, "FALLBACK_BASELINE_COMPLETE_CLIP"
+        if result == "denied":
+            return web.Response(status=403)
+        if result == "non-mapping":
+            return web.json_response([])
+        return web.json_response(
+            {"result": result, "text": "complete transcript"}
+            if result != "missing"
+            else {}
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/stt/{entity}", recognize)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "localhost", unused_tcp_port).start()
+    monkeypatch.setattr(fault_runner, "URL", f"http://localhost:{unused_tcp_port}")
+    token_file = tmp_path / "authentication.json"
+    token_file.write_text(json.dumps({"token": "synthetic"}))
+    try:
+        async with aiohttp.ClientSession() as session:
+            if result == "success":
+                assert (
+                    await fault_runner.fallback_baseline(
+                        session, token_file, "stt.selected", "en", pcm
+                    )
+                    == "complete transcript"
+                )
+            else:
+                with pytest.raises((ValueError, aiohttp.ClientError)):
+                    await fault_runner.fallback_baseline(
+                        session, token_file, "stt.selected", "en", pcm
+                    )
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.parametrize("fail", [None, "server", "fallback", "discovery"])
+async def test_collect_baselines_keeps_engine_and_clip_identity_and_fails_closed(
+    fail, monkeypatch
+):
+    from pathlib import Path
+
+    from tests.test_fault_runner import trial
+
+    calls = []
+    engines = {"server": "stt.server", "fallback": "stt.fallback", "language": "en"}
+    label = {"id": "test", "audio_sha256": "a" * 64}
+    pcm = b"complete synthetic clip"
+
+    async def pipeline(*args, **kwargs):
+        assert args[2:6] == ("temporary", label, pcm, "baseline")
+        assert kwargs == {"device_id": "virtual", "turn_sensor": "sensor.turn"}
+        calls.append("server")
+        row = trial()
+        row["fallback_turns"][0]["destinations"] = []
+        row.update(
+            failures=["error"] if fail == "server" else [],
+            recognized_transcript="server text",
+        )
+        return row
+
+    async def fallback(*args):
+        assert args[2:] == ("stt.fallback", "en", pcm)
+        calls.append("fallback")
+        if fail == "fallback":
+            raise ValueError("synthetic failure")
+        return "fallback text"
+
+    monkeypatch.setattr(fault_runner, "pipeline_trial", pipeline)
+    monkeypatch.setattr(fault_runner, "fallback_baseline", fallback)
+    baselines = await fault_runner.collect_baselines(
+        None,
+        Path("unused"),
+        "temporary",
+        label,
+        pcm,
+        {} if fail == "discovery" else engines,
+        None,
+        device_id="virtual",
+        turn_sensor="sensor.turn",
+    )
+    assert calls == ([] if fail == "discovery" else ["server", "fallback"])
+    for engine, record in baselines.items():
+        assert record["clip_id"] == label["id"]
+        assert record["audio_sha256"] == label["audio_sha256"]
+        assert record["engine_id"] == (None if fail == "discovery" else engines[engine])
+        assert record["status"] == (
+            "unavailable" if fail in (engine, "discovery") else "available"
+        )
 
 
 @pytest.mark.parametrize("payload", ["counts", "missing", "malformed", "denied"])

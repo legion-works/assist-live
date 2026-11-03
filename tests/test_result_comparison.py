@@ -44,6 +44,12 @@ def smoke_turn(request):
         },
     )
     set_reasons(row, "after-final")
+    baseline_text = {
+        123: "start timer for 2 minutes 3 seconds",
+        894: "start the timer for 894 seconds",
+    }[seconds]
+    for baseline in row["baselines"].values():
+        baseline["transcript"] = baseline_text
     row["action_trace"] = [
         {
             "service": "timer.started",

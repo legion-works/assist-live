@@ -22,6 +22,19 @@ def trial():
         fallback_reasons_after={"stream_closed": 1},
         fallback_reasons_delta={"stream_closed": 1},
         fault_injected=True,
+        clip_id="test",
+        audio_sha256="a" * 64,
+        stt_engines={"server": "stt.server", "fallback": "stt.fallback"},
+        baselines={
+            engine: {
+                "status": "available",
+                "engine_id": "stt." + engine,
+                "clip_id": "test",
+                "audio_sha256": "a" * 64,
+                "transcript": row["recognized_transcript"],
+            }
+            for engine in ("server", "fallback")
+        },
     )
     set_reasons(row, "speech")
     return row
@@ -359,12 +372,91 @@ def test_deadline_is_twenty_seconds_from_run_start(elapsed, passed):
     assert not acceptable(row)
 
 
-def test_stop_plan_targets_first_quarter_and_subtracts_latency():
+def test_speech_stop_plan_targets_midpoint_and_subtracts_latency():
     from tools.fault_runner import fault_sample
 
     label = {"alignment_words": [{"start_sample": 16000, "end_sample": 32000}]}
-    assert fault_sample(label, "speech") == 20000
-    assert fault_sample(label, "speech", stop_latency_seconds=0.1) == 18400
+    assert fault_sample(label, "speech") == 24000
+    assert fault_sample(label, "speech", stop_latency_seconds=0.1) == 22400
+
+
+@pytest.mark.parametrize(
+    "stage,engine", [("speech", "fallback"), ("after-final", "server")]
+)
+def test_fault_text_uses_same_engine_baseline_not_prompt(stage, engine):
+    from tools.fault_runner import acceptable
+
+    row = trial()
+    row["stage"] = stage
+    set_reasons(row, stage)
+    row["label"]["transcript"] = "a different prompt"
+    row["baselines"]["server" if engine == "fallback" else "fallback"]["transcript"] = (
+        "other engine text"
+    )
+    assert acceptable(row), "SAME_ENGINE_BASELINE_NOT_PROMPT"
+    row["baselines"][engine]["transcript"] = "a different result"
+    assert not acceptable(row), "BASELINE_MISMATCH_FAILS"
+
+
+@pytest.mark.parametrize(
+    "change", ["missing", "failed", "identity", "clip", "audio", "text"]
+)
+def test_missing_or_failed_baseline_is_unavailable(change):
+    from tools.fault_runner import trial_status
+
+    row = trial()
+    baseline = row["baselines"]["fallback"]
+    if change == "missing":
+        del row["baselines"]["fallback"]
+    elif change == "failed":
+        baseline["status"] = "unavailable"
+    elif change == "identity":
+        baseline["engine_id"] = "stt.other"
+    elif change == "clip":
+        baseline["clip_id"] = "other"
+    elif change == "audio":
+        baseline["audio_sha256"] = "b" * 64
+    else:
+        baseline["transcript"] = None
+    assert trial_status(row) == "unavailable", "BASELINE_REQUIRED_FAIL_CLOSED"
+
+
+def test_engine_attribution_comes_from_diagnostics_not_stage_or_cause_field():
+    from tools.fault_runner import transcript_engine
+
+    row = trial()
+    row.update(stage="after-final", failure_cause=None)
+    assert transcript_engine(row) == "fallback", "DIAGNOSTIC_STT_CAUSE_SELECTS_ENGINE"
+    row["fallback_turns"][0]["destinations"] = [
+        {"part": "tts_fallback", "fallback_reason": "stream_closed"}
+    ]
+    row["failure_cause"] = "stream_closed"
+    assert transcript_engine(row) == "server", "TTS_CAUSE_DOES_NOT_SELECT_STT_ENGINE"
+    row["fallback_turns"] = []
+    assert transcript_engine(row) is None
+
+
+@pytest.mark.parametrize(
+    "start,end,latency", [(0, 16000, 0.1), (16000, 32000, 0), (16000, 20000, 0.1)]
+)
+def test_speech_stop_margin_keeps_request_and_stop_inside_edges(start, end, latency):
+    from tools.fault_runner import fault_sample
+
+    label = {"alignment_words": [{"start_sample": start, "end_sample": end}]}
+    request = fault_sample(label, "speech", stop_latency_seconds=latency)
+    margin = max(320, int(latency * 16000))
+    assert request >= start + 320, "STOP_REQUEST_INSIDE_VOICE_WINDOW"
+    assert start + margin <= request + int(latency * 16000) < end - margin, (
+        "STOP_COMPLETION_HAS_LATENCY_MARGIN"
+    )
+
+
+def test_speech_window_too_short_for_margin_is_unavailable():
+    from tools.fault_runner import fault_sample
+
+    label = {"alignment_words": [{"start_sample": 0, "end_sample": 640}]}
+    with pytest.raises(ValueError, match="margin"):
+        fault_sample(label, "speech", stop_latency_seconds=0.1)
 
 
 @pytest.mark.parametrize(
@@ -659,6 +751,8 @@ async def test_driver_injects_each_fault_point_and_restores(
         stop_latency_seconds=0.1,
         device_id="virtual-device" if evidence != "missing" else None,
         turn_sensor="sensor.latency" if evidence != "missing" else None,
+        baselines=trial()["baselines"],
+        stt_engines=trial()["stt_engines"],
     )
     assert calls.count("stop") == calls.count("restore") == 1
     assert calls[-1] == "restore"
@@ -714,7 +808,7 @@ async def test_driver_injects_each_fault_point_and_restores(
         assert calls.index("stop") > calls.index("audio")
     else:
         assert row["fault_planned_audio_sample"] == (
-            18400 if stage == "speech" else 34400
+            22400 if stage == "speech" else 34400
         )
         assert (
             row["fault_planned_audio_sample"]
@@ -723,7 +817,7 @@ async def test_driver_injects_each_fault_point_and_restores(
         )
         if not missed:
             assert row["fault_stopped_audio_sample"] == pytest.approx(
-                20160 if stage == "speech" else 36160, abs=1
+                24000 if stage == "speech" else 36160, abs=1
             )
 
 
@@ -1089,6 +1183,8 @@ async def test_driver_records_the_pinned_empty_error_as_complete_zero_operations
         "before",
         Server(),
         turn_sensor="sensor.latency",
+        baselines=expected["baselines"],
+        stt_engines=expected["stt_engines"],
     )
     assert row["acceptable"]
     assert row["recognized_transcript"] is row["evaluated_intent"] is None

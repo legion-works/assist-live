@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -142,7 +143,7 @@ def recorded_reason_matches(trial: Row) -> bool:
         or delta != ({reason: 1} if reason is not None else {})
     ):
         return False
-    if stage == "after-final":
+    if stage in ("after-final", "baseline"):
         return delta == {} and trial.get("failure_cause") is None
     return (
         stage in EXPECTED_REASONS
@@ -152,7 +153,42 @@ def recorded_reason_matches(trial: Row) -> bool:
     )
 
 
+def transcript_engine(trial: Row) -> str | None:
+    evidence, reason = stt_reason_for_turn(trial)
+    return ("fallback" if reason else "server") if evidence else None
+
+
+def selected_baseline(trial: Row) -> Row | None:
+    engine = transcript_engine(trial)
+    baselines = trial.get("baselines")
+    engines = trial.get("stt_engines")
+    if not isinstance(baselines, dict) or not isinstance(engines, dict):
+        return None
+    baseline = baselines.get(engine)
+    if not isinstance(baseline, dict) or not (
+        baseline.get("status") == "available"
+        and isinstance(baseline.get("engine_id"), str)
+        and baseline["engine_id"]
+        and baseline["engine_id"] == engines.get(engine)
+        and baseline.get("clip_id") == trial.get("clip_id")
+        and baseline.get("audio_sha256") == trial.get("audio_sha256")
+        and isinstance(baseline.get("transcript"), str)
+        and baseline["transcript"].strip()
+    ):
+        return None
+    return baseline
+
+
+def trial_status(trial: Row) -> str:
+    if selected_baseline(trial) is None:
+        return "unavailable"
+    return "passed" if acceptable(trial) else "failed"
+
+
 def acceptable(trial: Row) -> bool:
+    baseline = selected_baseline(trial)
+    if baseline is None:
+        return False
     if not all(
         key in trial
         for key in ("recognized_transcript", "evaluated_intent", "action_trace")
@@ -181,7 +217,6 @@ def acceptable(trial: Row) -> bool:
         and isinstance(trial.get("turn_id"), str)
         and trial["turn_id"]
         and isinstance(label, dict)
-        and isinstance(label.get("transcript"), str)
         and isinstance(label.get("intent"), dict)
         and trial.get("stage") in STAGES
         and trial.get("fault_injected") is True
@@ -206,7 +241,7 @@ def acceptable(trial: Row) -> bool:
         and isinstance(selected.get("slots"), dict)
     ):
         return False
-    if words(transcript) != words(label["transcript"]):
+    if words(transcript) != words(baseline["transcript"]):
         return False
     inventory = json.loads((FIXTURES / "intents.json").read_text())
     try:
@@ -296,6 +331,16 @@ def fault_sample(
     label: Row, stage: str, *, stop_latency_seconds: float = 0
 ) -> int | None:
     window = fault_window(label, stage)
+    if window and stage == "speech":
+        if not math.isfinite(stop_latency_seconds) or stop_latency_seconds < 0:
+            raise ValueError("invalid stop latency")
+        latency = math.ceil(stop_latency_seconds * 16000)
+        margin = max(320, latency)
+        earliest = max(window[0] + 320, window[0] + margin - latency)
+        latest = window[1] - margin - latency - 320
+        if earliest > latest:
+            raise ValueError("voice window too short for stop margin")
+        return min(latest, max(earliest, sum(window) // 2 - latency))
     return (
         max(
             0,
@@ -533,6 +578,8 @@ async def pipeline_trial(
     stop_latency_seconds: float = 0,
     device_id: str | None = None,
     turn_sensor: str | None = None,
+    baselines: Row | None = None,
+    stt_engines: Row | None = None,
 ) -> Row:
     row: Row = dict.fromkeys(RUN_FIELDS)
     row.update(
@@ -565,11 +612,18 @@ async def pipeline_trial(
         stop_latency_seconds=stop_latency_seconds,
         fallback_deadline_utc_ns=None,
         completed_utc_ns=None,
+        baselines=baselines,
+        stt_engines=stt_engines,
         host_timing={"mark_start_utc_ns": time.time_ns()},
     )
     injection: asyncio.Task[None] | None = None
     sender: asyncio.Task[None] | None = None
-    offset = fault_sample(label, stage, stop_latency_seconds=stop_latency_seconds)
+    try:
+        offset = fault_sample(label, stage, stop_latency_seconds=stop_latency_seconds)
+    except ValueError:
+        row.update(status="unavailable", acceptable=False)
+        row["failures"].append("FAULT_WINDOW_MARGIN_UNAVAILABLE")
+        return row
     row["fault_planned_audio_sample"] = offset
 
     async def inject() -> None:
@@ -793,13 +847,190 @@ async def pipeline_trial(
                     row["failures"].append("MISSING_OR_UNEXPECTED_FALLBACK_REASON")
             finally:
                 await server.restore()
-    row["acceptable"] = acceptable(row)
+    if stage == "baseline":
+        return row
+    row["transcript_engine"] = transcript_engine(row)
+    row["status"] = trial_status(row)
+    row["acceptable"] = row["status"] == "passed"
+    if row["status"] == "unavailable":
+        row["failures"].append("BASELINE_UNAVAILABLE")
     for event in row["events"]:
         event["turn_id"] = row["turn_id"]
     row["test_pipeline"] = pipeline_observations(row)
     if not row["acceptable"] and not row["failures"]:
         row["failures"].append("INCORRECT_TRANSCRIPT_OR_OPERATIONS")
     return row
+
+
+async def baseline_engines(
+    session: aiohttp.ClientSession, token_file: Path, pipeline: str
+) -> Row:
+    async with control_command(session, token_file) as command:
+        pipelines = await command("assist_pipeline/pipeline/list")
+        selected = next(
+            (item for item in pipelines["pipelines"] if item["id"] == pipeline), None
+        )
+        if selected is None:
+            raise ValueError("baseline pipeline unavailable")
+        registry = await command("config/entity_registry/list")
+        entries = [
+            item["config_entry_id"]
+            for item in registry
+            if item["entity_id"] == selected["stt_engine"]
+            and item.get("platform") == "assist_live"
+        ]
+    if len(entries) != 1:
+        raise ValueError("unique assist-live STT entry unavailable")
+    token = json.loads(token_file.read_text())["token"]
+    headers = {"Authorization": "Bearer " + token}
+    flow_id = None
+    error: BaseException | None = None
+    async with asyncio.timeout(30):
+        try:
+            async with session.post(
+                URL + "/api/config/config_entries/options/flow",
+                headers=headers,
+                json={"handler": entries[0]},
+            ) as response:
+                response.raise_for_status()
+                form = await response.json()
+            if not isinstance(form, dict):
+                raise ValueError("initial options form unavailable")
+            flow_id = form.get("flow_id")
+            if (
+                form.get("type") != "form"
+                or not isinstance(flow_id, str)
+                or not flow_id
+            ):
+                raise ValueError("initial options form unavailable")
+            fallback = next(
+                (
+                    field.get("default")
+                    for field in form["data_schema"]
+                    if isinstance(field, dict) and field.get("name") == "fallback_stt"
+                ),
+                None,
+            )
+            if not isinstance(fallback, str) or not fallback.startswith("stt."):
+                raise ValueError("fallback STT entity unavailable")
+            return {
+                "server": selected["stt_engine"],
+                "fallback": fallback,
+                "language": selected["stt_language"],
+            }
+        except BaseException as caught:
+            error = caught
+            raise
+        finally:
+            if isinstance(flow_id, str) and flow_id:
+                try:
+                    async with session.delete(
+                        URL + "/api/config/config_entries/options/flow/" + flow_id,
+                        headers=headers,
+                    ) as response:
+                        response.raise_for_status()
+                except Exception as cleanup:
+                    # A failed delete must not hide the first error.
+                    if error is None:
+                        raise
+                    error.add_note(
+                        "options flow delete failed: " + type(cleanup).__name__
+                    )
+
+
+async def fallback_baseline(
+    session: aiohttp.ClientSession,
+    token_file: Path,
+    engine: str,
+    language: str,
+    pcm: bytes,
+) -> str:
+    token = json.loads(token_file.read_text())["token"]
+    async with asyncio.timeout(30):
+        async with session.post(
+            URL + "/api/stt/" + engine,
+            headers={
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/octet-stream",
+                "X-Speech-Content": (
+                    "format=wav; codec=pcm; sample_rate=16000; bit_rate=16; "
+                    "channel=1; language=" + language
+                ),
+            },
+            data=pcm,
+        ) as response:
+            response.raise_for_status()
+            result = await response.json()
+    if (
+        not isinstance(result, dict)
+        or result.get("result") != "success"
+        or not isinstance(result.get("text"), str)
+        or not result["text"].strip()
+    ):
+        raise ValueError("fallback baseline has no successful transcript")
+    return str(result["text"])
+
+
+async def collect_baselines(
+    session: aiohttp.ClientSession,
+    token_file: Path,
+    pipeline: str,
+    label: Row,
+    pcm: bytes,
+    engines: Row,
+    server: TestServer,
+    *,
+    device_id: str | None = None,
+    turn_sensor: str | None = None,
+) -> Row:
+    baselines: Row = {}
+    for engine in ("server", "fallback"):
+        record: Row = {
+            "engine_id": engines.get(engine),
+            "clip_id": label["id"],
+            "audio_sha256": label["audio_sha256"],
+            "status": "unavailable",
+            "transcript": None,
+            "pipeline_id": pipeline if engine == "server" else None,
+            "interface": "assist_pipeline/run" if engine == "server" else "api/stt",
+        }
+        baselines[engine] = record
+        try:
+            if not engines.get(engine):
+                raise ValueError("baseline engine unavailable")
+            if engine == "server":
+                row = await pipeline_trial(
+                    session,
+                    token_file,
+                    pipeline,
+                    label,
+                    pcm,
+                    "baseline",
+                    server,
+                    device_id=device_id,
+                    turn_sensor=turn_sensor,
+                )
+                record["evidence"] = row
+                if row["failures"] or transcript_engine(row) != "server":
+                    raise ValueError("no-fault server baseline failed")
+                text = row["recognized_transcript"]
+            else:
+                text = await fallback_baseline(
+                    session, token_file, engines[engine], engines["language"], pcm
+                )
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("baseline transcript unavailable")
+            record.update(status="available", transcript=text)
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            TimeoutError,
+            aiohttp.ClientError,
+        ) as error:
+            record["error"] = type(error).__name__
+    return baselines
 
 
 @asynccontextmanager
@@ -1005,7 +1236,7 @@ async def run(args: argparse.Namespace) -> Row:
         for index in range(args.each):
             label = candidates[index % len(candidates)]
             try:
-                fault_sample(label, stage)
+                fault_window(label, stage)
                 pcm = audio_input(label, args.audio_root)
             except OSError, ValueError:
                 result["preflight_failed"] = True
@@ -1029,6 +1260,36 @@ async def run(args: argparse.Namespace) -> Row:
             async def trials(
                 pipeline: str, device_id: str | None = None, sensor: str | None = None
             ) -> None:
+                try:
+                    engines = await baseline_engines(session, args.token_file, pipeline)
+                except (
+                    OSError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    StopIteration,
+                    TimeoutError,
+                    aiohttp.ClientError,
+                ) as error:
+                    engines = {}
+                    result["baseline_engine_error"] = type(error).__name__
+                result["stt_engines"] = engines
+                cache: Row = {}
+                for planned in plans.values():
+                    for label, pcm in planned:
+                        if label["id"] not in cache:
+                            cache[label["id"]] = await collect_baselines(
+                                session,
+                                args.token_file,
+                                pipeline,
+                                label,
+                                pcm,
+                                engines,
+                                server,
+                                device_id=device_id,
+                                turn_sensor=sensor,
+                            )
+                result["baselines"] = cache
                 for stage in args.stages.split(","):
                     for index, (label, pcm) in enumerate(plans[stage]):
                         row = await pipeline_trial(
@@ -1042,6 +1303,8 @@ async def run(args: argparse.Namespace) -> Row:
                             stop_latency_seconds=result["stop_latency_seconds"],
                             device_id=device_id,
                             turn_sensor=sensor,
+                            baselines=cache[label["id"]],
+                            stt_engines=engines,
                         )
                         result["trials"].append(row)
                         result["stage_status"][stage] = {

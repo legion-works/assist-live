@@ -3323,3 +3323,30 @@ uv run --locked pytest tests/test_fault_runner.py -q -k without_data
 ```
 
 On `fcc3030`, this test gave `1 failed` with `AttributeError`. After the change, this test and the other fault-runner tests give no failure.
+
+## Fault results against the same STT engine
+
+Date: 2026-11-03 (UTC).
+
+The fault runner compares each transcript with a no-fault baseline from the same STT engine for the complete recording.
+The diagnostic turn row selects the engine, not the fault `stage` or prompt text.
+A missing or unsatisfactory baseline makes the trial `unavailable`.
+Intent, operations, fault cause, the actual stop window, and the 20 s deadline keep their checks.
+
+The server baseline uses the same pipeline as the trials.
+The fallback baseline uses public `POST /api/stt/{entity}` for the configured fallback entity.
+HA `2026.10.1` and `2026.10.4` declare this authenticated interface in `homeassistant/components/stt/__init__.py:262-312`.
+Lines `380-422` read `X-Speech-Content`. Lines `306-309` give the raw audio stream to the engine.
+
+The runner reads the fallback entity from an initial public options response, then deletes the flow without a submission.
+Tests show byte-identical options before and after the actual HA options flow.
+
+For voice stops, the runner subtracts the measured stop latency from the window midpoint and keeps a margin from each edge.
+The margin is the larger of that latency and one audio frame.
+A window too short for the margin gives `unavailable` without a fault.
+
+Before the repair on `9cf62b9`, the new tests gave `12 failed, 2 passed`.
+After the repair, `uv run --locked pytest tests/test_fault_runner.py tests/test_fault_cleanup.py -q` gave `204 passed`.
+`uv run --locked mypy` gave no issues in 33 source files.
+Scratch mutations gave named assertion failures: use of the prompt, the other engine's baseline, and a stop at the window edge.
+No bench trial ran for this change. These unit results do not prove hardware acceptance.
