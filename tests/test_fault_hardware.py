@@ -2,9 +2,11 @@ import asyncio
 import copy
 import hashlib
 import importlib
+import json
 import random
 import statistics
 import struct
+import time
 import wave
 from argparse import Namespace
 from contextlib import asynccontextmanager
@@ -752,3 +754,484 @@ def test_calibration_accumulates_media_counts_and_does_not_use_before_stop(tmp_p
     assert statistics.median(hardware.delay_samples) == pytest.approx(
         (expected + bootstrap) / 2
     ), "ALL_DELAY_SAMPLES_ACCUMULATE"
+
+
+def cancel_fakes(tmp_path, monkeypatch):
+    """Install the fakes for one hardware fault run and return their state."""
+    module = hardware_module()
+    from tools.probe_pipelines import pipeline_fields
+
+    original_sleep = asyncio.sleep
+    pcm = struct.pack("<1200h", *[n % 100 for n in range(1200)])
+    clip = wav_file(tmp_path / "clip.wav", pcm)
+    label = {
+        "id": "test",
+        "split": "held_out",
+        "audio_path": "clip.wav",
+        "audio_sha256": hashlib.sha256(clip.read_bytes()).hexdigest(),
+        "alignment_words": [{"start_sample": 16000, "end_sample": 17600}],
+        "pause_start_sample": 32000,
+        "pause_end_sample": 33600,
+    }
+    state = {
+        "pipelines": [{"id": "source", **pipeline_fields("stt.test", "tts.test")}],
+        "selects": {"select.pipeline": "Original"},
+        "commands": [],
+        "server_running": True,
+        "events": [],
+        "server_stops": 0,
+        "server_restores": 0,
+        "playback": None,
+        "playback_started": asyncio.Event(),
+        "server_stopped": asyncio.Event(),
+        "baseline_started": asyncio.Event(),
+        "trial_finished": False,
+        "delay_samples": [0.0],
+        "gets": 0,
+        "row": None,
+        "stop_with": None,
+    }
+
+    async def command(kind, **fields):
+        state["commands"].append((kind, fields))
+        if kind == "assist_pipeline/pipeline/list":
+            return {
+                "pipelines": copy.deepcopy(state["pipelines"]),
+                "preferred_pipeline": "source",
+            }
+        if kind == "get_states":
+            return [
+                {
+                    "entity_id": "conversation.assist_live_short",
+                    "attributes": {"virtual_device_id": "virtual"},
+                },
+                {
+                    "entity_id": "select.pipeline",
+                    "state": state["selects"]["select.pipeline"],
+                    "attributes": {},
+                },
+                {"entity_id": "switch.mute", "state": "off", "attributes": {}},
+                {
+                    "entity_id": "assist_satellite.test",
+                    "state": "idle",
+                    "attributes": {},
+                },
+                {
+                    "entity_id": "sensor.turn",
+                    "state": "unknown",
+                    "attributes": {
+                        "turn_type": "voice",
+                        "turn_id": "turn-new" if state["gets"] else "previous",
+                    },
+                },
+            ]
+        if kind == "config/entity_registry/list":
+            return [
+                {"entity_id": "stt.test", "device_id": "virtual-device"},
+                {
+                    "entity_id": "sensor.turn",
+                    "device_id": "virtual-device",
+                    "platform": "assist_live",
+                },
+                {"entity_id": "assist_satellite.test", "device_id": "physical"},
+                {
+                    "entity_id": "switch.mute",
+                    "device_id": "physical",
+                    "translation_key": "microphone",
+                },
+            ]
+        if kind == "assist_pipeline/device/list":
+            return [{"device_id": "physical", "pipeline_entity": "select.pipeline"}]
+        if kind == "assist_pipeline/pipeline/create":
+            created = {"id": "temporary", **fields}
+            state["pipelines"].append(created)
+            state["events"].append("create")
+            return created
+        if kind == "assist_pipeline/pipeline/delete":
+            state["pipelines"] = [
+                row for row in state["pipelines"] if row["id"] != fields["pipeline_id"]
+            ]
+            state["events"].append("delete")
+            return None
+        if kind == "assist_pipeline/pipeline/get":
+            return {"id": fields["pipeline_id"], "name": "Temporary"}
+        if kind == "call_service":
+            state["selects"][fields["target"]["entity_id"]] = fields["service_data"][
+                "option"
+            ]
+            state["events"].append("select:" + fields["service_data"]["option"])
+            return None
+        if kind == "assist_pipeline/pipeline_debug/list":
+            runs = [{"pipeline_run_id": "old"}]
+            if state["trial_finished"] and state["playback"] is not None:
+                runs.append({"pipeline_run_id": "run-new"})
+            return {"pipeline_runs": runs}
+        if kind == "assist_pipeline/pipeline_debug/get":
+            events = [
+                {
+                    "type": "run-start",
+                    "data": {"satellite_id": "assist_satellite.test"},
+                },
+                {"type": "stt-start"},
+                {
+                    "type": "stt-end",
+                    "data": {"stt_output": {"text": "test transcript"}},
+                },
+            ]
+            if state["gets"]:
+                events += [{"type": "intent-end"}, {"type": "run-end"}]
+            state["gets"] += 1
+            return {
+                "events": [
+                    {"timestamp": "2026-01-01T00:00:00+00:00", **event}
+                    for event in events
+                ]
+            }
+        raise AssertionError(kind)
+
+    class Socket:
+        def __init__(self):
+            self.mode = None
+            self.first_event = True
+            self.requests = asyncio.Queue()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def send_json(self, message):
+            if message.get("type") == "subscribe_events":
+                self.mode = "events"
+                return
+            await self.requests.put(message)
+
+        async def receive_json(self):
+            if self.mode == "events":
+                if self.first_event:
+                    self.first_event = False
+                    return {"success": True}
+                await asyncio.Event().wait()
+            message = await self.requests.get()
+            fields = {
+                key: value
+                for key, value in message.items()
+                if key not in ("id", "type")
+            }
+            return {
+                "id": message["id"],
+                "success": True,
+                "result": await command(message["type"], **fields),
+            }
+
+    class Playback:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.waited = False
+
+        def terminate(self):
+            self.terminated = True
+
+        async def wait(self):
+            self.waited = True
+            self.returncode = -15
+            return self.returncode
+
+    class Server:
+        async def stop(self):
+            state["events"].append("stop")
+            state["server_stops"] += 1
+            state["server_running"] = False
+            state["server_stopped"].set()
+
+        async def restore(self):
+            state["events"].append("restore")
+            state["server_restores"] += 1
+            state["server_running"] = True
+
+        async def measure_stop_latency(self):
+            started = time.monotonic()
+            try:
+                await self.stop()
+                return time.monotonic() - started
+            finally:
+                await self.restore()
+
+        async def docker(self, *args):
+            return "[]"
+
+    async def connect(*args):
+        return Socket()
+
+    async def snapshot(*args):
+        return {"fallback_reasons": {}, "turns": []}
+
+    async def collect_baselines(*args, **kwargs):
+        state["baseline_started"].set()
+        await asyncio.Event().wait()
+
+    async def create_subprocess_exec(*args, **kwargs):
+        playback = Playback()
+        state["playback"] = playback
+        state["playback_started"].set()
+        return playback
+
+    async def fake_sleep(delay):
+        # The pre-playback settle wait is skipped. Every other wait is real,
+        # so the scheduled fault stop is still waiting when the run is stopped.
+        if delay == 6.2:
+            await original_sleep(0)
+            return
+        await original_sleep(delay)
+
+    async def files(self, server):
+        return {"old.wav", "new.wav"} if state["gets"] else {"old.wav"}
+
+    async def archive(self, server, source, turn, run):
+        path = wav_file(tmp_path / "archived.wav", bytes(1200) + pcm)
+        return {
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "source": source,
+            "turn_id": turn,
+            "pipeline_run_id": run,
+        }
+
+    def correlate(*args):
+        if state["stop_with"] is not None:
+            raise state["stop_with"]
+        return {
+            "offset_samples": 200,
+            "complete": True,
+            "reference_samples": 1200,
+        }
+
+    monkeypatch.setattr(
+        module.asyncio, "create_subprocess_exec", create_subprocess_exec
+    )
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "correlate", correlate)
+
+    async def engines(*args, **kwargs):
+        return {"server": "stt.test", "fallback": "stt.fallback"}
+
+    monkeypatch.setattr(module.Hardware, "files", files)
+    monkeypatch.setattr(module.Hardware, "archive", archive)
+    monkeypatch.setattr(fault_runner, "connect", connect)
+    monkeypatch.setattr(fault_runner, "fallback_snapshot", snapshot)
+    monkeypatch.setattr(fault_runner, "collect_baselines", collect_baselines)
+    monkeypatch.setattr(fault_runner, "baseline_engines", engines)
+    monkeypatch.setattr(fault_runner, "TestServer", Server)
+
+    token = tmp_path / "auth.json"
+    token.write_text('{"token":"synthetic"}')
+    state["token"] = token
+    state["label"] = label
+    state["pcm"] = pcm
+    state["command"] = command
+    state["server"] = Server
+    return state
+
+
+@pytest.fixture
+def cancel_bench(tmp_path, monkeypatch):
+    """Fakes for one hardware fault run that can be stopped at a named point."""
+    module = hardware_module()
+    state = cancel_fakes(tmp_path, monkeypatch)
+    label = state["label"]
+    pcm = state["pcm"]
+    token = state["token"]
+    command = state["command"]
+    Server = state["server"]
+    result = {}
+
+    async def run(stage):
+        hardware = module.Hardware(arguments(tmp_path))
+        hardware.device_id = "physical"
+        hardware.select_entity = "select.pipeline"
+        hardware.mute_entity = "switch.mute"
+        hardware.delay_samples = list(state["delay_samples"])
+        async with fault_runner.temporary_pipeline(
+            command, result, "source", cleanup_command=command
+        ) as (pipeline, device_id, sensor):
+            async with hardware.selected(command, pipeline, result):
+                row = await hardware.trial(
+                    None,
+                    token,
+                    pipeline,
+                    label,
+                    pcm,
+                    stage,
+                    Server(),
+                    stop_latency_seconds=0.1,
+                    stop_margin_seconds=0.02,
+                    sensor=sensor,
+                )
+                state["row"] = row
+                await hardware.baselines(
+                    None,
+                    token,
+                    pipeline,
+                    label,
+                    pcm,
+                    {"server": "stt.test", "fallback": "stt.fallback"},
+                    Server(),
+                    row,
+                    sensor,
+                )
+
+    state["run"] = run
+    return state
+
+
+@pytest.fixture
+def run_bench(tmp_path, monkeypatch):
+    """The same fakes, with the full fault runner call as the run under test."""
+    state = cancel_fakes(tmp_path, monkeypatch)
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(json.dumps(state["label"]) + "\n")
+
+    async def run(stage):
+        options = Namespace(
+            hardware=True,
+            satellite="assist_satellite.test",
+            playback_sink="test-sink",
+            wake_audio=wav_file(tmp_path / "wake.wav", bytes(3200)),
+            ha_container="test-ha",
+            turn_audio_archive=tmp_path / "archive",
+            output=tmp_path / "result.json",
+            simulate=False,
+            check=True,
+            labels=labels,
+            native_matrix=None,
+            stages=stage,
+            each=1,
+            audio_root=tmp_path,
+            token_file=state["token"],
+            temporary_agent_pipeline=True,
+            pipeline="source",
+        )
+        return await fault_runner.run(options)
+
+    state["run"] = run
+    state["output"] = tmp_path / "result.json"
+    return state
+
+
+async def stop_run(state, stage, wait_for, timeout=15):
+    """Run one hardware fault run and cancel it when the named point is reached."""
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(state["run"](stage))
+    try:
+        await asyncio.wait_for(wait_for.wait(), timeout)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0.05)
+    return before
+
+
+def assert_nothing_left_running(state, before):
+    playback = state["playback"]
+    assert playback is not None, "PLAYBACK_STARTED"
+    assert playback.terminated, "PLAYBACK_TERMINATED_ON_CANCEL"
+    assert playback.waited, "PLAYBACK_WAITED_ON_CANCEL"
+    assert state["server_running"] is True, "SERVER_RUNNING_AFTER_CANCEL"
+    assert [row["id"] for row in state["pipelines"]] == ["source"], (
+        "TEMPORARY_PIPELINE_DELETED_ON_CANCEL"
+    )
+    assert state["selects"]["select.pipeline"] == "Original", (
+        "SATELLITE_PIPELINE_RESTORED_ON_CANCEL"
+    )
+    assert not asyncio.all_tasks() - before, "NO_RUNNER_TASK_LEFT_PENDING"
+
+
+async def test_cancel_during_playback_leaves_no_service_running(cancel_bench):
+    state = cancel_bench
+    before = await stop_run(state, "before", state["playback_started"])
+    assert state["server_stops"] == 1, "SERVER_STOPPED_BEFORE_PLAYBACK"
+    assert_nothing_left_running(state, before)
+
+
+async def test_cancel_during_fault_injection_wait_leaves_no_service_running(
+    cancel_bench,
+):
+    state = cancel_bench
+    state["delay_samples"] = [30.0]
+    before = await stop_run(state, "speech", state["playback_started"])
+    await asyncio.sleep(0.05)
+    assert state["server_stops"] == 0, "STOP_NOT_YET_INJECTED"
+    assert_nothing_left_running(state, before)
+
+
+async def test_cancel_after_server_stop_restores_the_server(cancel_bench):
+    state = cancel_bench
+    state["delay_samples"] = [0.0]
+    before = await stop_run(state, "speech", state["server_stopped"])
+    assert state["server_stops"] == 1, "SERVER_STOPPED_BEFORE_CANCEL"
+    assert_nothing_left_running(state, before)
+
+
+async def test_cancel_during_baseline_run_leaves_no_service_running(cancel_bench):
+    state = cancel_bench
+    state["trial_finished"] = True
+    before = await stop_run(state, "before", state["baseline_started"])
+    assert state["row"] is not None, "TRIAL_FINISHED_BEFORE_BASELINE"
+    assert state["row"].get("turn_audio"), "TURN_AUDIO_ARCHIVED_BEFORE_BASELINE"
+    assert_nothing_left_running(state, before)
+
+
+class StopRun(BaseException):
+    """A BaseException outside Exception, like a keyboard interrupt."""
+
+
+async def test_base_exception_during_playback_leaves_no_service_running(cancel_bench):
+    state = cancel_bench
+    state["trial_finished"] = True
+    state["stop_with"] = StopRun("synthetic stop")
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(state["run"]("before"))
+    try:
+        with pytest.raises(StopRun):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0.05)
+    assert state["server_stops"] == 1, "SERVER_STOPPED_BEFORE_PLAYBACK"
+    assert_nothing_left_running(state, before)
+
+
+async def test_cancel_of_a_full_hardware_run_leaves_no_service_running(run_bench):
+    state = run_bench
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(state["run"]("before"))
+    try:
+        await asyncio.wait_for(state["playback_started"].wait(), 15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0.05)
+    assert task.cancelled(), "RUN_ENDS_WITH_CANCELLATION"
+    # The last three actions of a cancelled hardware run are the select
+    # restore, the temporary pipeline delete, and the restore of the outer
+    # finally. The restore of the case cleanup comes before them.
+    assert state["events"][-3:] == ["select:Original", "delete", "restore"], (
+        "OUTER_SERVER_RESTORE_AFTER_RUN_CLEANUP"
+    )
+    assert state["server_restores"] == 4, "SERVER_RESTORE_COUNT"
+    assert_nothing_left_running(state, before)
+    written = json.loads(state["output"].read_text())
+    assert written.get("restored_healthy") is True, "RESTORED_HEALTHY_AFTER_CANCEL"
+    assert written.get("temporary_pipeline"), "TEMPORARY_PIPELINE_WAS_CREATED"

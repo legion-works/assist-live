@@ -3707,3 +3707,63 @@ Three scratch mutations each gave a named assertion failure:
 
 No audio deletion, bench run, commit, or publication is part of this record.
 Hardware acceptance is not a result of these fake tests.
+
+## A stopped hardware fault run and its cleanup
+
+Date: 2026-11-03 (UTC).
+
+A stopped hardware fault run can keep three things active.
+The first is the `pw-play` playback process.
+The second is the stopped server container.
+The third is the temporary pipeline with the changed satellite pipeline select.
+
+The runner had cleanup for these three things in `finally` sections.
+No test stopped the runner during a case.
+The only cancellation test checked the select `restore`.
+
+The new tests stop the run task at four points.
+The first point is during the playback.
+The second point is during the `injection` wait, before the server stop.
+The third point is after the server stop and before the server `restore`.
+The fourth point is during the baseline run.
+
+A fifth test stops the run with a `BaseException` that is not an `Exception`, at the same point as the first test.
+A sixth test stops a full `fault_runner.run()` call in hardware mode during a case.
+
+After each stop, the tests check the same five results.
+The playback process received `terminate` and `wait`.
+The server fake runs again.
+The temporary pipeline fake is not in the pipeline list.
+The select fake shows its recorded value again.
+No task of the runner is pending after the run.
+
+The sixth test checks the outer `finally` of the runner.
+That `finally` calls the server `restore()` a second time and writes the result file.
+The test checks the order of the last three steps of the run.
+The last three steps are the select `restore`, the pipeline delete, and the `restore` of the outer `finally`.
+The test checks the number of `restore()` calls and the `restored_healthy` field.
+The run ends with the cancellation, not with a different error.
+
+The tests use the fakes of the earlier hardware tests.
+They add no new Home Assistant response shape.
+
+```sh
+uv run --locked pytest tests/test_fault_hardware.py -q
+```
+
+The new tests gave `6 passed` on `3271071` without a production change.
+The full test set gave `1811 passed` on HA 2026.10.4.
+The full test set gave `1811 passed` on HA 2026.10.1.
+
+Three scratch mutations each gave a named assertion failure:
+
+- Remove `playback.terminate()`: `PLAYBACK_TERMINATED_ON_CANCEL`.
+- Remove `server.restore()`: `SERVER_RUNNING_AFTER_CANCEL`.
+- Remove the outer `server.restore()`: `OUTER_SERVER_RESTORE_AFTER_RUN_CLEANUP`.
+
+The earlier tests did not find the first mutation.
+33 tests found the second mutation.
+Only the sixth test found the third mutation.
+
+No live Home Assistant, playback, or container call is part of this record.
+Hardware acceptance is not a result of these fake tests.
