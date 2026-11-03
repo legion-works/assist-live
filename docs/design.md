@@ -69,7 +69,7 @@ HA 2026.10.3 exports `async_create_default_pipeline` and `async_update_pipeline`
 The integration uses them to make and update the pipeline of each satellite, with the TTS voice.
 If HA refuses creation, use the manual instructions in [setup](setup.md#pipelines-and-voices).
 
-The config flow selects the server, token, satellites, fallback entities, and the fallback voice.
+The config flow selects the server, token, satellites, and fallback entities.
 After setup, the options flow can change the fallback entities and the fallback voice, with the same checks as the config flow.
 If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
 The server configuration selects the providers and the turn values.
@@ -520,7 +520,13 @@ The replay set has a minimum of 200 labelled commands from a minimum of 10 human
 The pause set has a minimum of 100 commands with 400 to 800 ms pauses from a minimum of 10 human speakers.
 A minimum of 30 pause commands must have a complete executable prefix that subsequent words change.
 Recordings use CC0 or CC-BY-4.0, and volunteers give written consent.
-Each recording has the last voice sample, transcript, and intent as test data.
+
+Each recording has the last voice sample, the prompt text, the correct transcript, and the intent as test data.
+Public datasets give the text that the speaker read, and a speaker can say different words.
+Thus two STT engines from different model families transcribe each recording.
+If the two transcripts are the same after the text rule, that text is the correct transcript.
+If they are not the same, a person listens to the recording and writes the correct transcript.
+The measurements of correct commands and of the word error rate use the correct transcript, not the prompt text.
 
 Reports show replies of 60 characters or less in a different group from longer replies.
 Each rate has its denominator and 95% confidence interval.
@@ -530,7 +536,7 @@ Each rate has its denominator and 95% confidence interval.
 |---|---|
 | P0: measurement | A minimum of 95% of replay voice turns have each event from wake to playback end. Calibrate playback proxies against an external microphone on a minimum of 50 replies. Report p50 and p90 error and baseline time for each step. Accept a proxy only when its p90 error plus the p90 of its measurement uncertainty is at most 100 ms. Replay includes device wake and timing events, not only a pipeline WebSocket call. |
 | P1: fast turns | On the same hardware, each reply group has a minimum of 40% less p50 last-voice-to-playback time than P0. Pause cuts are at most 3%. The high end of the 95% confidence interval is at most 6%. Correct transcript and intent are a minimum of 95%. Word error rate increases at most one point from P0. The safe setting has 0 executable-prefix cuts and causes 0 incorrect device operations. |
-| P1: faults | Test 10 server stops before a turn, during voice, during a pause, and after the complete transcript. Each gives the correct transcript or an empty result with no device operation. |
+| P1: faults | Test 10 server stops before a turn, during voice, during a pause, and after the complete transcript. Each gives an empty result with no device operation, or the transcript of the same STT engine for the complete recording without a fault. Each also gives the correct intent and device operations, the fallback cause of its fault, and a result in 20 s or less. |
 | P2: conversation | Test 10 faults of each type. Types: restart in `queued`, restart in `delivering`, and restart after `notify`. Also test wake 0 to 500 ms before announce, busy satellite, server restart, `notify` failure, and stop word. Each test gives the specified states and no second announcement. The `notify` call starts in less than 5 s after expiry. Report commands stopped by announcements. |
 | P3: barge-in | Complete the firmware design before the hardware test. Find a minimum of 9 of 10 interruptions in less than 500 ms. Keep the first command word and conversation ID. Cause 0 incorrect device operations and at most one incorrect interruption in 10 minutes. Keep wake, stop, timers, announce, and mute functional. If results are unsatisfactory, keep barge-in off and document the stop-word method. |
 | P4: upstream | Use `partial` transcripts only after HA releases the interface. Propose public run context, idle-only announce, public TTS lookup, and barge-in interfaces. |
