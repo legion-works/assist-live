@@ -72,6 +72,13 @@ If HA refuses creation, use the manual instructions in [setup](setup.md#pipeline
 The config flow selects the server, token, satellites, and fallback entities.
 After setup, the options flow can change the fallback entities and the fallback voice, with the same checks as the config flow.
 If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
+
+HA can set up the fallback engines after assist-live, and an engine can go out of service when its integration reloads.
+Thus the fallback engines are not necessary for the setup of assist-live.
+The entities keep the entity ID of each fallback engine and find the engine each time that they use it.
+If a turn must use a fallback engine that is not available, the turn is unsatisfactory, with the cause `fallback_unavailable`.
+A repair issue names the engine while it is not available.
+
 The server configuration selects the providers and the turn values.
 The TTS entity shows the voices that the server health response gives.
 
