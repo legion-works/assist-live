@@ -557,6 +557,15 @@ In a hardware trial, the satellite also speaks the reply, and a TTS fallback aft
 The cause check uses only the STT fallback cause in the turn row of the trial.
 The trial is unsatisfactory if the pipeline run records an error.
 
+Before the first fault, the runner plays each candidate recording one time without a fault.
+The runner gets a no-fault baseline of the turn audio from the server engine and from the fallback engine.
+A recording is eligible only if the two baselines give the intent and the device operations of its corpus record.
+The fault trials use only eligible recordings, with the same order rules as the simulated trials.
+
+The qualification plays are not trials, and the counted results do not include them.
+The report shows the candidate count, the eligible count, and the cause for each recording that is not eligible.
+If there are not sufficient eligible recordings, the hardware gate is unsatisfactory.
+
 Reports show replies of 60 characters or less in a different group from longer replies.
 Each rate has its denominator and 95% confidence interval.
 
