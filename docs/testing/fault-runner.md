@@ -91,10 +91,16 @@ The runner measures each `docker stop --time 0` with a monotonic clock.
 After each sample, it restarts the server and waits for `Running=True` and `Health.Status=healthy` before the next sample.
 The measurement does not include server restoration time.
 
-The output and each trial keep all samples in `stop_latency_samples_seconds`.
+The output keeps all measured stop latencies in `stop_latency_samples_seconds`.
+This list includes the calibration stops and each test run, also an invalid test run.
+Each test run keeps a copy of the samples that its plan used in the same field.
+It keeps its own stop latency in `measured_stop_latency_seconds`.
 
-For `speech`, latency `L` is the median of the five samples.
+For each subsequent plan, latency `L` is the median of all samples collected so far.
 Margin `M` is half the difference between the maximum and minimum samples, plus 20 ms.
+The same sample list supplies `L` and `M`.
+For `speech`, the first plan uses the five calibration samples.
+
 The planned request is the voice-window midpoint minus `L`.
 The request can be before the voice window, also when `L` is larger than that window.
 A window shorter than `2 × M` is `unavailable` and starts no fault.
@@ -106,8 +112,41 @@ The runner changes `L` and `M` to samples, rounded up, and records the two value
 For `pause`, the target stop time stays at the window start plus 25% of its length.
 The planned pause request is earlier by the measured latency.
 Audio frames limit request timing to 20 ms steps.
-The runner records the actual stop sample and rejects a stop that ends at a sample not in the labelled window.
-A changed stop latency can cause an unsatisfactory trial.
+The runner records the actual stop sample.
+Only a stop in the labelled window can supply a counted trial.
+The window includes its start sample but not its end sample.
+
+## Replacement test runs
+
+Each execution of a trial slot is a test run, or `attempt` in the output.
+For `speech` and `pause`, a stop not in the window gives `status: invalid_injection`.
+The runner keeps the full test run in `attempts`, but does not count it as `passed` or `failed`.
+It then makes a replacement test run for the same trial slot with the same recording.
+Each test run keeps its fault point, `trial_slot`, and `attempt` number.
+
+The maximum is three test runs for each slot.
+If all three miss the window, the slot gives `unavailable` and the gate result is unsatisfactory.
+A window that cannot supply a plan also gives `unavailable` without a stop.
+
+Only the actual stop sample and the labelled window select a replacement.
+The transcript, intent, operations, cause, and deadline do not select it.
+A correct transcript cannot make an invalid stop satisfactory.
+An incorrect transcript cannot cause a replacement after a stop in the window.
+The `before` and `after-final` fault points keep one test run for each slot.
+
+The `trials` list keeps one result for each completed slot, also an `unavailable` slot.
+The `attempts` list keeps all test runs, also the counted test runs.
+The shared summary in `faults.stages` gives these counts for each fault point:
+
+- `counted_trials`: Trials with a stop in the window and an available baseline.
+- `passed`: Counted trials that satisfy the acceptance rules.
+- `failed`: Counted trials that do not satisfy the acceptance rules.
+- `unavailable`: Slots without a counted trial.
+- `invalid_attempts`: Test runs with a stop not in the window.
+
+For the fault points without a window, the stop and baseline checks continue to select counted trials.
+The overall rate and the report use only counted trials, not invalid test runs or unavailable slots.
+Ten satisfactory counted trials for each of the four fault points are necessary for acceptance.
 
 ## Append-only records
 

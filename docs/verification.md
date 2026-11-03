@@ -3531,3 +3531,37 @@ uv run --locked pytest tests/test_fault_baselines.py tests/test_fault_calibratio
 
 On `59dfc0b`, the new tests stopped at `FALLBACK_BASELINE_USES_PIPELINE` and `CALIBRATION_SAMPLE_COUNT`.
 After the change, the full test set gave 1698 correct results on HA 2026.10.4 and on HA 2026.10.1.
+
+## Fault runner replacement test runs
+
+Date: 2026-11-03 (UTC).
+
+A stop not in the labelled voice window did not test a fault during voice.
+The runner keeps that test run with `status: invalid_injection` and all its records.
+It makes a replacement test run for the same slot and recording, with a maximum of three test runs.
+Three misses give an `unavailable` slot and an unsatisfactory gate result.
+Only stop timing selects a replacement, not the transcript or other acceptance fields.
+
+The same rule applies to a labelled pause window.
+The `before` and `after-final` fault points do not get replacement test runs.
+
+Each plan uses all stop-latency samples collected before it, also samples from invalid test runs.
+Each test run keeps a copy of its plan samples and its own measured stop latency.
+For each fault point, the shared gate and report give five counts:
+`counted_trials`, `passed`, `failed`, `unavailable`, and `invalid_attempts`.
+
+The 17 new tests gave 17 failures with production code from `d8895e6` in an isolated copy.
+The unchanged scratch control gave `17 passed` after the change.
+The fault, calibration, and report tests together gave `312 passed`.
+
+```sh
+uv run --locked pytest tests/test_fault_attempts.py tests/test_fault_runner.py tests/test_fault_calibration.py tests/test_report.py -q
+```
+
+Three syntax-valid scratch mutations each gave a named assertion failure:
+
+- Select replacements from the transcript: `OUTCOME_BLIND_REPLACEMENT`.
+- Remove the test-run limit: `ATTEMPT_CAP_THREE`.
+- Count an invalid test run as `failed`: `INVALID_NOT_IN_DENOMINATOR`.
+
+No bench change or hardware acceptance result is part of this record.

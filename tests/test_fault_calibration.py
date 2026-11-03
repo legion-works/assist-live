@@ -44,7 +44,15 @@ async def test_calibration_records_five_samples_and_uses_median_spread(
 
     async def pipeline(*args, **kwargs):
         requests.append(kwargs)
-        return {**row, "stage": args[5], "acceptable": True, "failures": []}
+        window = fault_runner.fault_window(args[3], args[5])
+        return {
+            **row,
+            "stage": args[5],
+            "label": args[3],
+            "fault_stopped_audio_sample": sum(window) // 2,
+            "acceptable": True,
+            "failures": [],
+        }
 
     monkeypatch.setattr(fault_runner.TestServer, "restore", restore)
     monkeypatch.setattr(fault_runner.TestServer, "measure_stop_latency", measure)

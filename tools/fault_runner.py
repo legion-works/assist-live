@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPORARY_PIPELINE_NAME = "assist-live f11-smoke"
 FALLBACK_BASELINE_PIPELINE_NAME = "assist-live fallback baseline"
 STOP_CALIBRATION_SAMPLES = 5
+MAX_SLOT_ATTEMPTS = 3
 PIPELINE_CLEANUP_TIMEOUT = 30.0
 FALLBACK_LIMIT_NS = 20_000_000_000
 EXPECTED_REASONS = {
@@ -182,13 +183,31 @@ def selected_baseline(trial: Row) -> Row | None:
     return baseline
 
 
+def injection_status(trial: Row) -> str:
+    if trial.get("stage") not in ("speech", "pause"):
+        return "verified"
+    try:
+        window = fault_window(trial.get("label", {}), trial["stage"])
+    except ValueError:
+        return "unavailable"
+    position = trial.get("fault_stopped_audio_sample")
+    if window is None or type(position) is not int:
+        return "unavailable"
+    return "verified" if window[0] <= position < window[1] else "invalid_injection"
+
+
 def trial_status(trial: Row) -> str:
+    injection = injection_status(trial)
+    if injection != "verified":
+        return injection
     if selected_baseline(trial) is None:
         return "unavailable"
     return "passed" if acceptable(trial) else "failed"
 
 
 def acceptable(trial: Row) -> bool:
+    if injection_status(trial) != "verified":
+        return False
     baseline = selected_baseline(trial)
     if baseline is None:
         return False
@@ -279,12 +298,34 @@ def acceptable(trial: Row) -> bool:
 
 
 def fault_gate(faults: Row) -> Row:
-    trials = faults.get("trials", [])
-    passed = sum(acceptable(trial) for trial in trials)
+    slots = faults.get("trials", [])
+    statuses = [(row, trial_status(row)) for row in slots]
+    trials = [row for row, status in statuses if status in ("passed", "failed")]
+    outcomes = Counter(
+        (row.get("stage"), status)
+        for row, status in statuses
+        if status in ("passed", "failed")
+    )
+    passed = sum(count for (_, status), count in outcomes.items() if status == "passed")
     counts = Counter(trial.get("stage") for trial in trials)
     return {
         **rate(passed, len(trials)),
-        "passed": len(trials) == 40
+        "stages": {
+            stage: {
+                "counted_trials": counts[stage],
+                "passed": outcomes[(stage, "passed")],
+                "failed": outcomes[(stage, "failed")],
+                "unavailable": sum(row.get("stage") == stage for row in slots)
+                - counts[stage],
+                "invalid_attempts": sum(
+                    row.get("stage") == stage
+                    and injection_status(row) == "invalid_injection"
+                    for row in faults.get("attempts", [])
+                ),
+            }
+            for stage in STAGES
+        },
+        "passed": len(slots) == len(trials) == 40
         and len({trial.get("turn_id") for trial in trials}) == 40
         and passed == 40
         and counts == {stage: 10 for stage in STAGES}
@@ -652,12 +693,15 @@ async def pipeline_trial(
 
     async def inject() -> None:
         row["fault_requested_utc_ns"] = time.time_ns()
+        started = time.monotonic()
         await server.stop()
+        stopped = time.monotonic()
+        row["measured_stop_latency_seconds"] = stopped - started
         row["fault_injected"] = True
         row["fault_stopped_utc_ns"] = time.time_ns()
         window = fault_window(label, stage)
         if window is not None:
-            position = int((time.monotonic() - row["audio_started_monotonic"]) * 16000)
+            position = int((stopped - row["audio_started_monotonic"]) * 16000)
             row["fault_stopped_audio_sample"] = position
             row["fault_window_samples"] = list(window)
             if not window[0] <= position < window[1]:
@@ -1218,6 +1262,7 @@ async def run(args: argparse.Namespace) -> Row:
         "schema_version": 2,
         "scope": "simulated",
         "trials": [],
+        "attempts": [],
         "stage_status": {
             stage: {
                 "status": "NOT RUN",
@@ -1322,33 +1367,73 @@ async def run(args: argparse.Namespace) -> Row:
                 result["baselines"] = cache
                 for stage in args.stages.split(","):
                     for index, (label, pcm) in enumerate(plans[stage]):
-                        row = await pipeline_trial(
-                            session,
-                            args.token_file,
-                            pipeline,
-                            label,
-                            pcm,
-                            stage,
-                            server,
-                            stop_latency_seconds=result["stop_latency_seconds"],
-                            stop_margin_seconds=result["stop_margin_seconds"],
-                            device_id=device_id,
-                            turn_sensor=sensor,
-                            baselines=cache[label["id"]],
-                            stt_engines=engines,
-                        )
-                        row["stop_latency_samples_seconds"] = samples
-                        result["trials"].append(row)
+                        for attempt in range(1, MAX_SLOT_ATTEMPTS + 1):
+                            used_samples = list(samples)
+                            latency = statistics.median(used_samples)
+                            margin = (max(used_samples) - min(used_samples)) / 2 + 0.02
+                            row = await pipeline_trial(
+                                session,
+                                args.token_file,
+                                pipeline,
+                                label,
+                                pcm,
+                                stage,
+                                server,
+                                stop_latency_seconds=latency,
+                                stop_margin_seconds=margin,
+                                device_id=device_id,
+                                turn_sensor=sensor,
+                                baselines=cache[label["id"]],
+                                stt_engines=engines,
+                            )
+                            row.update(
+                                trial_slot=index + 1,
+                                attempt=attempt,
+                                stop_latency_seconds=latency,
+                                stop_margin_seconds=margin,
+                                stop_latency_samples_seconds=used_samples,
+                            )
+                            sample = row.get("measured_stop_latency_seconds")
+                            if sample is not None:
+                                if not math.isfinite(sample) or sample < 0:
+                                    raise ValueError("invalid stop latency")
+                                samples.append(sample)
+                            result["stop_latency_seconds"] = statistics.median(samples)
+                            result["stop_margin_seconds"] = (
+                                max(samples) - min(samples)
+                            ) / 2 + 0.02
+                            missed = injection_status(row) == "invalid_injection"
+                            row["status"] = trial_status(row)
+                            row["acceptable"] = row["status"] == "passed"
+                            result["attempts"].append(row)
+                            if not missed:
+                                result["trials"].append(row)
+                            elif attempt == MAX_SLOT_ATTEMPTS:
+                                result["trials"].append(
+                                    {
+                                        **row,
+                                        "status": "unavailable",
+                                        "failures": [
+                                            *row["failures"],
+                                            "FAULT_ATTEMPTS_EXHAUSTED",
+                                        ],
+                                    }
+                                )
+                            write_result(args.output, result)
+                            print(
+                                f"{row['status'].upper()} simulated {stage} "
+                                f"{index + 1} attempt {attempt}: "
+                                + ",".join(row["failures"]),
+                                flush=True,
+                            )
+                            if not missed:
+                                break
                         result["stage_status"][stage] = {
                             "status": "RECORDED",
                             "trials": index + 1,
+                            **result["faults"]["stages"][stage],
                         }
                         write_result(args.output, result)
-                        print(
-                            f"{'PASS' if row['acceptable'] else 'FAIL'} simulated "
-                            f"{stage} {index + 1}: " + ",".join(row["failures"]),
-                            flush=True,
-                        )
 
             if args.temporary_agent_pipeline:
 
@@ -1479,11 +1564,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("positive counts and unique known stages are required")
     try:
         result = asyncio.run(run(args))
-        passed = sum(acceptable(row) for row in result["trials"])
+        summary = fault_gate(result)
         print(
-            f"NOTE simulated faults {passed}/{len(result['trials'])}; "
+            f"NOTE simulated faults {summary['count']}/{summary['denominator']}; "
             "hardware acceptance NOT RUN"
         )
+        for stage, counts in summary["stages"].items():
+            print(f"NOTE {stage}: " + json.dumps(counts, sort_keys=True))
         return int(
             result.get("preflight_failed") is True
             or args.check

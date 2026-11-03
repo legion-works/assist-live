@@ -12,6 +12,9 @@ def trial():
         label={
             "transcript": row["recognized_transcript"],
             "intent": row["evaluated_intent"],
+            "alignment_words": [{"start_sample": 16000, "end_sample": 32000}],
+            "pause_start_sample": 32000,
+            "pause_end_sample": 48000,
         },
         events=[{"stage": "run-start", "t_utc_ns": 1_000_000_000}],
         fallback_deadline_utc_ns=21_000_000_000,
@@ -22,6 +25,7 @@ def trial():
         fallback_reasons_after={"stream_closed": 1},
         fallback_reasons_delta={"stream_closed": 1},
         fault_injected=True,
+        fault_stopped_audio_sample=24000,
         clip_id="test",
         audio_sha256="a" * 64,
         stt_engines={"server": "stt.server", "fallback": "stt.fallback"},
@@ -285,6 +289,8 @@ def test_fault_gate_requires_all_four_stages_and_distinct_turns():
 
 
 def set_reasons(row, stage):
+    if stage == "pause":
+        row["fault_stopped_audio_sample"] = 40000
     reason = "health_timeout" if stage == "before" else "stream_closed"
     delta = {} if stage == "after-final" else {reason: 1}
     row.update(
@@ -479,6 +485,7 @@ def test_each_allowed_recorded_reason_has_one_count(stage, reason):
     row.update(
         stage=stage,
         failure_cause=reason,
+        fault_stopped_audio_sample=40000 if stage == "pause" else 24000,
         fallback_reasons_before={reason: 4},
         fallback_reasons_after={reason: 5},
         fallback_reasons_delta={reason: 1},
@@ -754,6 +761,11 @@ async def test_driver_injects_each_fault_point_and_restores(
     assert calls[-1] == "restore"
     missed = late and stage in ("speech", "pause")
     assert row["fault_injected"] is not missed
+    assert row.get("measured_stop_latency_seconds") == pytest.approx(
+        1.1 if late else 0.1
+    ), "ATTEMPT_STOP_LATENCY_MEASURED"
+    if missed:
+        assert row["status"] == "invalid_injection", "MISSED_NOT_FAILED"
     assert calls[0] == "diagnostics"
     assert calls[-2] == "diagnostics"
     assert row["injected_fault"] == "server_container_stopped"
@@ -959,6 +971,8 @@ async def test_missing_pause_boundaries_refuse_before_any_live_mutation(
         "set": "pause" if pause_row else "replay",
         "alignment_words": [{"start_sample": 160, "end_sample": 480}],
     }
+    label.pop("pause_start_sample")
+    label.pop("pause_end_sample")
     monkeypatch.setattr(fault_runner, "load_corpus", lambda _: [label])
     monkeypatch.setattr(fault_runner, "audio_input", lambda *_: bytes(640))
     monkeypatch.setattr(

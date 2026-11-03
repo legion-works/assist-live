@@ -340,8 +340,14 @@ def acceptance_fixture():
                 "recognized_transcript": baseline_rows[0]["recognized_transcript"],
                 "evaluated_intent": baseline_rows[0]["evaluated_intent"],
                 "action_trace": baseline_rows[0]["action_trace"],
-                "label": labels[0],
+                "label": {
+                    **labels[0],
+                    "alignment_words": [{"start_sample": 16000, "end_sample": 32000}],
+                    "pause_start_sample": 16000,
+                    "pause_end_sample": 32000,
+                },
                 "fault_injected": True,
+                "fault_stopped_audio_sample": 24000,
                 "injected_fault": "server_container_stopped",
                 "failure_cause": "health_timeout"
                 if stage == "before"
