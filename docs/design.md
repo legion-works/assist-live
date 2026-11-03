@@ -533,6 +533,23 @@ The measurements of correct commands and of the word error rate do not use that 
 For each such recording in the held-out set, the held-out set gets one more recording from the same source with the same selection rules.
 The latency measurements continue to use the recording.
 
+In a hardware fault trial, a loudspeaker near the satellite plays the wake word and then the recording, without a pause.
+HA keeps the audio that the satellite sent for each turn, and that turn audio is the complete recording in the fault criterion.
+The same STT engine transcribes the turn audio without a fault, so the room and the loudspeaker do not change the result of the check.
+
+If the server stream stops during a turn, the integration records two values.
+The first value is the number of audio samples that it gave to the client.
+The second value is the number of samples in the last chunk.
+The client writes each chunk before it reads the next chunk.
+Thus the client wrote a minimum of the first value minus the second value, and a maximum of the first value.
+
+The runner finds the recording in the turn audio by correlation and calculates the fault point in recording samples.
+The runner replaces a trial if the satellite does not find the wake word or if the turn ends before the recording.
+It also replaces a trial with a fault point out of its window, as in the simulated trials.
+In a hardware trial, the satellite also speaks the reply, and a TTS fallback after the fault is correct behavior.
+The cause check uses only the STT fallback cause in the turn row of the trial.
+The trial is unsatisfactory if the pipeline run records an error.
+
 Reports show replies of 60 characters or less in a different group from longer replies.
 Each rate has its denominator and 95% confidence interval.
 
