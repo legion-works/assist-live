@@ -34,16 +34,36 @@ async def text():
 
 
 def entity(client, ledger, fallback):
+    from unittest.mock import Mock
+
     from custom_components.assist_live.tts import AssistLiveTTS
 
-    return AssistLiveTTS("satellite-a", "device-a", client, ledger, fallback)
+    forward = AssistLiveTTS(
+        "satellite-a",
+        "device-a",
+        client,
+        ledger,
+        getattr(fallback, "entity_id", None) or "tts.standard",
+        "test-entry",
+    )
+
+    def resolve():
+        forward._fallback_metadata.update(
+            languages=list(fallback.supported_languages),
+            default_language=fallback.default_language,
+            default_options=fallback.default_options or {},
+        )
+        return fallback
+
+    forward.resolve_fallback = Mock(side_effect=resolve)
+    return forward
 
 
 async def test_tts_fallback_language_narrower_than_advertised(client, ledger):
     fallback = Fallback()
     forward = entity(client, ledger, fallback)
     fallback.supported_languages = ["zz"]
-    assert "en" in forward.supported_languages
+    assert "en" not in forward.supported_languages
     assert "en" not in fallback.supported_languages
     with pytest.raises(HomeAssistantError, match="language unavailable"):
         await forward.async_stream_tts_audio(
@@ -54,31 +74,34 @@ async def test_tts_fallback_language_narrower_than_advertised(client, ledger):
     assert ledger.records == {}
 
 
-async def test_unusable_tts_fallback_is_a_named_ha_error_and_repair(hass):
+async def test_unusable_tts_fallback_does_not_block_platform_setup(
+    hass, client, ledger
+):
     from types import SimpleNamespace
     from unittest.mock import patch
 
-    from homeassistant.helpers import issue_registry as ir
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.assist_live.tts import async_setup_entry
 
     entry = MockConfigEntry(
-        domain="assist_live", data={"fallback_tts": "tts.standard", "satellites": {}}
+        domain="assist_live",
+        data={
+            "fallback_tts": "tts.standard",
+            "satellites": {"device-a": "satellite-a"},
+        },
     )
-    hass.data["assist_live"] = {entry.entry_id: SimpleNamespace()}
+    hass.data["assist_live"] = {
+        entry.entry_id: SimpleNamespace(
+            client=client, ledger=ledger, tts={}, fallback_metadata={}
+        )
+    }
+    added = []
     with patch(
         "custom_components.assist_live.tts.get_engine_instance", return_value=object()
     ):
-        with pytest.raises(HomeAssistantError, match="fallback TTS unavailable"):
-            await async_setup_entry(hass, entry, lambda entities: None)
-    issue_id = f"{entry.entry_id}_fallback_tts_unavailable"
-    assert ir.async_get(hass).async_get_issue("assist_live", issue_id)
-    with patch(
-        "custom_components.assist_live.tts.get_engine_instance", return_value=Fallback()
-    ):
-        await async_setup_entry(hass, entry, lambda entities: None)
-    assert ir.async_get(hass).async_get_issue("assist_live", issue_id) is None
+        await async_setup_entry(hass, entry, added.extend)
+    assert len(added) == 1
 
 
 @pytest.mark.parametrize("part,count", [("a", 16384), ("é", 16384)])

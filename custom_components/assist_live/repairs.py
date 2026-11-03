@@ -5,6 +5,26 @@ from .const import DOMAIN
 
 
 @callback
+def fallback_issue(
+    hass: HomeAssistant, entry_id: str, part: str, entity_id: str, active: bool
+) -> None:
+    key = f"fallback_{part}_unavailable"
+    issue_id = f"{entry_id}_{key}"
+    if active:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=key,
+            translation_placeholders={"entity": entity_id},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+@callback
 def speaker_destination_issue(
     hass: HomeAssistant, entry_id: str, active: bool = True
 ) -> None:

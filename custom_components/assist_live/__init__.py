@@ -1,10 +1,11 @@
 import asyncio
+import copy
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
 from datetime import datetime, timedelta
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from assist_live_client import AssistLiveClient
 from assist_live_client.models import HealthCapabilities, TimingEvent
@@ -12,7 +13,13 @@ from assist_live_client.protocol import ProtocolError
 from homeassistant.components import assist_pipeline
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import (
+    CoreState,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    callback,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -27,11 +34,12 @@ from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN
 from .ledger import TurnLedger
 from .repairs import (
     event_stream_issue,
+    fallback_issue,
     speaker_destination_issue,
     stored_state_issue,
     update_issues,
 )
-from .settings import effective_settings
+from .settings import FallbackMetadata, effective_settings
 from .stt_hints import STTHints
 
 PLATFORMS = [Platform.STT, Platform.TTS, Platform.SENSOR]
@@ -42,6 +50,7 @@ class SavedState(TypedDict):
     version: int
     turns: list[dict[str, str]]
     cursors: dict[str, int]
+    fallback_metadata: NotRequired[dict[str, FallbackMetadata]]
 
 
 class Runtime:
@@ -70,6 +79,7 @@ class Runtime:
         )
         self.ledger.save = self._save
         self.cursors: dict[str, int] = {}
+        self.fallback_metadata: dict[str, FallbackMetadata] = {}
         self.failures: dict[str, int] = {}
         self.clock = hass.loop.time
         self._sleep = asyncio.sleep
@@ -139,12 +149,16 @@ class Runtime:
                 "turns": self.ledger.snapshot(),
                 "cursors": cursors,
             }
+            if self.fallback_metadata:
+                data["fallback_metadata"] = copy.deepcopy(self.fallback_metadata)
             if data == self._last_saved:
                 return
             if (
                 debounce
                 and self._last_saved is not None
                 and data["turns"] == self._last_saved["turns"]
+                and data.get("fallback_metadata")
+                == self._last_saved.get("fallback_metadata")
                 and self.clock() - self._last_write < 5
             ):
                 return
@@ -199,6 +213,7 @@ class Runtime:
         invalid = False
         rows: object = []
         cursors: object = {}
+        metadata: object = {}
         if isinstance(saved, list):
             rows = saved
         elif (
@@ -207,6 +222,7 @@ class Runtime:
             and saved.get("version", 0) in (0, 1)
         ):
             rows, cursors = saved.get("turns"), saved.get("cursors")
+            metadata = saved.get("fallback_metadata", {})
         else:
             invalid = True
         if not isinstance(rows, list):
@@ -244,6 +260,45 @@ class Runtime:
                 self.cursors[key] = value
             else:
                 invalid = True
+        settings = effective_settings(self.entry)
+        if not isinstance(metadata, dict):
+            metadata = {}
+            invalid = True
+        for part, values in metadata.items():
+            if (
+                part not in ("stt", "tts")
+                or not isinstance(values, dict)
+                or not isinstance(values.get("entity_id"), str)
+                or not isinstance(values.get("languages"), list)
+                or not all(isinstance(lang, str) for lang in values["languages"])
+                or (
+                    "default_language" in values
+                    and not isinstance(values["default_language"], str)
+                )
+                or (
+                    "default_options" in values
+                    and (
+                        not isinstance(values["default_options"], dict)
+                        or not all(
+                            isinstance(key, str) and isinstance(value, str)
+                            for key, value in values["default_options"].items()
+                        )
+                    )
+                )
+            ):
+                invalid = True
+                continue
+            if values["entity_id"] != settings.get(f"fallback_{part}"):
+                continue
+            cached: FallbackMetadata = {
+                "entity_id": values["entity_id"],
+                "languages": list(values["languages"]),
+            }
+            if "default_language" in values:
+                cached["default_language"] = values["default_language"]
+            if "default_options" in values:
+                cached["default_options"] = dict(values["default_options"])
+            self.fallback_metadata[part] = cached
         await self.ledger.restore(valid_rows)
         self._last_saved = None
         if invalid:
@@ -292,10 +347,23 @@ class Runtime:
         return delay
 
     async def refresh_health(self) -> None:
+        from .stt import AssistLiveSTT
         from .tts import AssistLiveTTS
 
         if self.clock() < self._health_due:
             return
+        for part, entities in (("stt", self.stt), ("tts", self.tts)):
+            for entity in entities.values():
+                if isinstance(entity, (AssistLiveSTT, AssistLiveTTS)):
+                    engine = entity.resolve_fallback()
+                    if engine is None and self.hass.state is CoreState.running:
+                        fallback_issue(
+                            self.hass,
+                            self.entry.entry_id,
+                            part,
+                            entity.fallback_entity_id,
+                            True,
+                        )
         try:
             health = await self.client.health_capabilities(timeout=0.2)
         except ProtocolError, TimeoutError, OSError:
@@ -384,6 +452,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     runtime = Runtime(hass, entry, client)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+    forwarding_started = False
     try:
         await runtime.start()
         await runtime.refresh_health()
@@ -399,6 +468,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 runtime.update_options(updated)
 
         entry.async_on_unload(entry.add_update_listener(options_updated))
+        forwarding_started = True
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         saved = dict(entry.data.get("pipelines", {}))
         pipelines = {p.id: p for p in assist_pipeline.async_get_pipelines(hass)}
@@ -431,11 +501,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
         await runtime._maintenance(None)
     except BaseException:
+        # Cleanup must not replace the setup error or cancellation.
+        if forwarding_started:
+            try:
+                await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            except BaseException:
+                _LOGGER.debug("Platform setup cleanup failed")
         try:
             await runtime.stop()
-        except Exception:
+        except BaseException:
             _LOGGER.debug("Runtime setup cleanup failed")
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
         raise
     return True
 

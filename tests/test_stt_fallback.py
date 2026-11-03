@@ -404,7 +404,7 @@ async def test_recursive_fallback_is_refused(client, ledger, through_wrapper):
     if through_wrapper:
         fallback.fallback = forward
     else:
-        forward.fallback = forward
+        forward.fallback_lookup.return_value = forward
     result = await forward.async_process_audio_stream(metadata(), audio([bytes(320)]))
     assert not result.text
     assert result.result == stt.SpeechResultState.ERROR

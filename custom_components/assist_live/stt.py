@@ -21,7 +21,8 @@ from .const import (
     SPEAKER_RESULT_DEADLINE,
 )
 from .ledger import FallbackReason, SpeakerRead, TurnLedger, stream_failure_reason
-from .settings import effective_settings
+from .repairs import fallback_issue
+from .settings import FallbackMetadata, effective_settings
 from .stt_fallback import FallbackAudio
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,15 +32,20 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     runtime = hass.data[DOMAIN][entry.entry_id]
-    fallback = stt.async_get_speech_to_text_entity(
-        hass, effective_settings(entry)["fallback_stt"]
+    fallback_id = effective_settings(entry)["fallback_stt"]
+    cached = runtime.fallback_metadata.setdefault(
+        "stt", {"entity_id": fallback_id, "languages": []}
     )
-    if fallback is None:
-        raise ValueError("fallback STT unavailable")
     entities = []
     for device, satellite in entry.data["satellites"].items():
         entity = AssistLiveSTT(
-            satellite, device, runtime.client, runtime.ledger, fallback
+            satellite,
+            device,
+            runtime.client,
+            runtime.ledger,
+            fallback_id,
+            entry.entry_id,
+            cached,
         )
         if registered := dr.async_get(hass).async_get(device):
             entity._attr_device_info = dr.DeviceInfo(
@@ -60,13 +66,20 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         device: str,
         client: AssistLiveClient,
         ledger: TurnLedger,
-        fallback: stt.SpeechToTextEntity,
+        fallback_entity_id: str,
+        entry_id: str,
+        fallback_metadata: FallbackMetadata | None = None,
     ) -> None:
         self.satellite = satellite
         self.client = client
         self.ledger = ledger
-        self.fallback = fallback
-        self._languages = list(fallback.supported_languages)
+        self.fallback_entity_id = fallback_entity_id
+        self.entry_id = entry_id
+        self._fallback_metadata: FallbackMetadata = (
+            fallback_metadata
+            if fallback_metadata is not None
+            else {"entity_id": fallback_entity_id, "languages": []}
+        )
         self._attr_unique_id = f"{satellite}_stt"
         self._attr_name = f"assist-live {satellite}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
@@ -153,7 +166,25 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
 
     @property
     def supported_languages(self) -> list[str]:
-        return self._languages
+        self.resolve_fallback()
+        return self._fallback_metadata["languages"]
+
+    def resolve_fallback(self) -> stt.SpeechToTextEntity | None:
+        try:
+            engine = stt.async_get_speech_to_text_entity(
+                self.hass, self.fallback_entity_id
+            )
+        except KeyError:
+            engine = None
+        if engine is not None and not engine.available:
+            engine = None
+        if engine is not None and not isinstance(engine, AssistLiveSTT):
+            self._fallback_metadata["languages"] = list(engine.supported_languages)
+        if engine is not None:
+            fallback_issue(
+                self.hass, self.entry_id, "stt", self.fallback_entity_id, False
+            )
+        return engine
 
     @property
     def supported_formats(self) -> list[stt.AudioFormats]:
@@ -179,15 +210,17 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
     def audio_processing(self) -> SpeechAudioProcessing:
         return SpeechAudioProcessing(False, True, True)
 
-    def _fallback_compatible(self, metadata: stt.SpeechMetadata) -> bool:
-        candidate: object = self.fallback
+    def _fallback_compatible(
+        self, metadata: stt.SpeechMetadata, fallback: stt.SpeechToTextEntity
+    ) -> bool:
+        candidate: object = fallback
         seen: set[int] = set()
         while candidate is not None:
             if isinstance(candidate, AssistLiveSTT) or id(candidate) in seen:
                 return False
             seen.add(id(candidate))
             candidate = getattr(candidate, "fallback", None)
-        return self.fallback.check_metadata(metadata)
+        return fallback.check_metadata(metadata)
 
     async def async_process_audio_stream(
         self, metadata: stt.SpeechMetadata, stream: AsyncIterable[bytes]
@@ -196,7 +229,22 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
         await self.ledger.prepare_speaker_read(self.satellite)
         turn = self.ledger.open_voice(self.satellite)
         failed = stt.SpeechResult("", stt.SpeechResultState.ERROR)
-        if not self.check_metadata(metadata) or not self._fallback_compatible(metadata):
+        fallback = self.resolve_fallback()
+        if (
+            metadata.format not in self.supported_formats
+            or metadata.codec not in self.supported_codecs
+            or metadata.bit_rate not in self.supported_bit_rates
+            or metadata.sample_rate not in self.supported_sample_rates
+            or metadata.channel not in self.supported_channels
+            or (
+                self.supported_languages
+                and metadata.language not in self.supported_languages
+            )
+            or (
+                fallback is not None
+                and not self._fallback_compatible(metadata, fallback)
+            )
+        ):
             self.ledger.mark(turn.turn_id, "stt_failed")
             self.ledger.schedule_events()
             return failed
@@ -275,13 +323,28 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                     ) as error:
                         reason = stream_failure_reason(error)
                         error_class = type(error).__name__
-                if not self._fallback_compatible(metadata):
+                fallback = self.resolve_fallback()
+                if fallback is None:
+                    fallback_issue(
+                        self.hass, self.entry_id, "stt", self.fallback_entity_id, True
+                    )
+                    await self.ledger.use_fallback(
+                        turn.turn_id,
+                        "stt_fallback",
+                        self.fallback_entity_id,
+                        reason="fallback_unavailable",
+                        server_audio_samples=audio.server_audio_samples,
+                        server_audio_last_chunk_samples=audio.server_audio_last_chunk_samples,
+                    )
+                    self.ledger.mark(turn.turn_id, "stt_failed")
+                    return failed
+                if not self._fallback_compatible(metadata, fallback):
                     self.ledger.mark(turn.turn_id, "stt_failed")
                     return failed
                 await self.ledger.use_fallback(
                     turn.turn_id,
                     "stt_fallback",
-                    getattr(self.fallback, "entity_id", "unknown"),
+                    self.fallback_entity_id,
                     reason=reason,
                     error_class=error_class,
                     server_audio_samples=audio.server_audio_samples,
@@ -295,7 +358,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                         turn.turn_id, "end_decision", decision_source="ha_audio_end"
                     )
 
-                result = await self.fallback.async_process_audio_stream(
+                result = await fallback.async_process_audio_stream(
                     metadata, local_audio()
                 )
                 self.ledger.mark(

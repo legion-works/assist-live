@@ -35,6 +35,24 @@ The server path uses the two flags `healthy=true` and `capabilities.tts=true`.
 An older health response without `capabilities` selects fallback.
 STT uses the same rule with `capabilities.stt`.
 
+The fallback is not necessary at integration setup.
+Each fallback request finds the current engine by entity ID, not the object from setup.
+During an engine outage or reload, HA storage keeps its last known languages, default language, and string-valued default options.
+This metadata belongs to that entity ID. An engine with a different ID does not use it.
+
+Without stored or known metadata, the fallback language list is empty.
+Server voices stay server-owned. Each new fallback response has its own audio format check.
+
+The repair issue `fallback_tts_unavailable` names a missing engine.
+It clears on the next engine lookup or due maintenance health read after recovery, also during a server outage.
+If the turn must use that engine, TTS gives `HomeAssistantError: fallback TTS unavailable`.
+The ledger records `fallback_unavailable` and `tts_failed`, and the usual failure event applies.
+A missing engine does not stop a satisfactory server turn.
+
+Property reads do not make a missing-engine repair issue.
+Maintenance makes it only with HA state `CoreState.running`, not during startup.
+A turn that must use the missing fallback makes it, also during startup.
+
 Before server audio, a failure starts fallback with a new text generator.
 The generator supplies the kept parts and then the new parts, each one time.
 A server format without audio also starts fallback.
@@ -46,7 +64,7 @@ The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
 The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
 It does not find sentence boundaries itself.
-See the [server protocol](https://github.com/legion-works/assist-live-server/blob/8339feea795eac71008cbaa3f8046706a14602b6/docs/protocol.md) at the pinned client revision `8339feea795eac71008cbaa3f8046706a14602b6` for position rules.
+See the [server protocol](https://github.com/legion-works/assist-live-server/blob/d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3/docs/protocol.md) at the pinned client revision `d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3` for position rules.
 
 An older server without `text_positions` uses the failure path with the full text, not continuation.
 The same rule applies when no marker comes or the last marker has no `text_end`.

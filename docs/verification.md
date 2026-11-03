@@ -3767,3 +3767,62 @@ Only the sixth test found the third mutation.
 
 No live Home Assistant, playback, or container call is part of this record.
 Hardware acceptance is not a result of these fake tests.
+
+## Fallback engine startup and setup-error cleanup
+
+Date: 2026-11-03 (UTC).
+
+The fallback engines are not necessary for integration setup. See the [design](design.md).
+The forwarding entities keep engine IDs and find the current object at each use.
+HA storage keeps the last known languages for each selected fallback entity ID.
+TTS also keeps its default language and string-valued default options.
+A missing engine does not remove these values, also across an HA restart.
+
+Without stored or known languages, HA cannot validate a language for that entity.
+The current engine metadata replaces stored values when the engine is available again.
+The server owns advertised TTS voices. Each fallback audio response supplies its format for a new check.
+
+A turn that must use a missing fallback records `fallback_unavailable` and the applicable failure step.
+STT gives empty text with an error state. TTS gives `HomeAssistantError: fallback TTS unavailable`.
+One repair issue for each part names the engine.
+The next engine lookup and each due maintenance health read delete that issue after recovery.
+
+If a client refuses the new fallback marker, the cause and failure stay in local diagnostics.
+The integration does not send a dependent failure event without an accepted marker.
+The fault and report gates do not accept this cause as proof of a simulated server fault.
+
+The client pin is `d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3` in the four CI-checked locations.
+This client accepts the new fallback marker cause. The lifecycle tests check its timing record.
+
+A setup error after platform forwarding removes the platforms and runtime before it propagates.
+The cleanup test checks the loaded component entities and a second setup through the public reload method.
+
+The initial eight lifecycle cases gave `8 failed` against unchanged production at `3271071`.
+The metadata regression first gave `STORED_STT_METADATA_LOST` before the cache implementation.
+The lifecycle tests gave `12 passed` with HA 2026.10.4.
+
+```sh
+uv run --locked pytest tests/test_fallback_lifecycle.py -q
+```
+
+Three syntax-valid scratch mutations changed production modules only and gave named assertion failures:
+
+- Keep the engine from setup: `REPLACEMENT_STT_NOT_USED` and `REPLACEMENT_TTS_NOT_USED`.
+- Keep platforms after setup failure: `FORWARDED_PLATFORM_LEFT_REGISTERED`.
+- Keep a recovery issue: `RECOVERY_REPAIR_NOT_DELETED`.
+
+No bench change or live acceptance result is part of this record.
+The remaining live check uses an HA restart where the Wyoming fallback starts after assist-live.
+The entry must become `loaded` without a manual reload, and a server turn must succeed.
+
+The reviewed server commit supplies client pin `d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3`.
+The lock update changes only the client source and its declared revision. Other dependency entries stay unchanged.
+
+Property reads do not make missing-engine repair issues.
+Maintenance makes these issues only with HA state `CoreState.running`, not during startup.
+A turn that must use a missing fallback makes the issue and records `fallback_unavailable`, also during startup.
+Engine recovery continues to delete the issue on the next lookup.
+
+Before this startup change, the six new cases gave `4 failed, 2 passed` on the prepared tree.
+The lifecycle set then gave `18 passed`. The isolated startup control gave `6 passed`.
+A scratch mutation without the startup check gave `BOOT_MAINTENANCE_CREATED_REPAIR` for STT and TTS.

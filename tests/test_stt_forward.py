@@ -35,9 +35,29 @@ async def audio(chunks):
 
 
 def entity(client, ledger, fallback):
+    from unittest.mock import Mock
+
     from custom_components.assist_live.stt import AssistLiveSTT
 
-    return AssistLiveSTT("satellite-a", "device-a", client, ledger, fallback)
+    forward = AssistLiveSTT(
+        "satellite-a",
+        "device-a",
+        client,
+        ledger,
+        getattr(fallback, "entity_id", None) or "stt.standard",
+        "test-entry",
+    )
+    lookup = Mock(return_value=fallback)
+
+    def resolve():
+        current = lookup()
+        if current is not None and not isinstance(current, AssistLiveSTT):
+            forward._fallback_metadata["languages"] = list(current.supported_languages)
+        return current
+
+    forward.resolve_fallback = resolve
+    forward.fallback_lookup = lookup
+    return forward
 
 
 async def test_external_vad_never_changes(client, ledger):
@@ -92,7 +112,7 @@ async def test_fallback_narrower_than_advertised_entity(client, ledger, capabili
     forward = entity(client, ledger, fallback)
     setattr(fallback, capability, [])
     request = metadata()
-    assert forward.check_metadata(request)
+    assert forward.check_metadata(request) is (capability != "supported_languages")
     assert not fallback.check_metadata(request)
     consumed = []
 

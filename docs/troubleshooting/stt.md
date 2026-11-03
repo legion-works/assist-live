@@ -45,6 +45,21 @@ The entity must accept the stream language, format, codec, sample rate, bit dept
 The integration checks these properties before input and again before fallback.
 It refuses an assist-live entity in the fallback chain and refuses a circular chain.
 
+The fallback can start after assist-live or go out of service during an integration reload.
+The STT entity finds the current fallback by entity ID for each request and before fallback.
+While it is missing, the entity keeps its last known languages in HA storage, also across a restart.
+Without stored or known languages, it shows no languages. HA then refuses pipeline language validation rather than using an unknown language.
+When the engine is available again, its current languages replace the stored list.
+
+The repair issue `fallback_stt_unavailable` names a missing engine.
+Check that engine's integration. The issue clears on the next engine lookup or due maintenance health read after recovery.
+If the turn must use the missing fallback, its result has empty text and an error state.
+The ledger records `fallback_unavailable` and `stt_failed`. A healthy server can supply a complete transcript without fallback.
+
+Property reads do not make a missing-engine repair issue.
+Maintenance makes it only with HA state `CoreState.running`, not during startup.
+A turn that must use the missing fallback makes it, also during startup.
+
 The turn record uses `fallback_used` when local fallback starts.
 The server records `stt_final` for its complete transcript. The integration records `stt_final_received` when HA gets that transcript.
 On fallback, the integration records `stt_final` and a proxy `end_decision` with `decision_source: ha_audio_end`.

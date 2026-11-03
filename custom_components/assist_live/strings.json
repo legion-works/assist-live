@@ -91,9 +91,13 @@
       "title": "Satellite event subscription cannot continue",
       "description": "The event subscription for {satellite} has repeated failures. Check the server event stream and HA storage. The integration retries with a maximum 30 s interval. It does not skip a refused event."
     },
+    "fallback_stt_unavailable": {
+      "title": "Fallback STT entity unavailable",
+      "description": "The fallback engine {entity} is not available. Check its integration or select an available standard STT entity. A turn that must use this engine gives fallback_unavailable. This issue clears on the next engine lookup or maintenance health read after recovery."
+    },
     "fallback_tts_unavailable": {
       "title": "Fallback TTS entity unavailable",
-      "description": "Select an available entity-backed standard TTS engine. Legacy provider names cannot supply this fallback."
+      "description": "The fallback engine {entity} is not available. Check its integration or select an available entity-backed standard TTS engine. Legacy provider names cannot supply this fallback. A turn that must use this engine gives fallback_unavailable. This issue clears on the next engine lookup or maintenance health read after recovery."
     },
     "server_unavailable": {
       "title": "assist-live server unavailable",

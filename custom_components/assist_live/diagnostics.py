@@ -46,7 +46,10 @@ async def async_get_config_entry_diagnostics(
     streaming = full_file = 0
     for entity in runtime.tts.values():
         if isinstance(entity, AssistLiveTTS):
-            if entity.fallback.async_supports_streaming_input():
+            engine = entity.resolve_fallback()
+            if engine is None:
+                continue
+            if engine.async_supports_streaming_input():
                 streaming += 1
             else:
                 full_file += 1

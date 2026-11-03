@@ -21,6 +21,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 type FallbackReason = Literal[
+    "fallback_unavailable",
     "health_timeout",
     "health_error",
     "server_unhealthy",
@@ -313,7 +314,9 @@ class TurnLedger:
     ) -> None:
         entity_id = entity_id or "unknown"
         mode = (
-            await self.fallback_policy(entity_id) if self.fallback_policy else "unknown"
+            await self.fallback_policy(entity_id)
+            if self.fallback_policy and reason != "fallback_unavailable"
+            else "unknown"
         )
         self.used(turn_id, part, entity_id, mode)
         if record := self.records.get(turn_id):
@@ -497,8 +500,8 @@ class TurnLedger:
             and record.destinations[-1]["part"].endswith("_fallback")
         ):
             data["part"] = record.destinations[-1]["part"].removesuffix("_fallback")
-        self._queue_event(
-            TimingEvent(
+        try:
+            event = TimingEvent(
                 turn_id,
                 record.turn.satellite,
                 "integration",
@@ -508,7 +511,14 @@ class TurnLedger:
                 None,
                 data=data,
             )
-        )
+        except ValueError:
+            if stage != "fallback_used" or reason != "fallback_unavailable":
+                raise
+            # Older clients refuse this cause. Keep the failure local until
+            # the client can validate its fallback marker.
+            self.changed()
+            return
+        self._queue_event(event)
         timing = {
             "t_utc_ns": self._pending[-1].t_utc_ns,
             "quality": self._pending[-1].quality,

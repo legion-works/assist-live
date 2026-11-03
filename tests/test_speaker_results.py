@@ -12,10 +12,10 @@ from homeassistant.core import callback
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_stt_forward import Fallback, audio, metadata
+from test_stt_forward import entity as stt_entity
 
 from custom_components.assist_live import Runtime
 from custom_components.assist_live.diagnostics import async_get_config_entry_diagnostics
-from custom_components.assist_live.stt import AssistLiveSTT
 
 
 class SpeakerWire:
@@ -109,13 +109,8 @@ class SpeakerWire:
         return ws
 
     async def start(self, satellite="satellite-a"):
-        entity = AssistLiveSTT(
-            satellite,
-            "device-" + satellite,
-            self.client,
-            self.runtime.ledger,
-            Fallback(),
-        )
+        entity = stt_entity(self.client, self.runtime.ledger, Fallback())
+        entity.satellite = satellite
         self.entities.append(entity)
         result = await entity.async_process_audio_stream(
             metadata(), audio([bytes(320)])

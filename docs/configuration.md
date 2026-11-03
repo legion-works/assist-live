@@ -89,7 +89,7 @@ The [server text rules](design.md#spoken-text) apply to all agents.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/8339feea795eac71008cbaa3f8046706a14602b6/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -135,6 +135,32 @@ The TTS fallback must accept the language. It uses its own selected or default v
 A streaming fallback can start audio before HA gets all text.
 A non-streaming fallback buffers the full text. Diagnostics show this path as `full_file`.
 
+The fallback engines are not necessary when assist-live starts.
+Each request finds the current engine by its entity ID, also after an engine reload.
+The integration stores the last known fallback languages in HA storage.
+For TTS, it also stores the default language and string-valued default options.
+These values belong to the selected entity ID. A different fallback cannot use them.
+
+While an engine is missing, the entity keeps these values, also after an HA restart.
+The maintenance task saves changed values. A turn also saves them before its server health check.
+
+Without stored or known values, the fallback language list is empty.
+HA cannot select that entity for a language until an engine supplies its metadata.
+With stored languages, HA can validate a pipeline while the server supplies the turn.
+The integration checks the current fallback metadata again before it uses that engine.
+TTS voice selections stay server-owned. Fallback audio format checks use each new response, not stored values.
+
+When HA has state `CoreState.running`, a due maintenance health read makes a repair issue for a missing engine.
+The issue names its engine. Property reads do not make repair issues.
+During HA startup, maintenance does not make them.
+A turn that must use the missing engine makes the issue, also during startup.
+
+The issue clears on the next engine lookup or maintenance health read after recovery, also when the server is unavailable.
+The health interval is 30 s with a healthy server and 5 s with an unhealthy server.
+If a turn must use the missing engine, STT gives an error result and TTS gives `HomeAssistantError: fallback TTS unavailable`.
+The turn records `fallback_unavailable` and the applicable `stt_failed` or `tts_failed` step.
+Diagnostics do not count a missing TTS engine as `streaming` or `full_file`.
+
 Mid-turn continuation must also use the same audio format. See the [TTS rules](troubleshooting/tts.md).
 
 Each `fallback_used` event has a `reason` and a `part` (`stt` or `tts`). Diagnostics count each `reason` in `fallback_reasons`.
@@ -156,6 +182,7 @@ The log does not contain error messages, addresses, tokens, transcripts, or repl
 | `stream_closed` | The stream ended before a usable result. |
 | `stream_error` | The stream data or audio is not usable. |
 | `message_timeout` | The message deadline expired. |
+| `fallback_unavailable` | The turn must use a fallback engine that is not available. |
 
 The policy records keep the names `server_not_local_only` and `server_destination_not_local`.
 Their event `reason` values are `not_local_only` and `destination_not_local` in the same order.
