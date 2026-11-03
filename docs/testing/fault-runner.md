@@ -100,7 +100,7 @@ For each subsequent plan, latency `L` is the median of all samples collected so 
 Margin `M` is half the difference between the maximum and minimum samples, plus 20 ms.
 The same sample list supplies `L` and `M`.
 For `speech`, the first plan uses the five calibration samples and the stop latency of each earlier test run.
-For example, if `before` runs first, the first attempt of the first `speech` plan uses 15 samples.
+For example, if `before` runs first, the first `speech` test run uses 15 samples.
 
 The planned request is the voice-window midpoint minus `L`.
 The request can be before the voice window, also when `L` is larger than that window.
