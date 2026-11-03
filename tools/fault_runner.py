@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 import time
 import wave
@@ -41,6 +42,8 @@ STAGES = ("before", "speech", "pause", "after-final")
 CONTAINER = "assist-live-server-q1"
 ROOT = Path(__file__).resolve().parents[1]
 TEMPORARY_PIPELINE_NAME = "assist-live f11-smoke"
+FALLBACK_BASELINE_PIPELINE_NAME = "assist-live fallback baseline"
+STOP_CALIBRATION_SAMPLES = 5
 PIPELINE_CLEANUP_TIMEOUT = 30.0
 FALLBACK_LIMIT_NS = 20_000_000_000
 EXPECTED_REASONS = {
@@ -328,19 +331,26 @@ def fault_window(label: Row, stage: str) -> tuple[int, int] | None:
 
 
 def fault_sample(
-    label: Row, stage: str, *, stop_latency_seconds: float = 0
+    label: Row,
+    stage: str,
+    *,
+    stop_latency_seconds: float = 0,
+    stop_margin_seconds: float = 0.02,
 ) -> int | None:
     window = fault_window(label, stage)
     if window and stage == "speech":
         if not math.isfinite(stop_latency_seconds) or stop_latency_seconds < 0:
             raise ValueError("invalid stop latency")
-        latency = math.ceil(stop_latency_seconds * 16000)
-        margin = max(320, latency)
-        earliest = max(window[0] + 320, window[0] + margin - latency)
-        latest = window[1] - margin - latency - 320
-        if earliest > latest:
+        if not math.isfinite(stop_margin_seconds) or stop_margin_seconds < 0.02:
+            raise ValueError("invalid stop margin")
+        latency = math.ceil(round(stop_latency_seconds * 16000, 9))
+        margin = math.ceil(round(stop_margin_seconds * 16000, 9))
+        if window[1] - window[0] < 2 * margin:
             raise ValueError("voice window too short for stop margin")
-        return min(latest, max(earliest, sum(window) // 2 - latency))
+        request = sum(window) // 2 - latency
+        if request < 0:
+            raise ValueError("stop request before audio start")
+        return request
     return (
         max(
             0,
@@ -576,6 +586,7 @@ async def pipeline_trial(
     server: TestServer,
     *,
     stop_latency_seconds: float = 0,
+    stop_margin_seconds: float = 0.02,
     device_id: str | None = None,
     turn_sensor: str | None = None,
     baselines: Row | None = None,
@@ -610,16 +621,29 @@ async def pipeline_trial(
         fallback_reasons_delta=None,
         fallback_turns=None,
         stop_latency_seconds=stop_latency_seconds,
+        stop_margin_seconds=stop_margin_seconds,
         fallback_deadline_utc_ns=None,
         completed_utc_ns=None,
         baselines=baselines,
         stt_engines=stt_engines,
+        baseline_paths={
+            engine: {
+                key: record.get(key)
+                for key in ("interface", "pipeline_id", "engine_id")
+            }
+            for engine, record in (baselines or {}).items()
+        },
         host_timing={"mark_start_utc_ns": time.time_ns()},
     )
     injection: asyncio.Task[None] | None = None
     sender: asyncio.Task[None] | None = None
     try:
-        offset = fault_sample(label, stage, stop_latency_seconds=stop_latency_seconds)
+        offset = fault_sample(
+            label,
+            stage,
+            stop_latency_seconds=stop_latency_seconds,
+            stop_margin_seconds=stop_margin_seconds,
+        )
     except ValueError:
         row.update(status="unavailable", acceptable=False)
         row["failures"].append("FAULT_WINDOW_MARGIN_UNAVAILABLE")
@@ -801,7 +825,7 @@ async def pipeline_trial(
                 row["failures"].append("MISSING_TRANSCRIPT")
             if not empty and not isinstance(row["evaluated_intent"], dict):
                 row["failures"].append("MISSING_SELECTED_INTENT")
-            if not row["turn_id"]:
+            if not row["turn_id"] and stage != "fallback-baseline":
                 row["failures"].append("MISSING_TURN_ID")
     except (
         ValueError,
@@ -843,11 +867,11 @@ async def pipeline_trial(
                 )
                 row["fallback_reasons_delta"] = delta
                 _, row["failure_cause"] = stt_reason_for_turn(row)
-                if not recorded_reason_matches(row):
+                if stage != "fallback-baseline" and not recorded_reason_matches(row):
                     row["failures"].append("MISSING_OR_UNEXPECTED_FALLBACK_REASON")
             finally:
                 await server.restore()
-    if stage == "baseline":
+    if stage in ("baseline", "fallback-baseline"):
         return row
     row["transcript_engine"] = transcript_engine(row)
     row["status"] = trial_status(row)
@@ -938,39 +962,6 @@ async def baseline_engines(
                     )
 
 
-async def fallback_baseline(
-    session: aiohttp.ClientSession,
-    token_file: Path,
-    engine: str,
-    language: str,
-    pcm: bytes,
-) -> str:
-    token = json.loads(token_file.read_text())["token"]
-    async with asyncio.timeout(30):
-        async with session.post(
-            URL + "/api/stt/" + engine,
-            headers={
-                "Authorization": "Bearer " + token,
-                "Content-Type": "application/octet-stream",
-                "X-Speech-Content": (
-                    "format=wav; codec=pcm; sample_rate=16000; bit_rate=16; "
-                    "channel=1; language=" + language
-                ),
-            },
-            data=pcm,
-        ) as response:
-            response.raise_for_status()
-            result = await response.json()
-    if (
-        not isinstance(result, dict)
-        or result.get("result") != "success"
-        or not isinstance(result.get("text"), str)
-        or not result["text"].strip()
-    ):
-        raise ValueError("fallback baseline has no successful transcript")
-    return str(result["text"])
-
-
 async def collect_baselines(
     session: aiohttp.ClientSession,
     token_file: Path,
@@ -992,7 +983,7 @@ async def collect_baselines(
             "status": "unavailable",
             "transcript": None,
             "pipeline_id": pipeline if engine == "server" else None,
-            "interface": "assist_pipeline/run" if engine == "server" else "api/stt",
+            "interface": "assist_pipeline/run",
         }
         baselines[engine] = record
         try:
@@ -1015,12 +1006,41 @@ async def collect_baselines(
                     raise ValueError("no-fault server baseline failed")
                 text = row["recognized_transcript"]
             else:
-                text = await fallback_baseline(
-                    session, token_file, engines[engine], engines["language"], pcm
-                )
+
+                async def fresh_command(kind: str, **fields: Any) -> Any:
+                    async with control_command(session, token_file) as fresh:
+                        return await fresh(kind, **fields)
+
+                record["pipeline_cleanup"] = {}
+                async with control_command(session, token_file) as command:
+                    async with temporary_pipeline(
+                        command,
+                        record["pipeline_cleanup"],
+                        pipeline,
+                        cleanup_command=fresh_command,
+                        stt_engine=engines[engine],
+                        redactions=(json.loads(token_file.read_text())["token"],),
+                    ) as (baseline_pipeline, _, _):
+                        record["pipeline_id"] = baseline_pipeline
+                        row = await pipeline_trial(
+                            session,
+                            token_file,
+                            baseline_pipeline,
+                            label,
+                            pcm,
+                            "fallback-baseline",
+                            server,
+                            device_id=device_id,
+                        )
+                        record["evidence"] = row
+                        if row["failures"]:
+                            raise ValueError("no-fault fallback baseline failed")
+                        text = row["recognized_transcript"]
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("baseline transcript unavailable")
             record.update(status="available", transcript=text)
+        except TemporaryPipelineError:
+            raise
         except (
             OSError,
             ValueError,
@@ -1041,6 +1061,7 @@ async def temporary_pipeline(
     *,
     cleanup_command: Command,
     redactions: tuple[str, ...] = (),
+    stt_engine: str | None = None,
 ) -> AsyncIterator[tuple[str, str, str]]:
     async def snapshot(call: Command) -> Row:
         pipelines = await call("assist_pipeline/pipeline/list")
@@ -1057,20 +1078,17 @@ async def temporary_pipeline(
             ),
         }
 
+    name = FALLBACK_BASELINE_PIPELINE_NAME if stt_engine else TEMPORARY_PIPELINE_NAME
     result["bench_before"] = await snapshot(command)
     result["bench_restored"] = False
     leftovers = [
         pipeline["id"]
         for pipeline in result["bench_before"]["pipelines"]["pipelines"]
-        if pipeline.get("name") == TEMPORARY_PIPELINE_NAME
+        if pipeline.get("name") == name
     ]
     if leftovers:
         raise TemporaryPipelineError(
-            "TEMPORARY_PIPELINE_EXISTS: "
-            + ",".join(leftovers)
-            + " ("
-            + TEMPORARY_PIPELINE_NAME
-            + ")"
+            "TEMPORARY_PIPELINE_EXISTS: " + ",".join(leftovers) + " (" + name + ")"
         )
     created = None
     try:
@@ -1106,11 +1124,14 @@ async def temporary_pipeline(
         if len(sensors) != 1:
             raise ValueError("unique pipeline STT turn sensor unavailable")
         fields = {key: source[key] for key in pipeline_fields("", "")}
-        fields.update(
-            name=TEMPORARY_PIPELINE_NAME,
-            conversation_engine="conversation.assist_live_short",
-            prefer_local_intents=False,
-        )
+        if stt_engine:
+            fields.update(name=name, stt_engine=stt_engine)
+        else:
+            fields.update(
+                name=name,
+                conversation_engine="conversation.assist_live_short",
+                prefer_local_intents=False,
+            )
         created = await command("assist_pipeline/pipeline/create", **fields)
         result["temporary_pipeline"] = created["id"]
         yield created["id"], device_id, sensors[0]
@@ -1254,7 +1275,16 @@ async def run(args: argparse.Namespace) -> Row:
     server = TestServer()
     try:
         await server.restore()
-        result["stop_latency_seconds"] = await server.measure_stop_latency()
+        result["stop_latency_samples_seconds"] = []
+        for _ in range(STOP_CALIBRATION_SAMPLES if "speech" in plans else 1):
+            sample = await server.measure_stop_latency()
+            if not math.isfinite(sample) or sample < 0:
+                raise ValueError("invalid stop latency")
+            result["stop_latency_samples_seconds"].append(sample)
+            write_result(args.output, result)
+        samples = result["stop_latency_samples_seconds"]
+        result["stop_latency_seconds"] = statistics.median(samples)
+        result["stop_margin_seconds"] = (max(samples) - min(samples)) / 2 + 0.02
         async with aiohttp.ClientSession() as session:
 
             async def trials(
@@ -1301,11 +1331,13 @@ async def run(args: argparse.Namespace) -> Row:
                             stage,
                             server,
                             stop_latency_seconds=result["stop_latency_seconds"],
+                            stop_margin_seconds=result["stop_margin_seconds"],
                             device_id=device_id,
                             turn_sensor=sensor,
                             baselines=cache[label["id"]],
                             stt_engines=engines,
                         )
+                        row["stop_latency_samples_seconds"] = samples
                         result["trials"].append(row)
                         result["stage_status"][stage] = {
                             "status": "RECORDED",

@@ -3506,3 +3506,28 @@ Only `tools/report.py` calculated prompt-based `accuracy` results.
 The replay runner's observed-transcript consistency check does not calculate `accuracy`.
 The virtual text-input check keeps the prompt, and the fault runner stays unchanged in this change.
 No bench change or hardware acceptance result is part of this record.
+
+## Fault runner fallback baseline path and stop calibration
+
+Date: 2026-11-03 (UTC).
+
+A bench run on `59dfc0b` gave two results that the fault rule did not measure correctly.
+For one recording, the two engines gave the first word "A" through the assist-live pipeline path.
+The fallback engine did not give that word through `POST /api/stt`.
+Thus the fallback baseline came from a different audio path than the trial.
+The `speech` trials had one stop-latency sample of 0.506 s, and the margin was equal to the latency.
+Then each voice window had to be 1.052 s or longer, and all ten windows were 0.342 s to 0.562 s.
+
+The runner gets the fallback baseline from a temporary HA pipeline.
+That pipeline uses the fallback STT entity, the same sender, and the same audio settings as the trial.
+That path has no assist-live code between HA and the fallback engine.
+Before the `speech` trials, the runner gets five stop-latency samples.
+The planned stop request is the window middle minus the median latency.
+The margin is half of the sample range plus 20 ms, and a window shorter than two margins gives `unavailable`.
+
+```sh
+uv run --locked pytest tests/test_fault_baselines.py tests/test_fault_calibration.py tests/test_fault_runner.py tests/test_fault_cleanup.py -q
+```
+
+On `59dfc0b`, the new tests stopped at `FALLBACK_BASELINE_USES_PIPELINE` and `CALIBRATION_SAMPLE_COUNT`.
+After the change, the full test set gave 1698 correct results on HA 2026.10.4 and on HA 2026.10.1.

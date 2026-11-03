@@ -361,64 +361,10 @@ async def test_baseline_entity_uses_public_options_form_without_saved_change(
         await runner.cleanup()
 
 
-@pytest.mark.parametrize(
-    "result", ["success", "error", "missing", "denied", "non-mapping"]
-)
-async def test_fallback_baseline_posts_complete_pcm_to_selected_entity(
-    result, tmp_path, socket_enabled, unused_tcp_port, monkeypatch
-):
-    pcm = bytes(range(256)) * 20
-
-    async def recognize(request):
-        assert request.path == "/api/stt/stt.selected"
-        assert request.headers["Authorization"] == "Bearer synthetic"
-        assert request.headers["X-Speech-Content"] == (
-            "format=wav; codec=pcm; sample_rate=16000; bit_rate=16; "
-            "channel=1; language=en"
-        )
-        assert await request.read() == pcm, "FALLBACK_BASELINE_COMPLETE_CLIP"
-        if result == "denied":
-            return web.Response(status=403)
-        if result == "non-mapping":
-            return web.json_response([])
-        return web.json_response(
-            {"result": result, "text": "complete transcript"}
-            if result != "missing"
-            else {}
-        )
-
-    app = web.Application()
-    app.router.add_post("/api/stt/{entity}", recognize)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, "localhost", unused_tcp_port).start()
-    monkeypatch.setattr(fault_runner, "URL", f"http://localhost:{unused_tcp_port}")
-    token_file = tmp_path / "authentication.json"
-    token_file.write_text(json.dumps({"token": "synthetic"}))
-    try:
-        async with aiohttp.ClientSession() as session:
-            if result == "success":
-                assert (
-                    await fault_runner.fallback_baseline(
-                        session, token_file, "stt.selected", "en", pcm
-                    )
-                    == "complete transcript"
-                )
-            else:
-                with pytest.raises((ValueError, aiohttp.ClientError)):
-                    await fault_runner.fallback_baseline(
-                        session, token_file, "stt.selected", "en", pcm
-                    )
-    finally:
-        await runner.cleanup()
-
-
 @pytest.mark.parametrize("fail", [None, "server", "fallback", "discovery"])
 async def test_collect_baselines_keeps_engine_and_clip_identity_and_fails_closed(
-    fail, monkeypatch
+    fail, monkeypatch, tmp_path
 ):
-    from pathlib import Path
-
     from tests.test_fault_runner import trial
 
     calls = []
@@ -427,29 +373,36 @@ async def test_collect_baselines_keeps_engine_and_clip_identity_and_fails_closed
     pcm = b"complete synthetic clip"
 
     async def pipeline(*args, **kwargs):
-        assert args[2:6] == ("temporary", label, pcm, "baseline")
-        assert kwargs == {"device_id": "virtual", "turn_sensor": "sensor.turn"}
-        calls.append("server")
+        engine = "server" if args[2] == "temporary" else "fallback"
+        assert args[3:5] == (label, pcm)
+        assert args[5] == ("baseline" if engine == "server" else "fallback-baseline")
+        assert kwargs["device_id"] == "virtual"
+        calls.append(engine)
         row = trial()
         row["fallback_turns"][0]["destinations"] = []
         row.update(
-            failures=["error"] if fail == "server" else [],
-            recognized_transcript="server text",
+            failures=["error"] if fail == engine else [],
+            recognized_transcript=engine + " text",
         )
         return row
 
-    async def fallback(*args):
-        assert args[2:] == ("stt.fallback", "en", pcm)
-        calls.append("fallback")
-        if fail == "fallback":
-            raise ValueError("synthetic failure")
-        return "fallback text"
+    @asynccontextmanager
+    async def temporary(*args, **kwargs):
+        assert kwargs["stt_engine"] == "stt.fallback"
+        yield "fallback", "virtual", "sensor.turn"
+
+    @asynccontextmanager
+    async def control(*_):
+        yield None
 
     monkeypatch.setattr(fault_runner, "pipeline_trial", pipeline)
-    monkeypatch.setattr(fault_runner, "fallback_baseline", fallback)
+    monkeypatch.setattr(fault_runner, "temporary_pipeline", temporary)
+    monkeypatch.setattr(fault_runner, "control_command", control)
+    token_file = tmp_path / "authentication.json"
+    token_file.write_text('{"token":"synthetic"}')
     baselines = await fault_runner.collect_baselines(
         None,
-        Path("unused"),
+        token_file,
         "temporary",
         label,
         pcm,

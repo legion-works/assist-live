@@ -13,15 +13,37 @@ The baseline run can operate the virtual targets through the test conversation a
 
 The runner finds the assist-live config entry through the pipeline STT entity registry row.
 It reads `fallback_stt` from the initial public `options/flow` response and deletes the flow in `finally` without a submission.
-It sends the complete PCM recording to the selected fallback entity through public `POST /api/stt/{entity}`.
-The request uses `X-Speech-Content` for mono PCM16 at 16000 Hz and the pipeline STT language.
-It does not send a WAV file header or use the assist-live fallback path for this baseline.
 
-In HA `2026.10.1` and `2026.10.4`, `homeassistant/components/stt/__init__.py:262-312` declares this authenticated HTTP interface and accepts entity IDs.
-Lines `380-422` read its audio metadata header.
+The fallback baseline uses a temporary, non-preferred copy of the trial pipeline with the selected fallback STT entity.
+Only its name and STT entity change.
+The runner deletes this copy on success, failure, or cancellation.
+Before and after checks compare all pipelines, the preferred pipeline, and select states.
+Cleanup uses a new authenticated connection, a timeout, and one retry.
+A cleanup failure stops the run.
+
+The baselines and trials use `assist_pipeline/run` and the same audio sender.
+The request starts at STT, ends at intent, and uses `input: {sample_rate: 16000}` with the same virtual device.
+The sender uses the same PCM bytes without a WAV header, in 640-byte frames with 20 ms timing.
+Each frame has the HA binary-handler byte before the PCM payload.
+The two paths add two seconds of silent PCM, then send only the handler byte to end the stream.
+The paths do not add different audio chunks.
+
+In HA `2026.10.1` and `2026.10.4`, `assist_pipeline/websocket_api.py:207-212` supplies the audio defaults from the run request.
+The defaults are `noise_suppression_level=0`, `auto_gain_dbfs=0`, `volume_multiplier=1.0`, and `is_vad_enabled=True`.
+
+`assist_pipeline/default_pipeline.py:163-170,1043-1049` selects the enhancer from these settings, not from the STT entity.
+With these settings, `assist_pipeline/audio_enhancer.py:63-98` keeps the PCM unchanged and calculates `speech_probability` for VAD.
+
+The STT entity controls external VAD segmentation through `requires_external_vad` (`assist_pipeline/default_pipeline.py:437-448,490-524`).
+The assist-live entity uses `requires_external_vad=False`. The fallback entity can use `requires_external_vad=True`.
+The two paths use the same input and enhancer, but stream termination at the engine can be different.
+The fallback baseline has no assist-live code between HA and the engine.
+A trial/baseline difference points at the assist-live fallback path.
 
 Each trial keeps `stt_engines` and `baselines`, with the engine entity ID, `clip_id`, audio SHA-256, transcript, and baseline status.
-The server baseline also keeps its pipeline ID and no-fault run records.
+The two baselines keep their pipeline ID, `interface: assist_pipeline/run`, and no-fault run records.
+Each trial also names these paths in `baseline_paths`, also when the fault window is unavailable.
+The fallback baseline keeps its cleanup checks in `pipeline_cleanup`.
 The runner collects each recording one time and uses its baseline records for subsequent trials in that run.
 
 The diagnostic turn row selects the transcript engine: an STT fallback cause selects `fallback`, and no STT fallback cause selects `server`.
@@ -62,19 +84,24 @@ The deadline is 20 s after the HA `run-start` event, not after the fault request
 The CLI has no deadline override.
 The classifier checks the recorded deadline against the turn start.
 
-WARNING: The latency measurement stops the isolated server one time before the trials.
-The runner measures `docker stop --time 0` with a monotonic clock and starts the server again.
+WARNING: Calibration stops the isolated server five times for a run with `speech`.
+Without `speech`, calibration stops it one time.
+There are no more calibration stops for each recording or trial.
+The runner measures each `docker stop --time 0` with a monotonic clock.
+After each sample, it restarts the server and waits for `Running=True` and `Health.Status=healthy` before the next sample.
 The measurement does not include server restoration time.
-Each row keeps this measured latency.
 
-For `speech`, let `L` be the measured stop latency in samples, rounded up.
-The stop margin `M` is the larger of `L` and one 20 ms audio frame (320 samples).
-The target stop is the window midpoint.
-The request is earlier by `L`, but stays a minimum of one frame after the window start.
-The predicted stop stays a minimum of `M` plus one frame before the window end.
+The output and each trial keep all samples in `stop_latency_samples_seconds`.
 
-The runner moves the request into these limits when necessary.
-If the window cannot contain these margins, the trial is `unavailable` and starts no fault.
+For `speech`, latency `L` is the median of the five samples.
+Margin `M` is half the difference between the maximum and minimum samples, plus 20 ms.
+The planned request is the voice-window midpoint minus `L`.
+The request can be before the voice window, also when `L` is larger than that window.
+A window shorter than `2 × M` is `unavailable` and starts no fault.
+Equality is possible.
+
+A request before audio starts is also `unavailable`.
+The runner changes `L` and `M` to samples, rounded up, and records the two values in seconds.
 
 For `pause`, the target stop time stays at the window start plus 25% of its length.
 The planned pause request is earlier by the measured latency.

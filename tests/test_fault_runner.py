@@ -439,22 +439,18 @@ def test_engine_attribution_comes_from_diagnostics_not_stage_or_cause_field():
 @pytest.mark.parametrize(
     "start,end,latency", [(0, 16000, 0.1), (16000, 32000, 0), (16000, 20000, 0.1)]
 )
-def test_speech_stop_margin_keeps_request_and_stop_inside_edges(start, end, latency):
+def test_speech_stop_margin_keeps_predicted_stop_at_midpoint(start, end, latency):
     from tools.fault_runner import fault_sample
 
     label = {"alignment_words": [{"start_sample": start, "end_sample": end}]}
     request = fault_sample(label, "speech", stop_latency_seconds=latency)
-    margin = max(320, int(latency * 16000))
-    assert request >= start + 320, "STOP_REQUEST_INSIDE_VOICE_WINDOW"
-    assert start + margin <= request + int(latency * 16000) < end - margin, (
-        "STOP_COMPLETION_HAS_LATENCY_MARGIN"
-    )
+    assert request + int(latency * 16000) == (start + end) // 2, "STOP_AT_MIDPOINT"
 
 
 def test_speech_window_too_short_for_margin_is_unavailable():
     from tools.fault_runner import fault_sample
 
-    label = {"alignment_words": [{"start_sample": 0, "end_sample": 640}]}
+    label = {"alignment_words": [{"start_sample": 16000, "end_sample": 16639}]}
     with pytest.raises(ValueError, match="margin"):
         fault_sample(label, "speech", stop_latency_seconds=0.1)
 
