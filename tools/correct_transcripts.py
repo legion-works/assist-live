@@ -213,31 +213,57 @@ PAGE = r"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Correct transcripts</title>
 <h1>Correct transcripts</h1>
 <p>Play each recording. Write the words that you hear, not the prompt.
-Keep an input empty if you cannot make a decision.
+A "Use" button copies that text into the input.
+Change the text if it is not correct.</p>
+<p>Keep an input empty if you cannot make a decision.
+The page keeps your text in this browser if you reload it.
 Export JSON before you close the page.</p>
-<button id="export">Export JSON</button><main id="clips"></main>
+<p><button id="export">Export JSON</button> <span id="count"></span></p>
+<main id="clips"></main>
 <script type="application/json" id="data">__DATA__</script>
 <script>
 const rows = JSON.parse(document.getElementById('data').textContent);
+const inputs = new Map();
+const key = row => 'correct-transcripts:' + row.row_sha256;
+const count = () => {
+  const written = [...inputs.values()].filter(input => input.value.trim()).length;
+  document.getElementById('count').textContent =
+    written + ' of ' + rows.length + ' written';
+  return written;
+};
 for (const row of rows) {
   const section = document.createElement('section');
   const heading = document.createElement('h2'); heading.textContent = row.id;
   section.append(heading);
   const audio = document.createElement('audio'); audio.controls = true;
   audio.src = row.audio; section.append(audio);
-  for (const text of ['Prompt: ' + row.prompt, ...row.engines.map(
-      e => e.engine.model + ': ' + e.transcript)]) {
-    const p = document.createElement('p'); p.textContent = text; section.append(p);
+  const input = document.createElement('input'); input.size = 90;
+  input.dataset.id = row.id;
+  input.value = localStorage.getItem(key(row)) || '';
+  input.oninput = () => {
+    localStorage.setItem(key(row), input.value); count();
+  };
+  inputs.set(row.id, input);
+  for (const [name, text] of [['Prompt', row.prompt], ...row.engines.map(
+      e => [e.engine.model, e.transcript])]) {
+    const p = document.createElement('p');
+    const use = document.createElement('button'); use.textContent = 'Use';
+    use.dataset.pick = name;
+    use.onclick = () => { input.value = text; input.oninput(); input.focus(); };
+    p.append(use, ' ' + name + ': ' + text); section.append(p);
   }
   const label = document.createElement('label'); label.textContent = 'Correct text: ';
-  const input = document.createElement('input'); input.size = 90;
-  input.dataset.id = row.id; label.append(input); section.append(label);
+  label.append(input); section.append(label);
   document.getElementById('clips').append(section);
 }
+count();
 document.getElementById('export').onclick = () => {
+  if (!count()) {
+    alert('No text is written. Nothing to export.');
+    return;
+  }
   const exported = rows.flatMap(row => {
-    const input = [...document.querySelectorAll('input')]
-      .find(e => e.dataset.id === row.id);
+    const input = inputs.get(row.id);
     if (!input.value.trim()) return [];
     return [{id: row.id, audio_sha256: row.audio_sha256, row_sha256: row.row_sha256,
              correct_transcript: input.value.trim()}];

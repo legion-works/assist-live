@@ -344,6 +344,11 @@ def test_listening_page_contains_pending_audio_prompt_and_both_texts(request, tm
     assert "Turn on test light." in page
     assert "row_sha256" in page
     assert "createElement('audio')" in page
+    assert "use.dataset.pick = name" in page, "PICK_BUTTON_FOR_EACH_TEXT"
+    assert "localStorage.setItem(key(row), input.value)" in page, (
+        "TYPED_TEXT_KEPT_ACROSS_RELOAD"
+    )
+    assert "Nothing to export" in page, "EMPTY_EXPORT_REFUSED"
 
 
 @pytest.mark.parametrize("command", ["listen", "import"])
