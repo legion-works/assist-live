@@ -156,7 +156,7 @@ async def test_attempt_samples_change_next_plan_and_keep_prior_snapshot(attempt_
     assert second["stop_latency_samples_seconds"] == [0.1, 0.3], "ATTEMPT_ACCUMULATED"
     assert result["stop_latency_samples_seconds"] == [0.1, 0.3, 0.5]
     assert calls[1][1]["stop_latency_seconds"] == pytest.approx(0.2)
-    assert calls[1][1]["stop_margin_seconds"] == pytest.approx(0.12)
+    assert calls[1][1]["stop_margin_seconds"] == pytest.approx(0.07)
     assert first["fault_planned_audio_sample"] == 54400
     assert second["fault_planned_audio_sample"] == 52800, "NEXT_PLAN_USES_ALL_SAMPLES"
 

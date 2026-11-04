@@ -55,6 +55,13 @@ EXPECTED_REASONS = {
 }
 
 
+def stop_margin(samples: list[float]) -> float:
+    if len(samples) < 2:
+        return 0.02
+    q1, _, q3 = statistics.quantiles(samples, n=4, method="inclusive")
+    return (q3 - q1) / 2 + 0.02
+
+
 class TemporaryPipelineError(ValueError):
     pass
 
@@ -1417,7 +1424,7 @@ async def run(args: argparse.Namespace) -> Row:
             result["stop_latency_samples_seconds"] = samples
             write_result(args.output, result)
         result["stop_latency_seconds"] = statistics.median(samples)
-        result["stop_margin_seconds"] = (max(samples) - min(samples)) / 2 + 0.02
+        result["stop_margin_seconds"] = stop_margin(samples)
 
     primary_error: BaseException | None = None
     try:
@@ -1658,7 +1665,7 @@ async def run(args: argparse.Namespace) -> Row:
                         for attempt in range(1, MAX_SLOT_ATTEMPTS + 1):
                             used_samples = list(samples)
                             latency = statistics.median(used_samples)
-                            margin = (max(used_samples) - min(used_samples)) / 2 + 0.02
+                            margin = stop_margin(used_samples)
                             if hardware:
                                 row = await hardware.trial(
                                     session,
@@ -1717,9 +1724,7 @@ async def run(args: argparse.Namespace) -> Row:
                                     raise ValueError("invalid stop latency")
                                 samples.append(sample)
                             result["stop_latency_seconds"] = statistics.median(samples)
-                            result["stop_margin_seconds"] = (
-                                max(samples) - min(samples)
-                            ) / 2 + 0.02
+                            result["stop_margin_seconds"] = stop_margin(samples)
                             missed = injection_status(row) == "invalid_injection"
                             row["status"] = trial_status(row)
                             row["acceptable"] = row["status"] == "passed"

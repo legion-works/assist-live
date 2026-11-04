@@ -106,10 +106,29 @@ Each test run keeps a copy of the samples that its plan used in the same field.
 It keeps its own stop latency in `measured_stop_latency_seconds`.
 
 For each subsequent plan, latency `L` is the median of all samples collected so far.
-Margin `M` is half the difference between the maximum and minimum samples, plus 20 ms.
+Margin `M` is half the interquartile range of all samples, plus 20 ms.
+The runner uses `statistics.quantiles(samples, n=4, method="inclusive")` for the first and third quartiles, `Q1` and `Q3`.
+Thus `M = (Q3 - Q1) / 2 + 0.020` seconds.
+With fewer than two samples, `M` is 20 ms.
+The [Python documentation](https://docs.python.org/3/library/statistics.html#statistics.quantiles) specifies linear interpolation and the `inclusive` method.
+
 The same sample list supplies `L` and `M`.
+Simulated and hardware plans use this same rule.
 For `speech`, the first plan uses the five calibration samples and the stop latency of each earlier test run.
 For example, if `before` runs first, the first `speech` test run uses 15 samples.
+
+The 2026-11-04 run supplied these first 15 samples, in seconds (rounded here to six decimals):
+
+```text
+0.733865, 0.440208, 0.376993, 0.399816, 0.415178,
+0.538624, 1.178344, 1.075748, 0.456045, 0.515075,
+0.484350, 0.524175, 0.536776, 0.434771, 0.462409
+```
+
+With the full-precision samples, `L = 0.484350307`, `Q1 = 0.437489759`, and `Q3 = 0.537699921` seconds.
+Thus `M = 0.070105081` seconds, not the previous full-range margin of `0.420675833` seconds.
+A 340 ms voice window satisfies `2 × M` with the new rule, but not with the previous rule.
+Each measured stop must be in its labelled window.
 
 The planned request is the voice-window midpoint minus `L`.
 The request can be before the voice window, also when `L` is larger than that window.
@@ -138,11 +157,12 @@ The maximum is three test runs for each slot.
 If all three miss the window, the slot gives `unavailable` and the gate result is unsatisfactory.
 A window that cannot supply a plan also gives `unavailable` without a stop.
 
-Only the actual stop sample and the labelled window select a replacement.
+In simulated mode, only the actual stop sample and the labelled window select a replacement.
 The transcript, intent, operations, cause, and deadline do not select it.
 A correct transcript cannot make an invalid stop satisfactory.
 An incorrect transcript cannot cause a replacement after a stop in the window.
-The `before` and `after-final` fault points keep one test run for each slot.
+In simulated mode, the `before` and `after-final` fault points keep one test run for each slot.
+Hardware mode also replaces the invalid test runs that the correlation section specifies, at all four fault points.
 
 The `trials` list keeps one result for each completed slot, also an `unavailable` slot.
 The `attempts` list keeps all test runs, also the counted test runs.
@@ -152,7 +172,7 @@ The shared summary in `faults.stages` gives these counts for each fault point:
 - `passed`: Counted trials that satisfy the acceptance rules.
 - `failed`: Counted trials that do not satisfy the acceptance rules.
 - `unavailable`: Slots without a counted trial.
-- `invalid_attempts`: Test runs with a stop not in the window.
+- `invalid_attempts`: Test runs with a stop not in the window, or a hardware cause that selects a replacement.
 
 For the fault points without a window, the stop and baseline checks continue to select counted trials.
 The overall rate and the report use only counted trials, not invalid test runs or unavailable slots.
@@ -338,7 +358,19 @@ Three high-energy windows, one from each third of the source, check the offset w
 Each window must agree with a maximum difference of 640 samples (40 ms) for a complete recording.
 A minimum of two windows must agree before an offset can identify `early_end`.
 The result records the peaks, ratios, window offsets, and largest offset difference.
-No reliable correlation gives `unavailable`, unless the turn WAV is shorter than the complete source recording.
+
+A calculated correlation that is not complete gives `status: invalid_injection` and `hardware_invalid_reason: correlation_unavailable`.
+This includes a peak, second-peak ratio, or window agreement below its threshold.
+The runner keeps the test run and replaces it with the same recording and slot, at all four fault points.
+The maximum stays three test runs for each slot.
+After three invalid test runs, the slot gives `unavailable` and keeps the last cause, also `correlation_unavailable`.
+The transcript, intent, operations, cause, and deadline do not select these replacements.
+
+Qualification keeps its own cause rules and does not use trial replacements.
+
+A missing correlation row stays `unavailable`, without replacement.
+This includes a play that does not start, readiness or planning errors, and audio acquisition errors.
+A turn WAV shorter than the complete source can give `early_end` with the same two-window rule.
 
 For a fault during `speech` or `pause`, diagnostics supply `server_audio_samples` and `server_audio_last_chunk_samples`.
 The possible-send interval is `[server_audio_samples - server_audio_last_chunk_samples, server_audio_samples]`.

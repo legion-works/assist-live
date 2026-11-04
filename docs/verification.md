@@ -4093,3 +4093,39 @@ Three syntax-valid source mutations in scratch copies gave named assertion failu
 
 The test commands used the idle-CPU wrapper. No live HA call, playback, or container operation ran.
 Hardware acceptance stays `NOT RUN`.
+
+## Hardware correlation replacements and stop margin
+
+Date: 2026-11-04 (UTC).
+
+Calculated hardware correlation with `complete != True` gives an invalid test run with `correlation_unavailable`.
+The runner replaces it without the transcript or acceptance result, with a maximum of three test runs for each slot.
+A missing correlation row stays unavailable without replacement. Qualification causes stay unchanged.
+Simulated and hardware plans use half the inclusive interquartile range of all stop samples, plus 20 ms.
+The median latency and measured-stop window checks stay unchanged.
+
+Before the source change, the calibration and hardware suites gave `18 failed, 182 passed` on base `a577344`.
+The repaired calibration, hardware, replacement, runner, and timer suites gave `446 passed`:
+
+```sh
+uv run --locked pytest tests/test_fault_calibration.py tests/test_fault_hardware.py tests/test_fault_attempts.py tests/test_fault_runner.py tests/test_fault_timers.py -q --tb=short
+```
+
+The tests include all four fault points, correct and incorrect transcripts, replacement recovery, exhaustion, complete correlation, and invalid measured stops.
+Twelve driver tests first found an overwritten correlation cause. The repaired driver keeps `correlation_unavailable` for peak, ratio, and window-agreement failures.
+
+The first 15 stop samples from the run give `M = 0.070105081` seconds. The 340 ms test window is available.
+The calibration assertion changes from `0.04` to `0.025` seconds for five samples.
+The subsequent-attempt assertion changes from `0.12` to `0.07` seconds for two samples.
+The two assertions check the margin from all available samples, with the new interquartile rule.
+
+Three source mutations in scratch copies gave named assertion failures:
+
+- Use the full-range margin: `RUN_MARGIN_INCLUSIVE_IQR` (`1 failed`).
+- Give correlation failures unavailable status without replacement: `HARDWARE_ATTEMPT_CAP_THREE` (`4 failed, 16 passed`).
+- Remove the 20 ms term: `MARGIN_FIXED_20MS` (`4 failed`).
+
+An isolated copy of base `a577344` with the current tests gave `20 failed, 188 passed`.
+This includes the two changed calibration expectations. The complete-correlation grading checks were satisfactory on that base.
+All test commands used the idle-CPU wrapper. No service, live HA call, playback, or container operation started.
+Hardware acceptance stays `NOT RUN`.

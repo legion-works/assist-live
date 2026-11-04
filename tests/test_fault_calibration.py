@@ -1,9 +1,63 @@
+import math
+import statistics
 from argparse import Namespace
 
 import pytest
 
 from tests.test_fault_runner import trial
 from tools import fault_runner
+
+RUN_STOP_SAMPLES = [
+    0.7338653699844144,
+    0.4402081100270152,
+    0.37699276802595705,
+    0.39981598599115387,
+    0.41517798794666305,
+    0.5386239169747569,
+    1.1783444350003265,
+    1.0757476069848053,
+    0.456044957973063,
+    0.5150751330074854,
+    0.48435030702967197,
+    0.5241747359978035,
+    0.5367759249638766,
+    0.43477140803588554,
+    0.4624090220313519,
+]
+
+
+def test_run_samples_use_inclusive_iqr_and_allow_speech_window():
+    q1, _, q3 = statistics.quantiles(RUN_STOP_SAMPLES, n=4, method="inclusive")
+    margin = fault_runner.stop_margin(RUN_STOP_SAMPLES)
+    assert margin == pytest.approx((q3 - q1) / 2 + 0.02), "RUN_MARGIN_INCLUSIVE_IQR"
+    label = {"alignment_words": [{"start_sample": 16000, "end_sample": 21440}]}
+    latency = statistics.median(RUN_STOP_SAMPLES)
+    old_margin = (max(RUN_STOP_SAMPLES) - min(RUN_STOP_SAMPLES)) / 2 + 0.02
+    with pytest.raises(ValueError, match="voice window too short for stop margin"):
+        fault_runner.fault_sample(
+            label,
+            "speech",
+            stop_latency_seconds=latency,
+            stop_margin_seconds=old_margin,
+        )
+    assert fault_runner.fault_sample(
+        label, "speech", stop_latency_seconds=latency, stop_margin_seconds=margin
+    ) == 18720 - math.ceil(latency * 16000), "RUN_SPEECH_WINDOW_PLANS"
+
+
+@pytest.mark.parametrize("samples", [[], [0.5], [0.5, 0.5], [0.5] * 5])
+def test_stop_margin_keeps_twenty_millisecond_term(samples):
+    assert fault_runner.stop_margin(samples) == pytest.approx(0.02), "MARGIN_FIXED_20MS"
+
+
+def test_one_outlier_changes_margin_only_through_inclusive_quartiles():
+    samples = [0.4, 0.45, 0.5, 0.55, 0.6]
+    margin = fault_runner.stop_margin(samples)
+    samples.append(10.0)
+    q1, _, q3 = statistics.quantiles(samples, n=4, method="inclusive")
+    changed = fault_runner.stop_margin(samples)
+    assert changed == pytest.approx((q3 - q1) / 2 + 0.02), "OUTLIER_IQR_ONLY"
+    assert changed - margin == pytest.approx(0.0125), "OUTLIER_MARGIN_BOUNDED"
 
 
 @pytest.mark.parametrize(
@@ -78,7 +132,7 @@ async def test_calibration_records_five_samples_and_uses_median_spread(
     assert result["stop_latency_samples_seconds"] == samples, "ALL_SAMPLES_RECORDED"
     assert result["stop_latency_seconds"] == (0.506 if count == 5 else 0.48)
     assert result["stop_margin_seconds"] == pytest.approx(
-        0.04 if count == 5 else 0.02
+        0.025 if count == 5 else 0.02
     ), "MARGIN_FROM_MEASURED_SPREAD"
     assert all(
         row["stop_latency_samples_seconds"] == samples for row in result["trials"]

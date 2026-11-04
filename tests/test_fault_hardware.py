@@ -16,7 +16,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from tests.test_fault_runner import trial
+from tests.test_fault_runner import set_reasons, trial
 from tools import fault_runner
 
 
@@ -328,10 +328,41 @@ def test_missing_correlation_is_not_a_success_or_replacement():
     assert not fault_runner.acceptable(row)
 
 
+@pytest.mark.parametrize("stage", fault_runner.STAGES)
+@pytest.mark.parametrize("correct", [True, False])
+def test_incomplete_correlation_is_invalid_and_requires_replacement(stage, correct):
+    row = hardware_row()
+    row["stage"] = stage
+    row["correlation"]["complete"] = False
+    if not correct:
+        row["recognized_transcript"] = "wrong command"
+    assert fault_runner.injection_status(row) == "invalid_injection", (
+        "CORRELATION_REQUIRES_REPLACEMENT"
+    )
+    assert row["hardware_invalid_reason"] == "correlation_unavailable"
+    assert not fault_runner.acceptable(row)
+
+
 def test_hardware_acceptance_uses_media_interval_not_host_fault_sample():
     row = hardware_row()
     row["fault_stopped_audio_sample"] = 999999
     assert fault_runner.acceptable(row), "HARDWARE_MEDIA_POSITION_IS_AUTHORITATIVE"
+
+
+@pytest.mark.parametrize("stage", fault_runner.STAGES)
+@pytest.mark.parametrize("correct", [True, False])
+def test_complete_correlation_keeps_existing_grading(stage, correct):
+    row = hardware_row()
+    row["stage"] = stage
+    set_reasons(row, stage)
+    if stage == "pause":
+        row["server_audio_samples"] = 63000
+    if not correct:
+        row["recognized_transcript"] = "wrong command"
+    assert fault_runner.injection_status(row) == "verified", "COMPLETE_NOT_REPLACED"
+    assert fault_runner.trial_status(row) == ("passed" if correct else "failed"), (
+        "COMPLETE_CORRELATION_KEEPS_GRADING"
+    )
 
 
 @pytest.mark.parametrize("fallback", ["tts", "stt", "error"])
@@ -509,6 +540,9 @@ def test_installed_ha_debug_list_get_and_satellite_contract():
     "outcome",
     [
         "valid",
+        "low-peak",
+        "low-ratio",
+        "window-disagreement",
         "no-wake",
         "early",
         "ambiguous-file",
@@ -686,7 +720,10 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
         "correlate",
         lambda *_: {
             "offset_samples": 200,
-            "complete": outcome != "early",
+            "complete": outcome
+            not in ("early", "low-peak", "low-ratio", "window-disagreement"),
+            "correlation": 0.178 if outcome == "low-peak" else 0.5,
+            "second_peak_ratio": 1.1 if outcome == "low-ratio" else 2.0,
             "reference_samples": 1200,
         },
     )
@@ -712,7 +749,12 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
     )
     assert calls[-1] == "restore", "SERVER_RESTORED_EVERY_TRIAL"
     assert list(hardware.directory.glob("*-playback.wav")), "PLAYBACK_AUDIO_RETAINED"
-    if outcome in ("valid", "early"):
+    if outcome in ("low-peak", "low-ratio", "window-disagreement"):
+        assert row["hardware_invalid_reason"] == "correlation_unavailable", (
+            "DRIVER_PRESERVES_CORRELATION_CAUSE"
+        )
+        assert fault_runner.injection_status(row) == "invalid_injection"
+    elif outcome in ("valid", "early"):
         assert row["turn_id"] == "turn-new", "TURN_FROM_SENSOR_NOT_TIME"
         assert row["pipeline_run_id"] == "run-new"
         assert state["archives"] == 1, "TURN_COPIED_IMMEDIATELY"
@@ -733,11 +775,13 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
 
 
 @pytest.mark.parametrize(
-    "reason", ["no_wake", "early_end", "fault_outside_window", None]
+    "reason",
+    ["no_wake", "early_end", "fault_outside_window", "correlation_unavailable", None],
 )
 @pytest.mark.parametrize("correct", [True, False])
+@pytest.mark.parametrize("recover", [True, False])
 async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
-    tmp_path, monkeypatch, reason, correct
+    tmp_path, monkeypatch, reason, correct, recover
 ):
     module = hardware_module()
     label = {"id": "test", "split": "held_out", "audio_sha256": "a" * 64}
@@ -768,9 +812,21 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
             row.update(
                 stage="qualification" if qualification else "before",
                 label=trial()["label"],
-                hardware_invalid_reason=None if qualification else reason,
+                hardware_invalid_reason=(
+                    None
+                    if qualification
+                    or (recover and len(calls) > 1)
+                    or reason == "correlation_unavailable"
+                    else reason
+                ),
                 failure_messages=[],
             )
+            if (
+                not qualification
+                and reason == "correlation_unavailable"
+                and not (recover and len(calls) > 1)
+            ):
+                row["correlation"]["complete"] = False
             if not correct:
                 row["recognized_transcript"] = "wrong command"
             row["failures"] = []
@@ -823,13 +879,22 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
             pipeline="source",
         )
     )
-    count = 3 if reason else 1
+    count = (2 if recover else 3) if reason else 1
     assert calls == ["test"] * count, "HARDWARE_ATTEMPT_CAP_THREE"
     assert len(result["attempts"]) == count, "HARDWARE_INVALID_ATTEMPTS_RETAINED"
     assert len(result["trials"]) == 1, "HARDWARE_ONE_SLOT"
-    assert result["trials"][0]["status"] == ("unavailable" if reason else "failed"), (
-        "HARDWARE_EXHAUSTION_UNAVAILABLE_OR_VALID_FAILURE_NOT_REPLACED"
-    )
+    assert result["trials"][0]["status"] == (
+        "unavailable" if reason and not recover else "failed"
+    ), "HARDWARE_EXHAUSTION_UNAVAILABLE_OR_VALID_FAILURE_NOT_REPLACED"
+    if reason == "correlation_unavailable":
+        assert result["attempts"][0]["status"] == "invalid_injection", (
+            "CORRELATION_INVALID_ATTEMPT"
+        )
+        assert result["attempts"][0]["hardware_invalid_reason"] == reason
+        if not recover:
+            assert result["trials"][0]["hardware_invalid_reason"] == reason, (
+                "CORRELATION_EXHAUSTION_CAUSE"
+            )
     assert not result["faults"]["passed"], "HARDWARE_UNAVAILABLE_FAILS_GATE"
     assert result["trials"][0].get("failure_messages"), "UNSUCCESSFUL_ROW_HAS_CAUSE"
 

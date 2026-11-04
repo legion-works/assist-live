@@ -150,10 +150,16 @@ def injection_status(row: Row) -> str:
         "no_wake",
         "early_end",
         "fault_outside_window",
+        "correlation_unavailable",
     }:
         return "invalid_injection"
     correlation = row.get("correlation")
-    if not isinstance(correlation, dict) or correlation.get("complete") is not True:
+    if not isinstance(correlation, dict):
+        return "unavailable"
+    if correlation.get("complete") is not True:
+        if row.get("stage") in runner.STAGES:
+            row["hardware_invalid_reason"] = "correlation_unavailable"
+            return "invalid_injection"
         return "unavailable"
     if row.get("stage") not in ("speech", "pause"):
         return "verified"
@@ -1039,8 +1045,8 @@ class Hardware:
                 if stage != "qualification":
                     self.calibrate(row)
                 if (
-                    row["hardware_invalid_reason"] is None
-                    and injection_status(row) == "invalid_injection"
+                    injection_status(row) == "invalid_injection"
+                    and row["hardware_invalid_reason"] is None
                 ):
                     row["hardware_invalid_reason"] = "fault_outside_window"
             finally:
