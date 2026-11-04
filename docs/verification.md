@@ -3940,3 +3940,12 @@ The counts belong to that fault point.
 A syntax-valid scratch mutation used the initial extension order.
 The default-stage regression test gave `AssertionError: UNMET_PAUSE_STAGE_NOT_STARVED`.
 No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.
+
+## Correction: commits named in the readiness and qualification records
+
+The three records above name the commits `f579ac8` and `993055e`.
+A work branch had these commits before a rebase. The `main` branch does not have them.
+
+In `main`, commit `04dddb4` has the same code as `f579ac8`. Only `docs/design.md` is different.
+In `main`, commit `b00be87` has the qualification change of `993055e`, and its parent is `6963299`.
+The tests in the three records ran on the work-branch commits.
