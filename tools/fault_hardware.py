@@ -45,16 +45,39 @@ def qualification_failure(row: Row) -> str | None:
     invalid = row.get("hardware_invalid_reason")
     if invalid:
         return invalid if isinstance(invalid, str) else "unavailable"
-    if (
-        row.get("failures")
-        or (row.get("correlation") or {}).get("complete") is not True
-    ):
+    if row.get("failures"):
         return "unavailable"
+    correlation = row.get("correlation") or {}
+    if correlation.get("complete") is not True:
+        return "correlation_unavailable" if correlation else "unavailable"
     baselines = row.get("baselines") or {}
     engines = row.get("stt_engines") or {}
     for engine in ("server", "fallback"):
         baseline = baselines.get(engine) or {}
         evidence = baseline.get("evidence") or {}
+        if (
+            baseline.get("engine_id") == engines.get(engine)
+            and baseline.get("engine_id")
+            and baseline.get("clip_id") == row.get("clip_id")
+            and baseline.get("audio_sha256") == row.get("audio_sha256")
+            and isinstance(evidence.get("recognized_transcript"), str)
+            and evidence["recognized_transcript"].strip()
+            and any(
+                event.get("stage") == "run-end" for event in evidence.get("events", [])
+            )
+            and (
+                evidence.get("action_trace_complete") is True
+                or "MISSING_SELECTED_INTENT" in evidence.get("failures", [])
+                or any(
+                    event.get("stage") == "intent-end"
+                    for event in evidence.get("events", [])
+                )
+            )
+            and not intent_matches(
+                evidence.get("evaluated_intent"), row["label"]["intent"]
+            )
+        ):
+            return engine + "_baseline_intent"
         if not (
             baseline.get("status") == "available"
             and baseline.get("engine_id") == engines.get(engine)
@@ -355,6 +378,7 @@ class Hardware:
         self.mute_entity = ""
         self.pipeline_name = ""
         self.delay_samples: list[float] = []
+        self.timer_cancel_calls: list[Row] = []
 
     async def preflight(self, command: Command) -> None:
         registry = await command("config/entity_registry/list")
@@ -389,6 +413,8 @@ class Hardware:
         await self.ready(command)
 
     async def cancel_timers(self, command: Command) -> None:
+        call: Row = {"canceled": None}
+        self.timer_cancel_calls.append(call)
         try:
             result = await command(
                 "conversation/process",
@@ -398,10 +424,12 @@ class Hardware:
                 device_id=self.device_id,
             )
             response = runner.mapping(runner.mapping(result).get("response"))
-            # HA 2026.10.3 intent/timers.py:982-1001 gives action_done,
-            # also for 0 timers (helpers/intent.py:1456,1523-1531).
+            # HA 2026.10.1 and .4 intent/timers.py:988-1001 sets speech_slots.canceled.
             if response.get("response_type") != "action_done":
                 raise ValueError("missing or unsuccessful timer cancel response")
+            count = runner.mapping(response.get("speech_slots")).get("canceled")
+            if type(count) is int and count >= 0:
+                call["canceled"] = count
         except Exception as error:
             raise TimerCancelError("timer_cancel_failed") from error
 

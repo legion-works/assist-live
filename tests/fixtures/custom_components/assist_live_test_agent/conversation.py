@@ -63,10 +63,20 @@ class TestAgent(conversation.ConversationEntity):
         sensors = (
             [
                 entity
-                for entity in er.async_entries_for_device(
-                    registry, user_input.device_id
+                for entry in self.hass.config_entries.async_loaded_entries(
+                    "assist_live"
                 )
-                if entity.platform == "assist_live" and entity.domain == "sensor"
+                if (
+                    satellite := entry.data.get("satellites", {}).get(
+                        user_input.device_id
+                    )
+                )
+                for entity in er.async_entries_for_config_entry(
+                    registry, entry.entry_id
+                )
+                if entity.platform == "assist_live"
+                and entity.domain == "sensor"
+                and entity.unique_id == f"{satellite}_last_turn_latency"
             ]
             if user_input.device_id
             else []
@@ -79,7 +89,7 @@ class TestAgent(conversation.ConversationEntity):
             and state.attributes.get("turn_id")
         ]
         if (
-            len(links) == 1
+            len(sensors) == len(links) == 1
             and context_ms is not None
             and int(links[0].last_updated.timestamp() * 1000) >= context_ms
             and links[0].attributes["turn_id"] not in claims

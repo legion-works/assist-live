@@ -1713,6 +1713,15 @@ def qualification_bench(tmp_path, monkeypatch):
                 cooldown_started_utc_ns=100,
             )
             cause = state["causes"].get(label["id"])
+            if stage == state.get("link_missing_stage"):
+                row["agent_records"] = [
+                    {
+                        "turn_id": None,
+                        "device_id": "physical",
+                        "completed": True,
+                        "recognized_transcript": row["recognized_transcript"],
+                    }
+                ]
             if stage == "qualification":
                 row["fault_injected"] = False
                 if cause in ("no_wake", "early_end"):
@@ -1720,6 +1729,15 @@ def qualification_bench(tmp_path, monkeypatch):
                 elif cause == "unavailable":
                     row["failures"] = ["ValueError"]
                     row["failure_messages"] = ["ValueError: synthetic unavailable"]
+                elif cause == "agent_turn_link_missing":
+                    row["agent_records"] = [
+                        {
+                            "turn_id": None,
+                            "device_id": "physical",
+                            "completed": True,
+                            "recognized_transcript": row["recognized_transcript"],
+                        }
+                    ]
             else:
                 state["stops"].append(stage)
             return row
@@ -1801,6 +1819,88 @@ def qualification_bench(tmp_path, monkeypatch):
     state["run"] = run
     state["labels"] = labels
     return state
+
+
+@pytest.mark.parametrize(
+    "stage", ["qualification", "baseline", "before", "after-final"]
+)
+async def test_woken_complete_agent_without_turn_link_stops_next_play(
+    qualification_bench,
+    stage,
+):
+    state = qualification_bench
+    state["link_missing_stage"] = stage
+    result = await state["run"](stages="before,speech,after-final")
+    assert (
+        state["plays"][-1][0] == stage
+        and sum(play_stage == stage for play_stage, _ in state["plays"]) == 1
+    ), "MISSING_AGENT_LINK_STOPS_NEXT_PLAY"
+    assert result.get("agent_turn_link_missing") is True, "MISSING_AGENT_LINK_NAMED"
+    assert result["faults"]["reason"] == "agent_turn_link_missing"
+    assert result["agent_turn_link_failure"]["agent_records"][0]["turn_id"] is None
+
+
+@pytest.mark.parametrize("engine", ["server", "fallback"])
+@pytest.mark.parametrize("failure", ["MISSING_SELECTED_INTENT", "intent-error"])
+def test_completed_baseline_without_intent_has_named_cause(engine, failure):
+    row = hardware_row()
+    row.update(failures=[], failure_messages=[])
+    for baseline in row["baselines"].values():
+        baseline["evidence"] = trial()
+    baseline = row["baselines"][engine]
+    baseline["status"] = "unavailable"
+    baseline["evidence"].update(evaluated_intent=None, failures=[failure])
+    baseline["evidence"]["events"].append({"stage": "run-end"})
+    assert (
+        hardware_module().qualification_failure(row) == engine + "_baseline_intent"
+    ), "COMPLETED_BASELINE_INTENT_CAUSE"
+
+
+@pytest.mark.parametrize("engine", ["server", "fallback"])
+def test_engine_failure_without_transcript_stays_unavailable(engine):
+    row = hardware_row()
+    row.update(failures=[], failure_messages=[])
+    for baseline in row["baselines"].values():
+        baseline["evidence"] = trial()
+    baseline = row["baselines"][engine]
+    baseline["status"] = "unavailable"
+    baseline["evidence"].update(
+        evaluated_intent=None,
+        recognized_transcript=None,
+        action_trace_complete=False,
+        failures=["stt-stream-failed", "MISSING_SELECTED_INTENT"],
+    )
+    baseline["evidence"]["events"].append({"stage": "run-end"})
+    assert hardware_module().qualification_failure(row) == "unavailable", (
+        "ENGINE_FAILURE_WITHOUT_RESULT_NOT_INTENT_REJECTION"
+    )
+
+
+@pytest.mark.parametrize(
+    "correlation",
+    [
+        {"complete": False, "correlation": 0.17, "second_peak_ratio": 2},
+        {"complete": False, "correlation": 0.8, "second_peak_ratio": 1.14},
+        {
+            "complete": False,
+            "correlation": 0.8,
+            "second_peak_ratio": 2,
+            "windows": [{"clip_offset_samples": 641}],
+        },
+    ],
+)
+def test_correlation_rejection_has_named_public_cause(correlation):
+    row = hardware_row()
+    row.update(failures=[], failure_messages=[], correlation=correlation)
+    cause = hardware_module().qualification_failure(row)
+    assert cause == "correlation_unavailable", "CORRELATION_REJECTION_NAMED"
+    assert row["correlation"] == correlation, "PRIVATE_CORRELATION_VALUES_RETAINED"
+    gate = fault_runner.fault_gate(
+        {"qualification": {"recordings": [{"cause": cause}]}}
+    )
+    assert gate["qualification"]["causes"] == {"correlation_unavailable": 1}, (
+        "PUBLIC_CAUSE_COUNT_NAMED"
+    )
 
 
 async def test_qualification_uses_same_three_cooldown_restart_limit(

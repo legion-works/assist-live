@@ -24,6 +24,7 @@ def test_native_contract_text_matches_both_document_paths():
 
 async def agent_bench(hass, monkeypatch, *, same_device=False):
     from homeassistant.components import conversation
+    from homeassistant.config_entries import ConfigEntryState
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
     from homeassistant.setup import async_setup_component
@@ -45,9 +46,12 @@ async def agent_bench(hass, monkeypatch, *, same_device=False):
 
     ledger = TurnLedger(None)
     agents, sensors, devices = [], [], []
-    entry = MockConfigEntry(domain="assist_live")
+    entry = MockConfigEntry(domain="assist_live", state=ConfigEntryState.LOADED)
     entry.add_to_hass(hass)
     for index in range(2):
+        if same_device and devices:
+            entry = MockConfigEntry(domain="assist_live", state=ConfigEntryState.LOADED)
+            entry.add_to_hass(hass)
         device = (
             devices[0]
             if same_device and devices
@@ -57,7 +61,20 @@ async def agent_bench(hass, monkeypatch, *, same_device=False):
             )
         )
         registered = er.async_get(hass).async_get_or_create(
-            "sensor", "assist_live", f"latency-{index}", device_id=device.id
+            "sensor",
+            "assist_live",
+            f"virtual-{index}_last_turn_latency",
+            config_entry=entry,
+            device_id=device.id,
+        )
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                "satellites": {
+                    **entry.data.get("satellites", {}),
+                    device.id: f"virtual-{index}",
+                }
+            },
         )
         sensor = TurnLatencySensor(f"virtual-{index}", device.id, ledger)
         sensor.hass = hass

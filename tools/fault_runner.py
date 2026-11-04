@@ -59,6 +59,10 @@ class TemporaryPipelineError(ValueError):
     pass
 
 
+class AgentTurnLinkError(ValueError):
+    pass
+
+
 def no_text_error(trial: Row) -> bool:
     run_id = trial.get("pipeline_request_id")
     events = trial.get("events")
@@ -366,6 +370,8 @@ def fault_gate(faults: Row) -> Row:
             summary.update(passed=False, reason="insufficient_eligible_recordings")
     if faults.get("timer_cancel_failed"):
         summary.update(passed=False, reason="timer_cancel_failed")
+    if faults.get("agent_turn_link_missing"):
+        summary.update(passed=False, reason="agent_turn_link_missing")
     return summary
 
 
@@ -1357,6 +1363,8 @@ async def run(args: argparse.Namespace) -> Row:
             for stage in STAGES
         },
     }
+    if hardware:
+        result["timer_cancel_calls"] = getattr(hardware, "timer_cancel_calls", [])
     plans: dict[str, list[tuple[Row, bytes]]] = {}
     for stage in args.stages.split(","):
         candidates = [
@@ -1421,6 +1429,22 @@ async def run(args: argparse.Namespace) -> Row:
             async def trials(
                 pipeline: str, device_id: str | None = None, sensor: str | None = None
             ) -> None:
+                def require_agent_turn_link(row: Row) -> None:
+                    if (
+                        hardware
+                        and row.get("hardware_invalid_reason") != "no_wake"
+                        and any(
+                            record.get("device_id") == hardware.device_id
+                            and record.get("completed") is True
+                            and record.get("turn_id") is None
+                            and record.get("recognized_transcript")
+                            == row.get("recognized_transcript")
+                            for record in row.get("agent_records", [])
+                        )
+                    ):
+                        result["agent_turn_link_failure"] = row
+                        raise AgentTurnLinkError("agent_turn_link_missing")
+
                 async def cancel_timers() -> None:
                     if hardware:
                         try:
@@ -1532,6 +1556,7 @@ async def run(args: argparse.Namespace) -> Row:
                                 stop_margin_seconds=0.02,
                                 sensor=sensor or "",
                             )
+                            require_agent_turn_link(row)
                             await hardware.baselines(
                                 session,
                                 args.token_file,
@@ -1623,6 +1648,7 @@ async def run(args: argparse.Namespace) -> Row:
                             sensor=sensor or "",
                         )
                         result["playback_calibration_attempts"].append(calibration)
+                        require_agent_turn_link(calibration)
                         write_result(args.output, result)
                         await cancel_timers()
                         if (calibration.get("correlation") or {}).get("complete"):
@@ -1646,6 +1672,7 @@ async def run(args: argparse.Namespace) -> Row:
                                     stop_margin_seconds=margin,
                                     sensor=sensor or "",
                                 )
+                                require_agent_turn_link(row)
                                 await hardware.baselines(
                                     session,
                                     args.token_file,
@@ -1771,6 +1798,9 @@ async def run(args: argparse.Namespace) -> Row:
                     f"NOTE {path}: virtual rows {len(rows)}; device rows unobserved",
                     flush=True,
                 )
+    except AgentTurnLinkError:
+        result["agent_turn_link_missing"] = True
+        result["preflight_failed"] = True
     except TimerCancelError:
         result["timer_cancel_failed"] = True
         result["preflight_failed"] = True

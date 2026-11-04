@@ -4055,3 +4055,41 @@ Two syntax-valid agent mutations in scratch copies gave named assertion failures
 - Drop the operation record: `timer operation recorded` (`8 failed, 2 deselected`).
 
 No live HA call, playback, or container operation ran for this repair. Hardware acceptance stays `NOT RUN`.
+
+## Test-agent turn connections and fault-runner causes
+
+Date: 2026-11-04 (UTC).
+
+The agent finds the latency sensor through the loaded entry's satellite mapping and the sensor's unique ID.
+The input device stays in the record. Voice type, freshness, and one-claim checks stay unchanged.
+The HA harness uses two satellites on one entry and different sensor devices with shared MAC connections.
+It checks each satellite's own turn, stale turns, claimed turns, missing mappings, entries that are not loaded, and ambiguous mappings.
+
+HA `2026.10.1` and `2026.10.4` have the same public source interfaces:
+
+- `config_entries.py:2325-2333` supplies loaded entries.
+- `helpers/entity_registry.py:2688-2693` supplies an entry's entities.
+- `helpers/device_registry.py:2049-2056` gives the rules for connections shared across config entries.
+- `components/intent/timers.py:988-1001` sets `speech_slots.canceled`, also for `0` timers.
+- `helpers/intent.py:1518-1536` serializes `speech_slots`.
+
+On base `3ee6251`, the new tests gave `14 failed, 186 passed` before the source change:
+
+```sh
+uv run --locked pytest tests/test_agent_turn_link.py tests/test_fault_timers.py tests/test_fault_hardware.py -q
+```
+
+The failures named missing turn connections, missing cancel counts, correlation causes, and baseline intents that did not agree with the corpus.
+The initial repaired suites, with native-function and virtual-timer tests, gave `215 passed`.
+More boundary tests distinguish engine failures without a transcript from incorrect intent results.
+The runner tests check that a missing live connection stops qualification, calibration, and fault plays.
+Cancel counts stay in the private result for each call. A missing count stays `null`.
+
+Three syntax-valid source mutations in scratch copies gave named assertion failures:
+
+- Look up sensors on the input device: `ENTRY_MAPPING_OWN_FRESH_UNCLAIMED_TURN`.
+- Select the first sensor of the entry without the satellite-key check: `ENTRY_MAPPING_OWN_FRESH_UNCLAIMED_TURN`.
+- Change a correlation failure to `unavailable`: `CORRELATION_REJECTION_NAMED`.
+
+The test commands used the idle-CPU wrapper. No live HA call, playback, or container operation ran.
+Hardware acceptance stays `NOT RUN`.

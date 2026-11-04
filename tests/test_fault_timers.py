@@ -48,6 +48,19 @@ async def test_timer_cancel_sends_exact_native_request(tmp_path, count):
             },
         )
     ], "EXACT_NATIVE_TIMER_CANCEL"
+    assert hardware.timer_cancel_calls == [{"canceled": count}], "CANCEL_COUNT_RETAINED"
+
+
+async def test_timer_cancel_missing_count_is_null(tmp_path):
+    hardware = fault_hardware.Hardware(arguments(tmp_path))
+
+    async def command(*_, **__):
+        return {"response": {"response_type": "action_done"}}
+
+    await hardware.cancel_timers(command)
+    assert hardware.timer_cancel_calls == [{"canceled": None}], (
+        "MISSING_CANCEL_COUNT_IS_NULL"
+    )
 
 
 @pytest.mark.parametrize(
@@ -295,6 +308,9 @@ def timer_run(tmp_path, monkeypatch):
 
 async def test_timers_removed_before_play_after_capture_and_in_cleanup(timer_run):
     result = await timer_run["run"]()
+    assert result["timer_cancel_calls"] == [{"canceled": 1}] * 5, (
+        "EVERY_CANCEL_COUNT_IN_PRIVATE_RESULT"
+    )
     assert timer_run["timeline"] == [
         "cancel",
         "idle:qualification",
@@ -336,6 +352,36 @@ async def test_qualification_only_also_removes_timers(timer_run):
         "cancel",
         "cancel",
     ], "QUALIFICATION_ONLY_TIMER_CLEANUP"
+
+
+async def test_missing_live_turn_link_keeps_outer_cleanup(timer_run, monkeypatch):
+    play = fault_hardware.Hardware.trial
+
+    async def unlinked(self, *args, **kwargs):
+        row = await play(self, *args, **kwargs)
+        row["agent_records"] = [
+            {
+                "turn_id": None,
+                "device_id": "physical",
+                "completed": True,
+                "recognized_transcript": row["recognized_transcript"],
+            }
+        ]
+        return row
+
+    monkeypatch.setattr(fault_hardware.Hardware, "trial", unlinked)
+    result = await timer_run["run"]()
+    assert timer_run["timeline"] == [
+        "cancel",
+        "idle:qualification",
+        "play:qualification",
+        "cancel",
+    ], "MISSING_AGENT_LINK_CLEANUP_WITHOUT_NEXT_PLAY"
+    assert result["agent_turn_link_missing"] is True
+    assert result["bench_restored"] and result["restored_healthy"], (
+        "MISSING_AGENT_LINK_RESTORES_BENCH"
+    )
+    assert result["timer_cancel_calls"] == [{"canceled": 1}, {"canceled": 1}]
 
 
 async def test_playback_calibration_also_removes_timers_after_capture(timer_run):

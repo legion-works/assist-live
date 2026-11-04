@@ -106,12 +106,23 @@ The output contains transcripts. Do not publish it without a data check.
 ### Device operation bridge
 
 The text-only run does not invent an assist-live turn identifier.
-For device replay, the test agent finds the public latency sensor through the HA entity registry for the input device.
+
+For device replay, the agent reads loaded `assist_live` config entries.
+The entry's `satellites` mapping must connect the input device ID to a satellite key.
+In that entry's entity registry rows, the agent selects platform `assist_live`, domain `sensor`, and unique ID `<satellite>_last_turn_latency`.
+HA 2026.10 gives each config entry its own device. These devices can share a MAC connection.
+Thus a lookup of sensors on the input device cannot find the assist-live sensor.
+
 The sensor shows `turn_id` and `turn_type` when the turn opens.
 The agent connects that voice turn to the conversation context ID and device ID.
-The record's `device_id` and the sensor lookup keep the input device, not the virtual timer device.
+The record's `device_id` and the entry lookup keep the input device, not the virtual timer device.
+
+HA `2026.10.1` and `2026.10.4` supply the public lookups in `config_entries.py:2325-2333` and `helpers/entity_registry.py:2688-2693`.
+Their `helpers/device_registry.py:2049-2056` gives the rules for connections shared across config entries.
 
 A missing sensor, ambiguous sensor, missing turn ID, or non-voice turn gives no connection.
+The sensor's `last_updated` must be at or after the conversation context time.
+Each turn can connect to only one conversation context.
 The device recorder refuses such a record.
 
 Records include `run_id`, `baseline_configuration_id`, `completed`, and `operations`.

@@ -211,6 +211,12 @@ The outer run owns cleanup after preflight validation, also if a readiness check
 If cleanup removal gives an error, the initial error keeps a `timer_cancel_failed` note.
 The run and fault summary name `timer_cancel_failed`. This failure also makes `--qualify-only` unsatisfactory.
 
+The private result keeps `timer_cancel_calls` in call order, with the initial call and cleanup.
+Each row has `canceled`, the count from the reply's `response.speech_slots.canceled`.
+A missing count gives `null`, not a failure. The count can be `0`.
+HA `2026.10.1` and `2026.10.4` set this count in `components/intent/timers.py:988-1001`.
+Their `helpers/intent.py:1518-1536` puts `speech_slots` in the serialized response.
+
 The HA `2026.10.3` [cancel-all handler](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/intent/timers.py#L982-L1001) gives a response, also for 0 timers.
 The [response constructor and serializer](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/helpers/intent.py#L1439-L1555) give `response_type: action_done` for this result.
 The [timer manager](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/intent/timers.py#L338-L351) sends `cancelled` events to the device handler.
@@ -246,7 +252,21 @@ The counts belong to that fault point.
 
 The private `qualification` section gives `candidates`, `eligible`, `target`, `required_by_stage`, `limit`, and `sufficient`.
 Its `recordings` list keeps each qualification test run, the two baseline transcripts, `eligible`, and `cause`.
-Causes include `no_wake`, `early_end`, `server_baseline_intent`, `fallback_baseline_intent`, `operations`, and `unavailable`.
+The possible causes are:
+
+- `no_wake` and `early_end`.
+- `correlation_unavailable`.
+- `server_baseline_intent` and `fallback_baseline_intent`.
+- `operations` and `unavailable`.
+
+`correlation_unavailable` means the recorded correlation proof does not satisfy the peak, ratio, or window-agreement thresholds.
+The private `correlation` row keeps the measured peak, ratio, and window values.
+
+`server_baseline_intent` and `fallback_baseline_intent` mean the completed baseline's intent does not agree with the corpus intent.
+These causes include intent errors and `MISSING_SELECTED_INTENT` when the baseline has a transcript result.
+
+`unavailable` stays for an engine or HA failure without a result, or missing baseline records.
+
 Unavailable results keep private `failure_messages`, with the same message-length limit as trials.
 The `trials` and `attempts` lists and trial denominators do not include qualification plays.
 
@@ -292,6 +312,11 @@ The run's `run-start` must name this satellite.
 The turn ID comes from the latency sensor, not a timestamp.
 The archive record keeps the turn ID and `pipeline_run_id`.
 More than one possible run, turn, or WAV gives `unavailable`.
+
+If a play wakes the satellite but its completed live agent record has no turn connection, the runner stops subsequent plays.
+The run and public fault gate name `agent_turn_link_missing`.
+The private `agent_turn_link_failure` row keeps the test run and its agent records.
+Timer removal, pipeline restoration, and server restoration continue to run.
 
 In HA `2026.10.1` and `2026.10.4`, `assist_pipeline/websocket_api.py:273-307` gives the schema of `assist_pipeline/pipeline_debug/list`.
 Its response contains `pipeline_runs` with `pipeline_run_id` and `timestamp`.

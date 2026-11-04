@@ -20,6 +20,7 @@ async def test_native_timer_uses_only_virtual_receiver(
         async_expose_entity,
     )
     from homeassistant.components.intent import async_register_timer_handler
+    from homeassistant.config_entries import ConfigEntryState
     from homeassistant.core import Context, callback
     from homeassistant.helpers import area_registry as ar
     from homeassistant.helpers import device_registry as dr
@@ -87,8 +88,18 @@ async def test_native_timer_uses_only_virtual_receiver(
     hass.bus.async_listen(
         "assist_live_test_record", callback(lambda event: records.append(event.data))
     )
+    live_entry = MockConfigEntry(
+        domain="assist_live",
+        state=ConfigEntryState.LOADED,
+        data={"satellites": {devices[input_device].id: "input"}},
+    )
+    live_entry.add_to_hass(hass)
     registered = er.async_get(hass).async_get_or_create(
-        "sensor", "assist_live", "input-latency", device_id=devices[input_device].id
+        "sensor",
+        "assist_live",
+        "input_last_turn_latency",
+        config_entry=live_entry,
+        device_id=devices[input_device].id,
     )
     ledger = TurnLedger(None)
     sensor = TurnLatencySensor("input", devices[input_device].id, ledger)

@@ -481,6 +481,7 @@ async def test_public_sensor_links_actual_agent_context_and_timed_operations(
     monkeypatch,
 ):
     from homeassistant.components import conversation
+    from homeassistant.config_entries import ConfigEntryState
     from homeassistant.core import Context
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
@@ -502,13 +503,20 @@ async def test_public_sensor_links_actual_agent_context_and_timed_operations(
     from custom_components.assist_live_test_agent import register_timer
     from custom_components.assist_live_test_agent.conversation import TestAgent
 
-    entry = MockConfigEntry(domain="assist_live")
+    entry = MockConfigEntry(domain="assist_live", state=ConfigEntryState.LOADED)
     entry.add_to_hass(hass)
     device = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("test", "virtual")}
     )
+    hass.config_entries.async_update_entry(
+        entry, data={"satellites": {device.id: "virtual"}}
+    )
     registered = er.async_get(hass).async_get_or_create(
-        "sensor", "assist_live", "virtual-latency", device_id=device.id
+        "sensor",
+        "assist_live",
+        "virtual_last_turn_latency",
+        config_entry=entry,
+        device_id=device.id,
     )
     ledger = TurnLedger(None)
     sensor = TurnLatencySensor("virtual", device.id, ledger)
