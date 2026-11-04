@@ -3885,3 +3885,34 @@ The restart limit is three restarts: four cool-down cycles in total (the first c
 Exhaustion gives `unavailable` with `satellite_not_idle`, without playback or a replacement test run.
 
 No live playback, HA call, or container call ran for this correction. Hardware acceptance stays `NOT RUN`.
+
+## Recording qualification before hardware faults
+
+Date: 2026-11-04 (UTC).
+
+The [design](design.md#phases-and-gates) specifies qualification before the first hardware fault.
+Qualification uses the hardware turn archive and the shared no-fault baseline path for the server and fallback engines.
+The two baselines must give the corpus intent and device operations before a recording is eligible.
+Qualification runs before calibration. If eligibility is not sufficient, no calibration or fault starts.
+
+The default candidate limit is two times the number of different recordings in the initial trial plan.
+The simulated-mode corpus order, pause-only selection, repeated-slot order, and same-recording replacement rules stay unchanged.
+The private results give candidate and eligible counts, causes, and the two baseline transcripts.
+The trial counts and denominators do not include qualification plays.
+The `--qualify-only` flag stops after qualification and does not prove hardware acceptance.
+
+On `f579ac8`, the initial qualification tests gave `11 failed, 92 deselected` before the source changes.
+The timing tests gave `9 failed, 3 passed`, with `IDLE_WAIT_MEASURED`.
+The hardware and fault-runner tests then gave `310 passed` with fakes.
+These tests check eligibility on the two engines, each cause, candidate limits, corpus order, and cancellation cleanup.
+They also check `idle_wait_seconds` and `cooldown_started_utc_ns` for qualification, calibration, and trial test runs.
+The previous trial-cancellation tests keep their initial stop counts and cleanup assertions.
+
+Three syntax-valid production mutations in scratch copies gave named assertion failures:
+
+- Accept one engine only: `QUALIFICATION_EXTENDS_IN_ORDER`.
+- Count qualification plays as trials: `QUALIFICATION_NOT_TRIALS`.
+- Start calibration with not sufficient eligible recordings: `NO_FAULT_WITH_INSUFFICIENT_ELIGIBLE_RECORDINGS`.
+
+No live playback, HA call, or container call ran for this change. Hardware acceptance stays `NOT RUN`.
+The remaining live measurement is the eligible count and each cause from an approved `--qualify-only` run.

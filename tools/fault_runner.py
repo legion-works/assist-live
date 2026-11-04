@@ -325,7 +325,7 @@ def fault_gate(faults: Row) -> Row:
     )
     passed = sum(count for (_, status), count in outcomes.items() if status == "passed")
     counts = Counter(trial.get("stage") for trial in trials)
-    return {
+    summary = {
         **rate(passed, len(trials)),
         "stages": {
             stage: {
@@ -348,6 +348,10 @@ def fault_gate(faults: Row) -> Row:
         and counts == {stage: 10 for stage in STAGES}
         and not any(trial.get("scope") == "simulated" for trial in trials),
     }
+    qualification = faults.get("qualification")
+    if qualification is not None and qualification.get("sufficient") is not True:
+        summary.update(passed=False, reason="insufficient_eligible_recordings")
+    return summary
 
 
 def audio_input(label: Row, root: Path) -> bytes:
@@ -1137,6 +1141,7 @@ async def collect_baselines(
             aiohttp.ClientError,
         ) as error:
             record["error"] = type(error).__name__
+            record["message"] = failure_message(error)
     return baselines
 
 
@@ -1368,18 +1373,24 @@ async def run(args: argparse.Namespace) -> Row:
                 return result
             plans[stage].append((label, pcm))
     server = TestServer()
-    try:
-        await server.restore()
+    samples: list[float] = []
+
+    async def calibrate_stop() -> None:
         result["stop_latency_samples_seconds"] = []
         for _ in range(STOP_CALIBRATION_SAMPLES if "speech" in plans else 1):
             sample = await server.measure_stop_latency()
             if not math.isfinite(sample) or sample < 0:
                 raise ValueError("invalid stop latency")
-            result["stop_latency_samples_seconds"].append(sample)
+            samples.append(sample)
+            result["stop_latency_samples_seconds"] = samples
             write_result(args.output, result)
-        samples = result["stop_latency_samples_seconds"]
         result["stop_latency_seconds"] = statistics.median(samples)
         result["stop_margin_seconds"] = (max(samples) - min(samples)) / 2 + 0.02
+
+    try:
+        await server.restore()
+        if not hardware:
+            await calibrate_stop()
         async with aiohttp.ClientSession() as session:
 
             async def trials(
@@ -1399,6 +1410,122 @@ async def run(args: argparse.Namespace) -> Row:
                     engines = {}
                     result["baseline_engine_error"] = type(error).__name__
                 result["stt_engines"] = engines
+                if hardware:
+                    from tools.fault_hardware import qualification_failure
+
+                    originals = {
+                        label["id"]: label
+                        for planned in plans.values()
+                        for label, _ in planned
+                    }
+                    target = len(originals)
+                    required = {
+                        stage: len({label["id"] for label, _ in planned})
+                        for stage, planned in plans.items()
+                    }
+                    pools = {
+                        stage: [
+                            label
+                            for label in labels
+                            if label.get("split") == "held_out"
+                            and (stage != "pause" or label.get("set") == "pause")
+                        ]
+                        for stage in plans
+                    }
+                    candidates = dict(originals)
+                    for pool in pools.values():
+                        for label in pool:
+                            candidates.setdefault(label["id"], label)
+                    limit = getattr(args, "qualification_limit", None)
+                    if limit is None:
+                        limit = 2 * target
+                    qualification: Row = {
+                        "target": target,
+                        "required_by_stage": required,
+                        "limit": limit,
+                        "candidates": 0,
+                        "eligible": 0,
+                        "recordings": [],
+                        "sufficient": False,
+                    }
+                    result["qualification"] = qualification
+                    eligible: dict[str, tuple[Row, bytes]] = {}
+                    for label in list(candidates.values())[:limit]:
+                        qualification["candidates"] += 1
+                        try:
+                            for stage, pool in pools.items():
+                                if label in pool:
+                                    fault_window(label, stage)
+                            pcm = audio_input(label, args.audio_root)
+                        except (OSError, ValueError) as error:
+                            row = {
+                                "clip_id": label["id"],
+                                "failures": [type(error).__name__],
+                                "failure_messages": [failure_message(error)],
+                            }
+                            cause: str | None = "unavailable"
+                        else:
+                            row = await hardware.trial(
+                                session,
+                                args.token_file,
+                                pipeline,
+                                label,
+                                pcm,
+                                "qualification",
+                                server,
+                                stop_latency_seconds=0,
+                                stop_margin_seconds=0.02,
+                                sensor=sensor or "",
+                            )
+                            await hardware.baselines(
+                                session,
+                                args.token_file,
+                                pipeline,
+                                label,
+                                pcm,
+                                engines,
+                                server,
+                                row,
+                                sensor or "",
+                            )
+                            row["stt_engines"] = engines
+                            cause = qualification_failure(row)
+                        row.update(eligible=cause is None, cause=cause)
+                        if cause is None:
+                            eligible[label["id"]] = (label, pcm)
+                        else:
+                            complete_failure_messages(row)
+                        qualification["recordings"].append(row)
+                        qualification["eligible"] = len(eligible)
+                        qualification["sufficient"] = len(eligible) >= target and all(
+                            sum(label["id"] in eligible for label in pools[stage])
+                            >= count
+                            for stage, count in required.items()
+                        )
+                        write_result(args.output, result)
+                        if qualification["sufficient"]:
+                            break
+                    if not qualification["sufficient"]:
+                        result["preflight_failed"] = True
+                        for stage in plans:
+                            result["stage_status"][stage] = {
+                                "status": "NOT RUN",
+                                "reason": "insufficient_eligible_recordings",
+                            }
+                        return
+                    if getattr(args, "qualify_only", False):
+                        return
+                    for stage, pool in pools.items():
+                        available = [
+                            eligible[label["id"]]
+                            for label in pool
+                            if label["id"] in eligible
+                        ]
+                        plans[stage] = [
+                            available[index % len(available)]
+                            for index in range(args.each)
+                        ]
+                    await calibrate_stop()
                 cache: Row = {}
                 for planned in [] if hardware else plans.values():
                     for label, pcm in planned:
@@ -1631,6 +1758,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--hardware", action="store_true")
+    parser.add_argument(
+        "--qualification-limit",
+        type=int,
+        help="candidate limit (default: twice the distinct trial recordings)",
+    )
+    parser.add_argument("--qualify-only", action="store_true")
     parser.add_argument("--satellite")
     parser.add_argument("--playback-sink")
     parser.add_argument("--wake-audio", type=Path)
@@ -1643,6 +1776,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-matrix", type=Path)
     parser.add_argument("--temporary-agent-pipeline", action="store_true")
     args = parser.parse_args(argv)
+    if (
+        args.qualify_only or args.qualification_limit is not None
+    ) and not args.hardware:
+        parser.error("qualification options require --hardware")
+    if args.qualification_limit is not None and args.qualification_limit <= 0:
+        parser.error("qualification limit must be positive")
     if args.hardware and (
         args.simulate
         or args.native_matrix
@@ -1700,6 +1839,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("positive counts and unique known stages are required")
     try:
         result = asyncio.run(run(args))
+        if args.qualify_only:
+            qualification = result.get("qualification", {})
+            print(
+                f"NOTE hardware qualification {qualification.get('eligible', 0)}/"
+                f"{qualification.get('candidates', 0)}; "
+                f"sufficient {qualification.get('sufficient', False)}; "
+                "hardware acceptance NOT RUN"
+            )
+            return int(qualification.get("sufficient") is not True)
         summary = fault_gate(result)
         print(
             f"NOTE {'hardware' if args.hardware else 'simulated'} faults "

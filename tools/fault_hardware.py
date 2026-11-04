@@ -10,6 +10,7 @@ import statistics
 import struct
 import time
 import wave
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -23,6 +24,7 @@ from tools import fault_runner as runner
 from tools.device_replay import BRIDGE_OPERATION_MAP
 from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
 from tools.probe_pipelines import Command
+from tools.test_environment import FIXTURES, expected_operations, intent_matches
 
 Row = dict[str, Any]
 CORRELATION_MINIMUM = 0.18
@@ -33,6 +35,60 @@ RECORDINGS = PurePosixPath("/config/pipeline_recordings")
 
 class SatelliteNotIdleError(TimeoutError):
     pass
+
+
+def qualification_failure(row: Row) -> str | None:
+    invalid = row.get("hardware_invalid_reason")
+    if invalid:
+        return invalid if isinstance(invalid, str) else "unavailable"
+    if (
+        row.get("failures")
+        or (row.get("correlation") or {}).get("complete") is not True
+    ):
+        return "unavailable"
+    baselines = row.get("baselines") or {}
+    engines = row.get("stt_engines") or {}
+    for engine in ("server", "fallback"):
+        baseline = baselines.get(engine) or {}
+        evidence = baseline.get("evidence") or {}
+        if not (
+            baseline.get("status") == "available"
+            and baseline.get("engine_id") == engines.get(engine)
+            and baseline.get("engine_id")
+            and baseline.get("clip_id") == row.get("clip_id")
+            and baseline.get("audio_sha256") == row.get("audio_sha256")
+            and isinstance(baseline.get("transcript"), str)
+            and baseline["transcript"].strip()
+            and evidence
+            and not evidence.get("failures")
+            and evidence.get("action_trace_complete") is True
+        ):
+            row["failure_messages"].append(
+                baseline.get("message")
+                or runner.failure_message(ValueError(engine + " baseline unavailable"))
+            )
+            return "unavailable"
+        label = row["label"]
+        if not intent_matches(evidence.get("evaluated_intent"), label["intent"]):
+            return engine + "_baseline_intent"
+        try:
+            inventory = json.loads((FIXTURES / "intents.json").read_text())
+            expected = expected_operations(label, inventory)
+            actual = [
+                {
+                    "service": operation["service"],
+                    "target": operation["virtual_target"],
+                    "arguments": operation["arguments"],
+                }
+                for operation in evidence["action_trace"]
+            ]
+            if expected is None or Counter(
+                json.dumps(item, sort_keys=True) for item in actual
+            ) != Counter(json.dumps(item, sort_keys=True) for item in expected):
+                return "operations"
+        except KeyError, TypeError, ValueError:
+            return "operations"
+    return None
 
 
 def read_pcm(path: Path) -> bytes:
@@ -554,8 +610,18 @@ class Hardware:
             "failure_cause": None,
             "correlation": None,
             "hardware_invalid_reason": None,
+            "idle_wait_seconds": 0.0,
+            "cooldown_started_utc_ns": None,
             "playback_delay_samples_seconds": list(self.delay_samples),
         }
+
+        async def ready() -> Row:
+            started = time.monotonic()
+            try:
+                return await self.ready(command)
+            finally:
+                row["idle_wait_seconds"] += time.monotonic() - started
+
         playback = None
         injection = None
         listener = None
@@ -567,7 +633,7 @@ class Hardware:
         row["loss_counters"] = {"start": loss_start, "end": None}
         try:
             async with runner.control_command(session, token_file) as command:
-                states = await self.ready(command)
+                states = await ready()
                 previous = states[sensor]["attributes"].get("turn_id")
                 known = {
                     entry["pipeline_run_id"]
@@ -650,7 +716,8 @@ class Hardware:
                         "gap_samples": 0,
                     }
                     for _ in range(4):
-                        await self.ready(command)
+                        await ready()
+                        row["cooldown_started_utc_ns"] = time.time_ns()
                         await asyncio.sleep(6.2)
                         states = {
                             row["entity_id"]: row for row in await command("get_states")
@@ -919,7 +986,8 @@ class Hardware:
                 )
                 if interval is not None:
                     row["fault_stopped_audio_sample"] = interval[1]
-                self.calibrate(row)
+                if stage != "qualification":
+                    self.calibrate(row)
                 if (
                     row["hardware_invalid_reason"] is None
                     and injection_status(row) == "invalid_injection"

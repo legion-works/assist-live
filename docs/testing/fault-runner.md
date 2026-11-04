@@ -188,6 +188,38 @@ SHA-256 checks compare the source before and after the copy with the archived by
 The source stays in HA, and an unsatisfactory copy stays in the archive.
 Private results contain recording paths, transcripts, and entity IDs. Do not publish them.
 
+### Recording qualification
+
+Before calibration or the first fault, the runner plays each candidate one time without a fault.
+Qualification uses the same wake stream, `idle` wait, cool-down, turn identity checks, and temporary test-agent pipeline as a trial.
+The shared baseline path sends the archived turn audio to the server engine and the fallback engine without a fault.
+The two baselines must give the corpus intent and device operations before the recording is eligible.
+
+Candidates start with the different recordings in the trial plan, in first-use order across fault points and slots.
+If necessary, subsequent candidates come from the remaining corpus recordings in the same per-stage order.
+Only held-out recordings are candidates. Pause slots use only pause recordings.
+
+The target is the number of different recordings in the initial plan, not the number of trial slots.
+Each fault point must also have its initial number of different recordings.
+By default, `--qualification-limit` is two times this target. An explicit positive value changes this limit.
+Qualification stops at sufficient eligibility, the candidate limit, or the end of the candidate list.
+
+Trials select only eligible recordings in corpus order and use them again with the simulated-mode order rules.
+A replacement test run uses the same recording. No more eligible recordings are necessary.
+The runner does not qualify more recordings during the trials.
+If the eligible count is not sufficient, the hardware gate is unsatisfactory with `reason: insufficient_eligible_recordings`.
+No calibration or fault starts.
+
+The private `qualification` section gives `candidates`, `eligible`, `target`, `required_by_stage`, `limit`, and `sufficient`.
+Its `recordings` list keeps each qualification test run, the two baseline transcripts, `eligible`, and `cause`.
+Causes include `no_wake`, `early_end`, `server_baseline_intent`, `fallback_baseline_intent`, `operations`, and `unavailable`.
+Unavailable results keep private `failure_messages`, with the same message-length limit as trials.
+The `trials` and `attempts` lists and trial denominators do not include qualification plays.
+
+Add `--qualify-only` to the hardware command to measure eligibility without calibration or faults.
+This flag also plays audio. Get bench approval for this flag.
+With `--check`, its exit status checks qualification sufficiency only. It does not prove hardware fault acceptance.
+
 ### Satellite state and turn identity
 
 The runner finds the satellite device through the entity registry.
@@ -206,6 +238,10 @@ If the satellite is busy again, the runner starts the readiness wait and the ful
 
 The limit is three restarts: four cool-down cycles in total (the first cycle plus three).
 If the satellite is busy after the fourth cycle, the test run gives `unavailable` with `unavailable_reason: satellite_not_idle`.
+
+Each qualification, calibration, and trial test run records `idle_wait_seconds`, the total readiness-wait time on the monotonic clock.
+It also records `cooldown_started_utc_ns`, the UTC start of its last cool-down, or `null` if no cool-down started.
+The idle-wait total does not include cool-down time.
 
 The runner records the initial pipeline select, selects the temporary test-agent pipeline, and checks its state.
 A cancellation-safe `finally` puts back the initial selection and checks it before temporary-pipeline cleanup.
@@ -250,7 +286,7 @@ Missing counts give `unavailable`. Host clocks do not prove a fault position.
 
 ### Schedule and baselines
 
-The stop-latency calibration stays unchanged.
+The stop-latency calibration follows satisfactory qualification and keeps its initial sample count.
 For `speech` or `pause`, the runner first makes a maximum of three no-fault hardware tries to calibrate the playback interval.
 The initial interval is the HA STT-start time plus the correlated offset, minus playback launch and the wake length.
 

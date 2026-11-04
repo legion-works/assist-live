@@ -659,18 +659,24 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
             yield
 
         async def trial(self, *args, **kwargs):
-            calls.append(args[3]["id"])
+            qualification = args[5] == "qualification"
+            if not qualification:
+                calls.append(args[3]["id"])
             row = hardware_row()
             row.update(
-                stage="before", label=trial()["label"], hardware_invalid_reason=reason
+                stage="qualification" if qualification else "before",
+                label=trial()["label"],
+                hardware_invalid_reason=None if qualification else reason,
+                failure_messages=[],
             )
             if not correct:
                 row["recognized_transcript"] = "wrong command"
             row["failures"] = []
             return row
 
-        async def baselines(self, *_):
-            pass
+        async def baselines(self, *args):
+            for baseline in args[7]["baselines"].values():
+                baseline["evidence"] = trial()
 
     @asynccontextmanager
     async def control(*_):
@@ -1127,6 +1133,25 @@ def run_bench(tmp_path, monkeypatch):
     return state
 
 
+@pytest.fixture
+def qualified_run_bench(run_bench, monkeypatch):
+    module = hardware_module()
+    original_trial = module.Hardware.trial
+
+    async def qualified_trial(self, *args, **kwargs):
+        if args[5] != "qualification":
+            return await original_trial(self, *args, **kwargs)
+        row = hardware_row()
+        row.update(label=trial()["label"], failures=[], failure_messages=[])
+        for engine, baseline in row["baselines"].items():
+            baseline["evidence"] = trial()
+            baseline["engine_id"] = "stt.test" if engine == "server" else "stt.fallback"
+        return row
+
+    monkeypatch.setattr(module.Hardware, "trial", qualified_trial)
+    return run_bench
+
+
 async def stop_run(state, stage, wait_for, timeout=15):
     """Run one hardware fault run and cancel it when the named point is reached."""
     before = asyncio.all_tasks()
@@ -1216,8 +1241,10 @@ async def test_base_exception_during_playback_leaves_no_service_running(cancel_b
     assert_nothing_left_running(state, before)
 
 
-async def test_cancel_of_a_full_hardware_run_leaves_no_service_running(run_bench):
-    state = run_bench
+async def test_cancel_of_a_full_hardware_run_leaves_no_service_running(
+    qualified_run_bench,
+):
+    state = qualified_run_bench
     before = asyncio.all_tasks()
     task = asyncio.create_task(state["run"]("before"))
     try:
@@ -1258,7 +1285,10 @@ def readiness_clock(tmp_path, monkeypatch):
     monkeypatch.setattr(
         module,
         "time",
-        SimpleNamespace(monotonic=lambda: clock.now, time_ns=time.time_ns),
+        SimpleNamespace(
+            monotonic=lambda: clock.now,
+            time_ns=lambda: 1_000_000_000_000 + int(clock.now * 1e9),
+        ),
     )
     monkeypatch.setattr(module.asyncio, "sleep", sleep)
     return clock
@@ -1267,8 +1297,9 @@ def readiness_clock(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "busy_at", ["entry", "before-playback", "during-cooldown", "muted-cooldown"]
 )
+@pytest.mark.parametrize("stage", ["qualification", "baseline", "before"])
 async def test_responding_satellite_waits_then_gets_full_cooldown(
-    tmp_path, monkeypatch, readiness_clock, busy_at
+    tmp_path, monkeypatch, readiness_clock, busy_at, stage
 ):
     state = cancel_fakes(tmp_path, monkeypatch)
     clock = readiness_clock
@@ -1306,7 +1337,7 @@ async def test_responding_satellite_waits_then_gets_full_cooldown(
         "source",
         state["label"],
         state["pcm"],
-        "baseline",
+        stage,
         state["server"](),
         sensor="sensor.turn",
         stop_latency_seconds=0.1,
@@ -1324,13 +1355,19 @@ async def test_responding_satellite_waits_then_gets_full_cooldown(
         "FULL_COOLDOWN_AFTER_IDLE"
     )
     assert (expected_idle, 6.2) in clock.sleeps, "COOLDOWN_STARTS_AT_IDLE"
+    assert row.get("idle_wait_seconds") == pytest.approx(2.0), "IDLE_WAIT_MEASURED"
+    assert row.get("cooldown_started_utc_ns") == 1_000_000_000_000 + int(
+        expected_idle * 1e9
+    ), "COOLDOWN_START_MEASURED"
     assert row["pipeline_run_id"] == "run-new", "WAITED_ATTEMPT_RUNS"
+    if stage == "qualification":
+        assert hardware.delay_samples == [], "QUALIFICATION_NOT_CALIBRATION"
 
 
 async def test_satellite_idle_timeout_names_reason_and_next_slot_runs(
-    run_bench, monkeypatch, readiness_clock
+    qualified_run_bench, monkeypatch, readiness_clock
 ):
-    state, clock = run_bench, readiness_clock
+    state, clock = qualified_run_bench, readiness_clock
     polls = 0
     timed_out = False
 
@@ -1358,6 +1395,8 @@ async def test_satellite_idle_timeout_names_reason_and_next_slot_runs(
         "IDLE_TIMEOUT_NAMED_IN_ROW"
     )
     assert first["status"] == "unavailable", "IDLE_TIMEOUT_UNAVAILABLE"
+    assert first["idle_wait_seconds"] == 30.0, "TIMED_OUT_IDLE_WAIT_MEASURED"
+    assert first["cooldown_started_utc_ns"] is None, "NO_COOLDOWN_BEFORE_IDLE"
     assert clock.polls[-1] == 30, "IDLE_WAIT_BOUNDED_AT_THIRTY_SECONDS"
     assert len(clock.polls) == 121, "READINESS_POLLS_EVERY_QUARTER_SECOND"
     assert len(result["attempts"]) == 2, "IDLE_TIMEOUT_NOT_RETRIED_AS_INVALID"
@@ -1435,8 +1474,10 @@ async def test_trial_keeps_bounded_exception_message(
     ), "FAILURE_CLASSES_UNCHANGED"
 
 
-async def test_cancel_during_idle_wait_leaves_nothing_running(run_bench, monkeypatch):
-    state = run_bench
+async def test_cancel_during_idle_wait_leaves_nothing_running(
+    qualified_run_bench, monkeypatch
+):
+    state = qualified_run_bench
     waiting = asyncio.Event()
     polls = 0
     original_sleep = asyncio.sleep
@@ -1484,9 +1525,9 @@ def test_failure_message_redacts_token_and_credential_url_before_cap(prefix):
 
 
 async def test_satellite_busy_after_each_cooldown_exhausts_three_restarts(
-    run_bench, monkeypatch, readiness_clock
+    qualified_run_bench, monkeypatch, readiness_clock
 ):
-    state, clock = run_bench, readiness_clock
+    state, clock = qualified_run_bench, readiness_clock
     polls = 0
     cooldown_polls = 0
 
@@ -1519,4 +1560,459 @@ async def test_satellite_busy_after_each_cooldown_exhausts_three_restarts(
     assert state["server_running"], "RESTART_EXHAUSTION_RESTORES_SERVER"
     assert [row["id"] for row in state["pipelines"]] == ["source"], (
         "RESTART_EXHAUSTION_REMOVES_TEMPORARY_PIPELINE"
+    )
+
+
+@pytest.fixture
+def qualification_bench(tmp_path, monkeypatch):
+    module = hardware_module()
+    state = {"plays": [], "stops": [], "causes": {}}
+    labels = [
+        {
+            **copy.deepcopy(trial()["label"]),
+            "id": str(index),
+            "audio_sha256": "a" * 64,
+            "split": "held_out",
+            "set": "pause" if index % 2 else "commands",
+        }
+        for index in range(6)
+    ]
+
+    class Hardware:
+        device_id = "physical"
+        delay_samples = [0.1]
+
+        def __init__(self, _):
+            pass
+
+        async def preflight(self, _):
+            pass
+
+        @asynccontextmanager
+        async def selected(self, *args):
+            yield
+
+        async def trial(self, *args, **kwargs):
+            label, stage = args[3], args[5]
+            state["plays"].append((stage, label["id"]))
+            row = hardware_row()
+            row.update(
+                label=label,
+                clip_id=label["id"],
+                stage=stage,
+                failures=[],
+                failure_messages=[],
+                idle_wait_seconds=0.5,
+                cooldown_started_utc_ns=100,
+            )
+            cause = state["causes"].get(label["id"])
+            if stage == "qualification":
+                row["fault_injected"] = False
+                if cause in ("no_wake", "early_end"):
+                    row["hardware_invalid_reason"] = cause
+                elif cause == "unavailable":
+                    row["failures"] = ["ValueError"]
+                    row["failure_messages"] = ["ValueError: synthetic unavailable"]
+            else:
+                state["stops"].append(stage)
+            return row
+
+        async def baselines(self, *args):
+            label, row = args[3], args[7]
+            row["baselines"] = copy.deepcopy(trial()["baselines"])
+            for engine, baseline in row["baselines"].items():
+                baseline["clip_id"] = label["id"]
+                baseline["evidence"] = copy.deepcopy(trial())
+                cause = state["causes"].get(label["id"])
+                if cause == engine + "_baseline_intent":
+                    baseline["evidence"]["evaluated_intent"] = {
+                        "name": "Wrong",
+                        "slots": {},
+                    }
+                if cause == "operations":
+                    baseline["evidence"]["action_trace"] = []
+                if cause == "fallback_operations" and engine == "fallback":
+                    baseline["evidence"]["action_trace"] = []
+                if cause == "baseline_unavailable":
+                    baseline.update(
+                        status="unavailable",
+                        error="ValueError",
+                        message="ValueError: engine unavailable",
+                    )
+
+    @asynccontextmanager
+    async def control(*args):
+        yield None
+
+    @asynccontextmanager
+    async def temporary(*args, **kwargs):
+        yield "temporary", "virtual", "sensor.turn"
+
+    async def restore(*args):
+        pass
+
+    async def latency(*args):
+        state["stops"].append("calibration")
+        assert state["plays"] and all(
+            stage == "qualification" for stage, _ in state["plays"]
+        ), "QUALIFY_BEFORE_FIRST_STOP"
+        return 0.1
+
+    async def engines(*args):
+        return trial()["stt_engines"]
+
+    token = tmp_path / "auth.json"
+    token.write_text('{"token":"synthetic"}')
+    monkeypatch.setattr(module, "Hardware", Hardware)
+    monkeypatch.setattr(fault_runner, "load_corpus", lambda _: labels)
+    monkeypatch.setattr(fault_runner, "audio_input", lambda *_: b"source")
+    monkeypatch.setattr(fault_runner, "control_command", control)
+    monkeypatch.setattr(fault_runner, "temporary_pipeline", temporary)
+    monkeypatch.setattr(fault_runner, "baseline_engines", engines)
+    monkeypatch.setattr(fault_runner.TestServer, "restore", restore)
+    monkeypatch.setattr(fault_runner.TestServer, "measure_stop_latency", latency)
+
+    async def run(**options):
+        defaults = dict(
+            hardware=True,
+            output=tmp_path / "result.json",
+            simulate=False,
+            check=True,
+            labels=tmp_path / "labels.jsonl",
+            native_matrix=None,
+            stages="before,after-final",
+            each=2,
+            audio_root=tmp_path,
+            token_file=token,
+            temporary_agent_pipeline=True,
+            pipeline="source",
+            qualification_limit=None,
+            qualify_only=False,
+        )
+        return await fault_runner.run(Namespace(**(defaults | options)))
+
+    state["run"] = run
+    state["labels"] = labels
+    return state
+
+
+async def test_qualification_uses_same_three_cooldown_restart_limit(
+    run_bench, monkeypatch, readiness_clock
+):
+    state, clock = run_bench, readiness_clock
+    polls = 0
+    cooldown_polls = 0
+
+    def satellite_state():
+        nonlocal polls, cooldown_polls
+        if state["selects"]["select.pipeline"] != "Temporary":
+            return "idle"
+        polls += 1
+        if polls <= 2 or polls % 2:
+            return "idle"
+        cooldown_polls += 1
+        assert cooldown_polls <= 4, "QUALIFICATION_RESTARTS_BOUNDED_AT_THREE"
+        return "responding"
+
+    state["satellite_state"] = satellite_state
+    result = await state["run"]("before")
+    row = result["qualification"]["recordings"][0]
+    assert cooldown_polls == 4, "QUALIFICATION_HAS_FOUR_COOLDOWN_CYCLES"
+    assert clock.now == pytest.approx(24.8), "QUALIFICATION_COOLDOWN_LIMIT_TIME"
+    assert row["idle_wait_seconds"] == 0.0, "QUALIFICATION_RESTART_WAIT_MEASURED"
+    assert row["cooldown_started_utc_ns"] == 1_018_600_000_000, (
+        "QUALIFICATION_LAST_COOLDOWN_START_MEASURED"
+    )
+    assert row.get("unavailable_reason") == "satellite_not_idle"
+    assert row["cause"] == "unavailable", "QUALIFICATION_RESTART_EXHAUSTION_CAUSE"
+    assert not result["qualification"]["sufficient"]
+    assert not result["trials"] and not result["attempts"]
+    assert state["server_stops"] == 0, "QUALIFICATION_CAP_EXHAUSTION_STARTS_NO_FAULT"
+    assert state["playback"] is None, "QUALIFICATION_CAP_EXHAUSTION_NEVER_PLAYS"
+    assert state["server_running"], "QUALIFICATION_CAP_EXHAUSTION_SERVER_HEALTHY"
+    assert state["selects"]["select.pipeline"] == "Original"
+    assert [row["id"] for row in state["pipelines"]] == ["source"]
+
+
+async def test_qualification_both_engines_and_trial_order(qualification_bench):
+    state = qualification_bench
+    state["causes"] = {"0": "fallback_baseline_intent"}
+    result = await state["run"]()
+    qualification = result.get("qualification", {})
+    assert qualification.get("candidates") == 3, "QUALIFICATION_EXTENDS_IN_ORDER"
+    assert qualification["eligible"] == 2, "BOTH_ENGINES_REQUIRED_FOR_ELIGIBILITY"
+    assert qualification["limit"] == 4, "DEFAULT_LIMIT_TWICE_DISTINCT_TARGET"
+    assert state["plays"] == [
+        ("qualification", "0"),
+        ("qualification", "1"),
+        ("qualification", "2"),
+        ("before", "1"),
+        ("before", "2"),
+        ("after-final", "1"),
+        ("after-final", "2"),
+    ], "ONLY_ELIGIBLE_RECORDINGS_IN_CORPUS_ORDER"
+    assert len(result["trials"]) == len(result["attempts"]) == 4, (
+        "QUALIFICATION_NOT_TRIALS"
+    )
+    assert result["faults"]["denominator"] == 4, (
+        "QUALIFICATION_EXCLUDED_FROM_DENOMINATOR"
+    )
+    assert all(
+        row["baselines"][engine]["transcript"]
+        for row in qualification["recordings"]
+        for engine in ("server", "fallback")
+    ), "PRIVATE_BASELINE_TRANSCRIPTS"
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        "no_wake",
+        "early_end",
+        "server_baseline_intent",
+        "fallback_baseline_intent",
+        "operations",
+        "fallback_operations",
+        "unavailable",
+        "baseline_unavailable",
+    ],
+)
+async def test_qualification_rejection_cause_prevents_faults(
+    qualification_bench, cause
+):
+    state = qualification_bench
+    state["causes"] = {str(index): cause for index in range(6)}
+    result = await state["run"]()
+    qualification = result.get("qualification", {})
+    assert qualification.get("eligible") == 0, "BOTH_ENGINES_REQUIRED_FOR_ELIGIBILITY"
+    assert qualification["candidates"] == 4, "QUALIFICATION_LIMIT_RESPECTED"
+    expected = {
+        "baseline_unavailable": "unavailable",
+        "fallback_operations": "operations",
+    }.get(cause, cause)
+    assert {row["cause"] for row in qualification["recordings"]} == {expected}, (
+        "REJECTION_CAUSE_RECORDED"
+    )
+    if expected == "unavailable":
+        assert all(row["failure_messages"] for row in qualification["recordings"]), (
+            "UNAVAILABLE_MESSAGE_RECORDED"
+        )
+    assert not state["stops"], "NO_FAULT_WITH_INSUFFICIENT_ELIGIBLE_RECORDINGS"
+    assert not result["trials"] and not result["attempts"], "QUALIFICATION_NOT_TRIALS"
+    assert result["faults"]["passed"] is False, "INSUFFICIENT_ELIGIBILITY_FAILS_GATE"
+    assert result["faults"]["reason"] == "insufficient_eligible_recordings", (
+        "INSUFFICIENT_REASON_NAMED"
+    )
+
+
+async def test_qualify_only_stops_before_calibration_and_faults(qualification_bench):
+    state = qualification_bench
+    result = await state["run"](qualify_only=True)
+    assert result.get("qualification", {}).get("eligible") == 2, (
+        "QUALIFY_ONLY_RUNS_QUALIFICATION"
+    )
+    assert not state["stops"], "QUALIFY_ONLY_NO_CALIBRATION_OR_FAULT"
+    assert not result["trials"] and not result["attempts"], "QUALIFY_ONLY_NO_TRIALS"
+    assert result["faults"]["denominator"] == 0, (
+        "QUALIFICATION_EXCLUDED_FROM_DENOMINATOR"
+    )
+
+
+async def test_explicit_qualification_limit(qualification_bench):
+    state = qualification_bench
+    state["causes"] = {"0": "no_wake"}
+    result = await state["run"](qualification_limit=2)
+    assert state["plays"] == [("qualification", "0"), ("qualification", "1")], (
+        "EXPLICIT_CANDIDATE_LIMIT"
+    )
+    assert result["qualification"]["eligible"] == 1
+    assert not state["stops"], "NO_FAULT_WITH_INSUFFICIENT_ELIGIBLE_RECORDINGS"
+
+
+async def test_cancel_during_qualification_leaves_nothing_running(run_bench):
+    state = run_bench
+    before = await stop_run(state, "speech", state["playback_started"])
+    assert state["server_stops"] == 0, "QUALIFICATION_CANCEL_BEFORE_ANY_STOP"
+    assert state["server_restores"] == 3, "QUALIFICATION_CANCEL_RESTORE_COUNT"
+    assert_nothing_left_running(state, before)
+    written = json.loads(state["output"].read_text())
+    assert written.get("qualification") is not None, (
+        "QUALIFICATION_PARTIAL_REPORT_ON_CANCEL"
+    )
+
+
+async def test_qualification_preserves_pause_pool_and_distinct_target(
+    qualification_bench,
+):
+    state = qualification_bench
+    state["causes"] = {"1": "fallback_baseline_intent"}
+    result = await state["run"](stages="before,pause")
+    qualification = result["qualification"]
+    assert qualification["target"] == 3, "TARGET_COUNTS_DISTINCT_INITIAL_RECORDINGS"
+    assert qualification["limit"] == 6, "LIMIT_USES_DISTINCT_TARGET"
+    assert [clip for stage, clip in state["plays"] if stage == "qualification"] == [
+        "0",
+        "1",
+        "3",
+        "2",
+        "4",
+        "5",
+    ], "FIRST_USE_THEN_CORPUS_EXTENSION_ORDER"
+    assert [(row["stage"], row["clip_id"]) for row in result["trials"]] == [
+        ("before", "0"),
+        ("before", "2"),
+        ("pause", "3"),
+        ("pause", "5"),
+    ], "PAUSE_TRIALS_USE_ELIGIBLE_PAUSE_RECORDINGS"
+
+
+async def test_qualification_plays_reused_recordings_only_once(qualification_bench):
+    state = qualification_bench
+    result = await state["run"](each=8)
+    assert result["qualification"]["target"] == 6, (
+        "REUSED_SLOTS_NEED_NO_EXTRA_RECORDINGS"
+    )
+    assert result["qualification"]["candidates"] == 6, "NO_REPEAT_QUALIFICATION_PLAY"
+    assert [row["clip_id"] for row in result["trials"][:8]] == [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "0",
+        "1",
+    ], "SIMULATED_MODULO_ORDER_PRESERVED"
+
+
+async def test_qualification_corpus_exhaustion_prevents_faults(qualification_bench):
+    state = qualification_bench
+    state["causes"] = {str(index): "no_wake" for index in range(6)}
+    result = await state["run"](qualification_limit=20)
+    assert result["qualification"]["candidates"] == 6, (
+        "CORPUS_EXHAUSTION_WITHOUT_REPEAT"
+    )
+    assert not state["stops"], "NO_FAULT_WITH_INSUFFICIENT_ELIGIBLE_RECORDINGS"
+
+
+async def test_cancel_during_qualification_baselines_leaves_nothing_running(run_bench):
+    state = run_bench
+    state["trial_finished"] = True
+    before = await stop_run(state, "before", state["baseline_started"])
+    assert state["server_stops"] == 0, "QUALIFICATION_BASELINES_WITHOUT_FAULT"
+    assert_nothing_left_running(state, before)
+
+
+async def test_cancel_during_qualification_idle_wait_leaves_nothing_running(
+    run_bench, monkeypatch
+):
+    state = run_bench
+    module = hardware_module()
+    original_ready = module.Hardware.ready
+    waiting = asyncio.Event()
+
+    async def ready(self, command):
+        if state["selects"]["select.pipeline"] == "Temporary":
+            waiting.set()
+            await asyncio.Event().wait()
+        return await original_ready(self, command)
+
+    monkeypatch.setattr(module.Hardware, "ready", ready)
+    before = await stop_run(state, "before", waiting, timeout=2)
+    assert state["playback"] is None, "QUALIFICATION_IDLE_CANCEL_NEVER_PLAYS"
+    assert state["server_stops"] == 0, "QUALIFICATION_IDLE_CANCEL_NO_STOP"
+    assert state["server_running"] is True, "QUALIFICATION_IDLE_CANCEL_SERVER_HEALTHY"
+    assert [row["id"] for row in state["pipelines"]] == ["source"], (
+        "QUALIFICATION_IDLE_CANCEL_PIPELINE_REMOVED"
+    )
+    assert state["selects"]["select.pipeline"] == "Original", (
+        "QUALIFICATION_IDLE_CANCEL_SELECT_RESTORED"
+    )
+    assert not asyncio.all_tasks() - before, (
+        "QUALIFICATION_IDLE_CANCEL_NO_PENDING_TASKS"
+    )
+
+
+@pytest.mark.parametrize("engine", ["server", "fallback"])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("engine_id", "wrong"),
+        ("clip_id", "wrong"),
+        ("audio_sha256", "wrong"),
+        ("transcript", ""),
+        ("evidence", None),
+    ],
+)
+def test_qualification_requires_linked_baselines(engine, field, value):
+    row = hardware_row()
+    row.update(failures=[], failure_messages=[])
+    for baseline in row["baselines"].values():
+        baseline["evidence"] = trial()
+    row["baselines"][engine][field] = value
+    assert hardware_module().qualification_failure(row) == "unavailable", (
+        "QUALIFICATION_REQUIRES_BASELINE_IDENTITY"
+    )
+    assert row["failure_messages"], "MISSING_BASELINE_HAS_MESSAGE"
+
+
+@pytest.mark.parametrize(
+    "options,error",
+    [
+        (["--qualify-only"], "require --hardware"),
+        (["--qualification-limit", "1"], "require --hardware"),
+        (["--hardware", "--qualification-limit", "0"], "must be positive"),
+        (["--hardware", "--qualification-limit", "-1"], "must be positive"),
+    ],
+)
+def test_qualification_cli_rejects_invalid_options(tmp_path, capsys, options, error):
+    with pytest.raises(SystemExit) as result:
+        fault_runner.main(["--output", str(tmp_path / "result.json"), *options])
+    assert result.value.code == 2, "INVALID_QUALIFICATION_OPTIONS_REFUSED"
+    assert error in capsys.readouterr().err, "QUALIFICATION_OPTION_ERROR_NAMED"
+
+
+def test_qualify_only_cli_checks_qualification_not_fault_gate(
+    tmp_path, monkeypatch, capsys
+):
+    async def run(args):
+        assert args.qualify_only is True, "CLI_PASSES_QUALIFY_ONLY"
+        assert args.qualification_limit == 3, "CLI_PASSES_QUALIFICATION_LIMIT"
+        return {
+            "qualification": {"eligible": 2, "candidates": 3, "sufficient": True},
+            "trials": [],
+        }
+
+    monkeypatch.setattr(fault_runner, "run", run)
+    result = fault_runner.main(
+        [
+            "--hardware",
+            "--qualify-only",
+            "--qualification-limit",
+            "3",
+            "--check",
+            "--satellite",
+            "assist_satellite.test",
+            "--playback-sink",
+            "sink",
+            "--wake-audio",
+            str(tmp_path / "wake.wav"),
+            "--ha-container",
+            "test-ha",
+            "--turn-audio-archive",
+            str(tmp_path / "archive"),
+            "--token-file",
+            str(tmp_path / "auth"),
+            "--pipeline",
+            "test",
+            "--audio-root",
+            str(tmp_path),
+            "--temporary-agent-pipeline",
+            "--output",
+            str(tmp_path / "result.json"),
+        ]
+    )
+    assert result == 0, "QUALIFY_ONLY_CHECKS_SUFFICIENCY"
+    assert "qualification 2/3" in capsys.readouterr().out, (
+        "QUALIFY_ONLY_REPORTS_ELIGIBLE_RATE"
     )
