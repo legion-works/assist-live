@@ -55,11 +55,14 @@ def qualification_failure(row: Row) -> str | None:
     for engine in ("server", "fallback"):
         baseline = baselines.get(engine) or {}
         evidence = baseline.get("evidence") or {}
-        if (
-            baseline.get("engine_id") == engines.get(engine)
-            and baseline.get("engine_id")
+        same_audio = bool(
+            baseline.get("engine_id")
+            and baseline.get("engine_id") == engines.get(engine)
             and baseline.get("clip_id") == row.get("clip_id")
             and baseline.get("audio_sha256") == row.get("audio_sha256")
+        )
+        if (
+            same_audio
             and isinstance(evidence.get("recognized_transcript"), str)
             and evidence["recognized_transcript"].strip()
             and any(
@@ -80,10 +83,7 @@ def qualification_failure(row: Row) -> str | None:
             return engine + "_baseline_intent"
         if not (
             baseline.get("status") == "available"
-            and baseline.get("engine_id") == engines.get(engine)
-            and baseline.get("engine_id")
-            and baseline.get("clip_id") == row.get("clip_id")
-            and baseline.get("audio_sha256") == row.get("audio_sha256")
+            and same_audio
             and isinstance(baseline.get("transcript"), str)
             and baseline["transcript"].strip()
             and evidence

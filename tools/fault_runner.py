@@ -1364,7 +1364,7 @@ async def run(args: argparse.Namespace) -> Row:
         },
     }
     if hardware:
-        result["timer_cancel_calls"] = getattr(hardware, "timer_cancel_calls", [])
+        result["timer_cancel_calls"] = hardware.timer_cancel_calls
     plans: dict[str, list[tuple[Row, bytes]]] = {}
     for stage in args.stages.split(","):
         candidates = [

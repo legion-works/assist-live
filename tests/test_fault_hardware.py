@@ -748,7 +748,7 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
         delay_samples = []
 
         def __init__(self, _):
-            pass
+            self.timer_cancel_calls = []
 
         async def preflight(self, _):
             pass
@@ -1687,7 +1687,7 @@ def qualification_bench(tmp_path, monkeypatch):
         delay_samples = [0.1]
 
         def __init__(self, _):
-            pass
+            self.timer_cancel_calls = []
 
         async def preflight(self, _):
             pass
