@@ -546,7 +546,7 @@ def scrub_cleanup_error(error: Exception, redactions: tuple[str, ...] = ()) -> s
 
 
 def failure_message(error: BaseException) -> str:
-    message = f"{type(error).__name__}: {error}"
+    message = f"{type(error).__name__}: {scrub_cleanup_error(ValueError(str(error)))}"
     return message if len(message) <= 500 else message[:488] + " [truncated]"
 
 

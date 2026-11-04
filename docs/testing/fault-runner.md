@@ -58,11 +58,12 @@ A different engine identity, `clip_id`, or audio SHA-256 also makes the baseline
 
 ## Recorded causes
 
-Each trial with `status: failed` or `status: unavailable` keeps `failure_messages` in the private results.
+Each trial with `status: failed`, `status: unavailable`, or `status: invalid_injection` keeps `failure_messages` in the private results.
 The list uses the string format `<Class>: <message>`. The `failures` list keeps its previous format.
 Each message has a maximum of 500 characters. The class name and the ` [truncated]` marker are part of this limit.
 
 Error text from HA responses has the same limit. Do not publish these private messages.
+The runner uses `scrub_cleanup_error` to remove tokens, URLs, and addresses before it applies the 500-character limit.
 
 This section gives the simulated-mode rules. The hardware section gives its own turn-specific cause rules.
 
@@ -202,6 +203,9 @@ This cause does not select a replacement test run. The runner continues to the n
 The full 6.2 s wake cool-down starts after the satellite becomes `idle`, not while a previous reply continues.
 After the cool-down, the runner checks mute and satellite state again before playback.
 If the satellite is busy again, the runner starts the readiness wait and the full cool-down again.
+
+The limit is three restarts: four cool-down cycles in total (the first cycle plus three).
+If the satellite is busy after the fourth cycle, the test run gives `unavailable` with `unavailable_reason: satellite_not_idle`.
 
 The runner records the initial pipeline select, selects the temporary test-agent pipeline, and checks its state.
 A cancellation-safe `finally` puts back the initial selection and checks it before temporary-pipeline cleanup.

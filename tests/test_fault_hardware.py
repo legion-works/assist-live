@@ -1285,7 +1285,9 @@ async def test_responding_satellite_waits_then_gets_full_cooldown(
     def satellite_state():
         nonlocal polls
         polls += 1
-        if busy_at in ("during-cooldown", "muted-cooldown"):
+        if busy_at == "muted-cooldown":
+            return "idle"
+        if busy_at == "during-cooldown":
             return "responding" if 6.2 <= clock.now < 8.2 else "idle"
         if busy_at == "before-playback" and polls == 1:
             return "idle"
@@ -1381,7 +1383,7 @@ async def test_mute_turns_on_during_idle_wait_raises_immediately(
     assert clock.now == 0.5, "MUTE_CHECKED_AT_EVERY_POLL"
 
 
-@pytest.mark.parametrize("message", ["x", "x" * 700])
+@pytest.mark.parametrize("message", ["x", "x " * 350])
 @pytest.mark.parametrize("scope", ["hardware", "simulated"])
 async def test_trial_keeps_bounded_exception_message(
     tmp_path, monkeypatch, message, scope
@@ -1465,3 +1467,56 @@ async def test_cancel_during_idle_wait_leaves_nothing_running(run_bench, monkeyp
         "IDLE_WAIT_SELECT_RESTORED"
     )
     assert not asyncio.all_tasks() - before, "IDLE_WAIT_NO_PENDING_TASKS"
+
+
+@pytest.mark.parametrize("prefix", ["", "word " * 90])
+def test_failure_message_redacts_token_and_credential_url_before_cap(prefix):
+    token = "synthetic-credential-0123456789"
+    url = "https://synthetic:synthetic@example.invalid/private"
+    message = fault_runner.failure_message(ValueError(prefix + token + " " + url))
+    assert message == "ValueError: " + prefix + "[token] [url]", (
+        "FAILURE_MESSAGE_REDACTED_BEFORE_CAP"
+    )
+    assert token not in message and "synthetic:synthetic" not in message, (
+        "PRIVATE_MESSAGE_HAS_NO_CREDENTIAL"
+    )
+    assert len(message) <= 500, "REDACTED_MESSAGE_STAYS_BOUNDED"
+
+
+async def test_satellite_busy_after_each_cooldown_exhausts_three_restarts(
+    run_bench, monkeypatch, readiness_clock
+):
+    state, clock = run_bench, readiness_clock
+    polls = 0
+    cooldown_polls = 0
+
+    def satellite_state():
+        nonlocal polls, cooldown_polls
+        if state["selects"]["select.pipeline"] != "Temporary":
+            return "idle"
+        polls += 1
+        if polls <= 2 or polls % 2:
+            return "idle"
+        cooldown_polls += 1
+        assert cooldown_polls <= 4, "COOLDOWN_RESTARTS_BOUNDED_AT_THREE"
+        return "responding"
+
+    async def baselines(*_):
+        pass
+
+    state["satellite_state"] = satellite_state
+    monkeypatch.setattr(hardware_module().Hardware, "baselines", baselines)
+    result = await state["run"]("before")
+    row = result["trials"][0]
+    assert cooldown_polls == 4, "THREE_RESTARTS_AFTER_INITIAL_COOLDOWN"
+    assert clock.now == pytest.approx(24.8), "RESTART_LIMIT_HAS_FOUR_COOLDOWNS"
+    assert row.get("unavailable_reason") == "satellite_not_idle", (
+        "COOLDOWN_RESTART_EXHAUSTION_NAMED"
+    )
+    assert row["status"] == "unavailable", "COOLDOWN_RESTART_EXHAUSTION_UNAVAILABLE"
+    assert len(result["attempts"]) == 1, "EXHAUSTED_RESTARTS_DO_NOT_REPLACE_ATTEMPT"
+    assert state["playback"] is None, "RESTART_EXHAUSTION_NEVER_PLAYS"
+    assert state["server_running"], "RESTART_EXHAUSTION_RESTORES_SERVER"
+    assert [row["id"] for row in state["pipelines"]] == ["source"], (
+        "RESTART_EXHAUSTION_REMOVES_TEMPORARY_PIPELINE"
+    )

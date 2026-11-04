@@ -3865,3 +3865,23 @@ Three mutations in isolated scratch copies gave named assertion failures:
 Private results keep bounded `failure_messages` without a change to the `failures` format.
 The `idle` timeout names `satellite_not_idle` in the row.
 No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.
+
+## Hardware readiness coverage correction and restart limit
+
+Date: 2026-11-04 (UTC).
+
+The earlier hardware readiness record overstated coverage of the last mute check before playback.
+The mute test also made the satellite busy after the cool-down. The next `ready()` poll could refuse mute without the last check.
+Thus the earlier `270 passed` did not prove that the last mute check refused playback.
+
+The corrected test keeps the satellite `idle` when mute turns on during the cool-down.
+Deletion of only the last mute check in scratch gives `MUTE_CHECKED_AFTER_COOLDOWN`.
+The earlier record stays unchanged.
+
+On `f579ac8`, the new redaction and restart-limit tests gave `3 failed` before the repair.
+The hardware and fault-runner tests then gave `273 passed`.
+Private messages use the cleanup redaction rules before the 500-character limit.
+The restart limit is three restarts: four cool-down cycles in total (the first cycle plus three).
+Exhaustion gives `unavailable` with `satellite_not_idle`, without playback or a replacement test run.
+
+No live playback, HA call, or container call ran for this correction. Hardware acceptance stays `NOT RUN`.

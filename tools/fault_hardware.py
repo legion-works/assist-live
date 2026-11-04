@@ -649,7 +649,7 @@ class Hardware:
                         "wake_samples": len(self.wake) // 2,
                         "gap_samples": 0,
                     }
-                    while True:
+                    for _ in range(4):
                         await self.ready(command)
                         await asyncio.sleep(6.2)
                         states = {
@@ -659,6 +659,8 @@ class Hardware:
                             raise ValueError("satellite microphone muted or unknown")
                         if states.get(self.satellite, {}).get("state") == "idle":
                             break
+                    else:
+                        raise SatelliteNotIdleError("satellite_not_idle")
                     launched = time.monotonic()
                     row.update(
                         audio_started_monotonic=launched,
