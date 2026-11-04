@@ -202,6 +202,8 @@ def satellite_bench(tmp_path):
             return [{"device_id": "physical", "pipeline_entity": "select.pipeline"}]
         if kind == "assist_pipeline/pipeline/get":
             return {"id": "temporary", "name": "Temporary"}
+        if kind == "conversation/process":
+            return {"response": {"response_type": "action_done"}}
         if kind == "call_service":
             assert fields["domain"] == "select", "MUTE_NEVER_CHANGED"
             states[fields["target"]["entity_id"]] = fields["service_data"]["option"]
@@ -751,6 +753,9 @@ async def test_hardware_invalid_replacement_uses_shared_three_attempt_loop(
         async def preflight(self, _):
             pass
 
+        async def cancel_timers(self, _):
+            pass
+
         @asynccontextmanager
         async def selected(self, *_):
             yield
@@ -965,6 +970,8 @@ def cancel_fakes(tmp_path, monkeypatch):
             return None
         if kind == "assist_pipeline/pipeline/get":
             return {"id": fields["pipeline_id"], "name": "Temporary"}
+        if kind == "conversation/process":
+            return {"response": {"response_type": "action_done"}}
         if kind == "call_service":
             state["selects"][fields["target"]["entity_id"]] = fields["service_data"][
                 "option"
@@ -1683,6 +1690,9 @@ def qualification_bench(tmp_path, monkeypatch):
             pass
 
         async def preflight(self, _):
+            pass
+
+        async def cancel_timers(self, _):
             pass
 
         @asynccontextmanager

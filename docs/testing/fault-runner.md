@@ -191,6 +191,29 @@ Private results contain recording paths, transcripts, and entity IDs. Do not pub
 Hardware mode refuses an `--output` path in the repository with `HARDWARE_OUTPUT_IN_REPOSITORY`, also with `--check`.
 This check resolves symlinks before it compares paths. Keep hardware results in an external directory.
 
+### Timer removal
+
+Hardware mode sends `cancel all timers` to the native HA agent with the satellite device ID.
+It removes timers before the first qualification or calibration play and during cleanup, also after cancellation or an error.
+It also removes timers after each qualification, calibration, and trial test run, before the next `idle` wait.
+The test run first captures its operations, transcripts, and applicable baselines.
+Timer removal does not add events to the operation record or grading of the test run.
+
+Subsequent turn audio can contain timer alarms, which change wake detection, baselines, and `idle` checks.
+Timer removal stops these alarms. It does not prove hardware acceptance.
+
+A missing response or a response without `response_type: action_done` gives `timer_cancel_failed`.
+A failure before the run starts no play. A failure after a test run keeps its status and stops subsequent plays.
+Cleanup tries removal again and does not replace the initial error.
+
+The outer run owns cleanup after preflight validation, also if a readiness check or the initial server restoration gives an error.
+If cleanup removal gives an error, the initial error keeps a `timer_cancel_failed` note.
+The run and fault summary name `timer_cancel_failed`. This failure also makes `--qualify-only` unsatisfactory.
+
+The HA `2026.10.3` [cancel-all handler](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/intent/timers.py#L982-L1001) gives a response, also for 0 timers.
+The [response constructor and serializer](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/helpers/intent.py#L1439-L1555) give `response_type: action_done` for this result.
+The [timer manager](https://github.com/home-assistant/core/blob/2026.10.3/homeassistant/components/intent/timers.py#L338-L351) sends `cancelled` events to the device handler.
+
 ### Recording qualification
 
 Before calibration or the first fault, the runner plays each candidate one time without a fault.

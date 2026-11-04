@@ -3976,3 +3976,44 @@ Two syntax-valid production mutations in scratch copies gave named assertion fai
 
 The tests check external output, repository output, and an external symlink into the repository without hardware operations.
 No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.
+
+## Hardware fault-runner timer removal
+
+Date: 2026-11-04 (UTC).
+
+The hardware runner removes satellite timers before the first play, after each captured test run, and during cleanup.
+Qualification, playback calibration, and trial test runs use this rule.
+Cleanup also tries removal after cancellation or an error and keeps the initial error.
+A removal failure stops subsequent plays with `timer_cancel_failed` without a change to the completed test run's status.
+
+The HA `2026.10.3` sources supply the response contract:
+
+- `homeassistant/components/intent/timers.py:982-1001`: The cancel-all handler gives a response, also for 0 timers.
+- `homeassistant/helpers/intent.py:1439-1456,1523-1555`: The response uses `action_done`. An error uses `error`.
+- `homeassistant/components/intent/timers.py:338-351`: Cancellation sends a `cancelled` event to the device handler.
+
+Before source changes on `ea9333a`, this command gave `20 failed` with synthetic fakes:
+
+```sh
+uv run --locked pytest tests/test_fault_timers.py -q
+```
+
+After the repair and seven more boundary tests, the same command gave `27 passed`.
+The last tests against isolated base modules gave `27 failed`.
+The tests check the native request fields, response failures, call order, cleanup, and the unchanged status of each completed test run.
+A cancel sends a timer `cancelled` event. The operation record and grading do not include this event.
+The actual hardware-trial collector also closes its event capture before timer removal.
+
+Four syntax-valid source mutations in scratch copies gave named assertion failures:
+
+- Skip removal after test runs: `CANCEL_AFTER_EACH_CAPTURE_BEFORE_NEXT_IDLE_AND_CLEANUP`.
+- Send removal before operation capture: `REAL_CANCELLED_EVENT_OUTSIDE_OPERATION_CAPTURE`.
+- Skip cleanup removal: `CLEANUP_CANCEL_ON_ERROR_AND_CANCELLATION`.
+- Move cleanup into the selected-pipeline context: `OUTER_CANCEL_AFTER_READY_ERROR`.
+
+Before the move to outer-run cleanup, four more cases gave failures for readiness and initial server-restoration errors.
+After the move, each error path tries removal one time. The initial error keeps a note if cleanup removal gives an error.
+The success path keeps one cleanup call. The related suites gave `417 passed`.
+
+Each test command used the idle-CPU wrapper. No live playback, HA call, or container call ran.
+Hardware acceptance stays `NOT RUN`.

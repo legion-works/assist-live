@@ -364,6 +364,8 @@ def fault_gate(faults: Row) -> Row:
         }
         if qualification.get("sufficient") is not True:
             summary.update(passed=False, reason="insufficient_eligible_recordings")
+    if faults.get("timer_cancel_failed"):
+        summary.update(passed=False, reason="timer_cancel_failed")
     return summary
 
 
@@ -1325,7 +1327,7 @@ async def run(args: argparse.Namespace) -> Row:
         check=args.check,
         hardware=getattr(args, "hardware", False),
     )
-    from tools.fault_hardware import Hardware
+    from tools.fault_hardware import Hardware, TimerCancelError
 
     hardware = Hardware(args) if getattr(args, "hardware", False) else None
     if hardware is not None:
@@ -1409,6 +1411,7 @@ async def run(args: argparse.Namespace) -> Row:
         result["stop_latency_seconds"] = statistics.median(samples)
         result["stop_margin_seconds"] = (max(samples) - min(samples)) / 2 + 0.02
 
+    primary_error: BaseException | None = None
     try:
         await server.restore()
         if not hardware:
@@ -1418,6 +1421,16 @@ async def run(args: argparse.Namespace) -> Row:
             async def trials(
                 pipeline: str, device_id: str | None = None, sensor: str | None = None
             ) -> None:
+                async def cancel_timers() -> None:
+                    if hardware:
+                        try:
+                            async with control_command(
+                                session, args.token_file
+                            ) as command:
+                                await hardware.cancel_timers(command)
+                        except Exception as error:
+                            raise TimerCancelError("timer_cancel_failed") from error
+
                 try:
                     engines = await baseline_engines(session, args.token_file, pipeline)
                 except (
@@ -1545,6 +1558,7 @@ async def run(args: argparse.Namespace) -> Row:
                             for stage, count in required.items()
                         )
                         write_result(args.output, result)
+                        await cancel_timers()
                         if qualification["sufficient"]:
                             break
                     if not qualification["sufficient"]:
@@ -1610,6 +1624,7 @@ async def run(args: argparse.Namespace) -> Row:
                         )
                         result["playback_calibration_attempts"].append(calibration)
                         write_result(args.output, result)
+                        await cancel_timers()
                         if (calibration.get("correlation") or {}).get("complete"):
                             break
                 for stage in args.stages.split(","):
@@ -1698,6 +1713,7 @@ async def run(args: argparse.Namespace) -> Row:
                                     }
                                 )
                             write_result(args.output, result)
+                            await cancel_timers()
                             print(
                                 f"{row['status'].upper()} {result['scope']} {stage} "
                                 f"{index + 1} attempt {attempt}: "
@@ -1755,13 +1771,46 @@ async def run(args: argparse.Namespace) -> Row:
                     f"NOTE {path}: virtual rows {len(rows)}; device rows unobserved",
                     flush=True,
                 )
+    except TimerCancelError:
+        result["timer_cancel_failed"] = True
+        result["preflight_failed"] = True
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        result["restored_healthy"] = False
+        cancelled = False
         try:
-            await server.restore()
-            result["restored_healthy"] = True
+            if hardware:
+
+                async def cleanup_timers() -> None:
+                    try:
+                        async with aiohttp.ClientSession() as cleanup_session:
+                            async with control_command(
+                                cleanup_session, args.token_file
+                            ) as command:
+                                await hardware.cancel_timers(command)
+                    except Exception:
+                        result["timer_cancel_failed"] = True
+                        result["preflight_failed"] = True
+                        if primary_error is not None:
+                            primary_error.add_note("timer_cancel_failed")
+
+                cleanup = asyncio.create_task(cleanup_timers())
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
         finally:
-            write_result(args.output, result)
+            result["restored_healthy"] = False
+            try:
+                await server.restore()
+                result["restored_healthy"] = True
+            finally:
+                write_result(args.output, result)
+        if cancelled and primary_error is None:
+            raise asyncio.CancelledError
     return result
 
 
@@ -1902,7 +1951,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"sufficient {qualification.get('sufficient', False)}; "
                 "hardware acceptance NOT RUN"
             )
-            return int(qualification.get("sufficient") is not True)
+            return int(
+                qualification.get("sufficient") is not True
+                or result.get("timer_cancel_failed") is True
+            )
         summary = fault_gate(result)
         print(
             f"NOTE {'hardware' if args.hardware else 'simulated'} faults "

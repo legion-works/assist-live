@@ -37,6 +37,10 @@ class SatelliteNotIdleError(TimeoutError):
     pass
 
 
+class TimerCancelError(ValueError):
+    pass
+
+
 def qualification_failure(row: Row) -> str | None:
     invalid = row.get("hardware_invalid_reason")
     if invalid:
@@ -384,6 +388,23 @@ class Hardware:
         self.select_entity, self.mute_entity = selects[0], mutes[0]
         await self.ready(command)
 
+    async def cancel_timers(self, command: Command) -> None:
+        try:
+            result = await command(
+                "conversation/process",
+                text="cancel all timers",
+                language="en",
+                agent_id="conversation.home_assistant",
+                device_id=self.device_id,
+            )
+            response = runner.mapping(runner.mapping(result).get("response"))
+            # HA 2026.10.3 intent/timers.py:982-1001 gives action_done,
+            # also for 0 timers (helpers/intent.py:1456,1523-1531).
+            if response.get("response_type") != "action_done":
+                raise ValueError("missing or unsuccessful timer cancel response")
+        except Exception as error:
+            raise TimerCancelError("timer_cancel_failed") from error
+
     async def ready(self, command: Command) -> Row:
         deadline = time.monotonic() + 30
         try:
@@ -432,6 +453,7 @@ class Hardware:
         result["satellite_pipeline_before"] = previous
         result["satellite_pipeline_restored"] = False
         try:
+            await self.cancel_timers(command)
             await self.select(command, self.pipeline_name)
             yield
         finally:
