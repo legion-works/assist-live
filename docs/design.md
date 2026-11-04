@@ -555,9 +555,11 @@ The runner replaces a trial if the satellite does not find the wake word or if t
 It also replaces a trial with a fault point out of its window, as in the simulated trials.
 It also replaces a trial if it cannot find the recording in the turn audio.
 The correlation uses only the turn audio and the recording, so a fault cannot change its result.
+
 For each `speech` stop, the runner sends the stop request at the middle of the voice window minus the median stop time.
 The margin is half the interquartile range of the measured stop times, plus 20 ms.
 Thus one slow stop does not make the margin larger than the voice windows.
+
 In a hardware trial, the satellite also speaks the reply, and a TTS fallback after the fault is correct behavior.
 The cause check uses only the STT fallback cause in the turn row of the trial.
 The trial is unsatisfactory if the pipeline run records an error.

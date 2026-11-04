@@ -4125,7 +4125,7 @@ Three source mutations in scratch copies gave named assertion failures:
 - Give correlation failures unavailable status without replacement: `HARDWARE_ATTEMPT_CAP_THREE` (`4 failed, 16 passed`).
 - Remove the 20 ms term: `MARGIN_FIXED_20MS` (`4 failed`).
 
-An isolated copy of base `a577344` with the current tests gave `20 failed, 188 passed`.
+An isolated copy of base `a577344` with the current tests gave `32 failed, 188 passed`.
 This includes the two changed calibration expectations. The complete-correlation grading checks were satisfactory on that base.
 All test commands used the idle-CPU wrapper. No service, live HA call, playback, or container operation started.
 Hardware acceptance stays `NOT RUN`.
