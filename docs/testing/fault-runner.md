@@ -196,8 +196,12 @@ The shared baseline path sends the archived turn audio to the server engine and 
 The two baselines must give the corpus intent and device operations before the recording is eligible.
 
 Candidates start with the different recordings in the trial plan, in first-use order across fault points and slots.
-If necessary, subsequent candidates come from the remaining corpus recordings in the same per-stage order.
 Only held-out recordings are candidates. Pause slots use only pause recordings.
+
+For subsequent candidates, the runner first selects fault points with eligible counts below their requirements.
+It skips recordings that can help only fault points with sufficient eligible counts.
+If all fault points have sufficient recordings but the total target is not satisfied, all pools can supply more candidates.
+In each selected pool, corpus order stays unchanged.
 
 The target is the number of different recordings in the initial plan, not the number of trial slots.
 Each fault point must also have its initial number of different recordings.
@@ -209,6 +213,9 @@ A replacement test run uses the same recording. No more eligible recordings are 
 The runner does not qualify more recordings during the trials.
 If the eligible count is not sufficient, the hardware gate is unsatisfactory with `reason: insufficient_eligible_recordings`.
 No calibration or fault starts.
+
+The runner prints `NOT RUN <stage>: insufficient eligible recordings (<eligible>/<needed>)` for each selected fault point.
+The counts belong to that fault point.
 
 The private `qualification` section gives `candidates`, `eligible`, `target`, `required_by_stage`, `limit`, and `sufficient`.
 Its `recordings` list keeps each qualification test run, the two baseline transcripts, `eligible`, and `cause`.

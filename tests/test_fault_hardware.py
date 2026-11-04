@@ -1854,16 +1854,84 @@ async def test_qualification_preserves_pause_pool_and_distinct_target(
         "0",
         "1",
         "3",
-        "2",
-        "4",
         "5",
-    ], "FIRST_USE_THEN_CORPUS_EXTENSION_ORDER"
+    ], "FIRST_USE_THEN_UNMET_STAGE_EXTENSION_ORDER"
     assert [(row["stage"], row["clip_id"]) for row in result["trials"]] == [
         ("before", "0"),
-        ("before", "2"),
+        ("before", "3"),
         ("pause", "3"),
         ("pause", "5"),
     ], "PAUSE_TRIALS_USE_ELIGIBLE_PAUSE_RECORDINGS"
+
+
+async def test_qualification_extension_prioritizes_unmet_pause_stage(
+    qualification_bench,
+):
+    state = qualification_bench
+    for index, label in enumerate(state["labels"]):
+        label["set"] = "commands" if index < 4 else "pause"
+    state["causes"] = {"4": "fallback_baseline_intent"}
+    result = await state["run"](stages="before,speech,pause,after-final", each=1)
+    qualification = result["qualification"]
+    assert qualification["sufficient"] is True, "UNMET_PAUSE_STAGE_NOT_STARVED"
+    assert qualification["limit"] == 4, "UNMET_STAGE_KEEPS_DEFAULT_LIMIT"
+    assert [clip for stage, clip in state["plays"] if stage == "qualification"] == [
+        "0",
+        "4",
+        "5",
+    ], "SATISFIED_STAGE_EXTENSIONS_SKIPPED"
+    assert [(row["stage"], row["clip_id"]) for row in result["trials"]] == [
+        ("before", "0"),
+        ("speech", "0"),
+        ("pause", "5"),
+        ("after-final", "0"),
+    ], "UNMET_STAGE_REPAIR_PRESERVES_TRIAL_ORDER"
+
+
+@pytest.mark.parametrize("commands_eligible", [False, True])
+async def test_qualification_insufficient_prints_each_stage_count(
+    qualification_bench,
+    capsys,
+    commands_eligible,
+):
+    state = qualification_bench
+    state["causes"] = {str(index): "no_wake" for index in range(6)}
+    if commands_eligible:
+        state["causes"].pop("0")
+    result = await state["run"](
+        stages="before,speech,pause,after-final",
+        each=1,
+        qualification_limit=2,
+    )
+    assert not result["qualification"]["sufficient"]
+    count = 1 if commands_eligible else 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"NOT RUN before: insufficient eligible recordings ({count}/1)",
+        f"NOT RUN speech: insufficient eligible recordings ({count}/1)",
+        "NOT RUN pause: insufficient eligible recordings (0/1)",
+        f"NOT RUN after-final: insufficient eligible recordings ({count}/1)",
+    ], "INSUFFICIENT_ELIGIBILITY_PRINTS_STAGE_COUNTS"
+    assert not state["stops"], "NOT_RUN_MESSAGE_STARTS_NO_FAULT"
+
+
+async def test_qualification_extension_keeps_total_distinct_target(
+    qualification_bench,
+):
+    state = qualification_bench
+    state["causes"] = {"0": "no_wake"}
+    result = await state["run"](stages="before,pause", qualify_only=True)
+    qualification = result["qualification"]
+    assert qualification["sufficient"] is True
+    assert qualification["eligible"] == qualification["target"] == 3, (
+        "DISTINCT_TARGET_STILL_REQUIRED_AFTER_STAGE_NEEDS_MET"
+    )
+    assert [clip for stage, clip in state["plays"] if stage == "qualification"] == [
+        "0",
+        "1",
+        "3",
+        "2",
+    ], "DISTINCT_TARGET_USES_CORPUS_ORDER"
+    assert not state["stops"], "DISTINCT_TARGET_QUALIFY_ONLY_NO_STOP"
 
 
 async def test_qualification_plays_reused_recordings_only_once(qualification_bench):

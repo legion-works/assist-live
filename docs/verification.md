@@ -3916,3 +3916,27 @@ Three syntax-valid production mutations in scratch copies gave named assertion f
 
 No live playback, HA call, or container call ran for this change. Hardware acceptance stays `NOT RUN`.
 The remaining live measurement is the eligible count and each cause from an approved `--qualify-only` run.
+
+## Qualification extension and NOT RUN output
+
+Date: 2026-11-04 (UTC).
+
+Extension candidates first come from fault points with eligible counts below their requirements.
+More different recordings can be necessary for the total target after each fault point has sufficient recordings.
+In that case, all pools can supply more candidates. Corpus order stays unchanged in each selected pool.
+The default limit stays at two times the initial target.
+
+On `993055e`, the new extension and console checks gave `3 failed, 131 deselected` before the source changes.
+The default-stage case had an ineligible pause recording and command recordings before the next eligible pause recording.
+The initial runner spent its limit on command recordings and gave an unsatisfactory result.
+The repaired runner selects the eligible pause recording and uses three plays, below its limit of four.
+
+The hardware and fault-runner tests then gave `314 passed` with fakes.
+The mixed-stage test uses four qualification plays, not six. Only the pause pool supplies extension candidates in this case.
+The tests also check the total target after each fault point has sufficient recordings.
+Each unsatisfactory qualification prints `NOT RUN <stage>: insufficient eligible recordings (<eligible>/<needed>)` for each selected fault point.
+The counts belong to that fault point.
+
+A syntax-valid scratch mutation used the initial extension order.
+The default-stage regression test gave `AssertionError: UNMET_PAUSE_STAGE_NOT_STARVED`.
+No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.

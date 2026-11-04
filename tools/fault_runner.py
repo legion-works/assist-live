@@ -1432,10 +1432,7 @@ async def run(args: argparse.Namespace) -> Row:
                         ]
                         for stage in plans
                     }
-                    candidates = dict(originals)
-                    for pool in pools.values():
-                        for label in pool:
-                            candidates.setdefault(label["id"], label)
+                    pending = list(originals.values())
                     limit = getattr(args, "qualification_limit", None)
                     if limit is None:
                         limit = 2 * target
@@ -1450,7 +1447,30 @@ async def run(args: argparse.Namespace) -> Row:
                     }
                     result["qualification"] = qualification
                     eligible: dict[str, tuple[Row, bytes]] = {}
-                    for label in list(candidates.values())[:limit]:
+                    played: set[str] = set()
+                    while qualification["candidates"] < limit:
+                        if pending:
+                            label = pending.pop(0)
+                        else:
+                            unmet = [
+                                stage
+                                for stage, pool in pools.items()
+                                if sum(label["id"] in eligible for label in pool)
+                                < required[stage]
+                            ]
+                            candidate = next(
+                                (
+                                    label
+                                    for stage in unmet or pools
+                                    for label in pools[stage]
+                                    if label["id"] not in played
+                                ),
+                                None,
+                            )
+                            if candidate is None:
+                                break
+                            label = candidate
+                        played.add(label["id"])
                         qualification["candidates"] += 1
                         try:
                             for stage, pool in pools.items():
@@ -1512,6 +1532,14 @@ async def run(args: argparse.Namespace) -> Row:
                                 "status": "NOT RUN",
                                 "reason": "insufficient_eligible_recordings",
                             }
+                            count = sum(
+                                label["id"] in eligible for label in pools[stage]
+                            )
+                            print(
+                                f"NOT RUN {stage}: insufficient eligible recordings "
+                                f"({count}/{required[stage]})",
+                                flush=True,
+                            )
                         return
                     if getattr(args, "qualify_only", False):
                         return
