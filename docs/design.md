@@ -563,7 +563,7 @@ A recording is eligible only if the two baselines give the intent and the device
 The fault trials use only eligible recordings, with the same order rules as the simulated trials.
 
 The qualification plays are not trials, and the counted results do not include them.
-The report shows the candidate count, the eligible count, and the cause for each recording that is not eligible.
+The report shows the candidate count, the eligible count, and the number of recordings for each cause. The private results give the cause for each recording that is not eligible.
 If there are not sufficient eligible recordings, the hardware gate is unsatisfactory.
 
 Reports show replies of 60 characters or less in a different group from longer replies.

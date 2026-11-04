@@ -720,6 +720,90 @@ def test_p1_cli_uses_the_safe_gate_in_the_acceptance_command(
     assert "FAIL P1 latency" in capsys.readouterr().out
 
 
+def test_public_report_cli_shows_qualification_counts_without_private_records(
+    tmp_path, acceptance, capsys
+):
+    import hashlib
+
+    from tools.correct_transcripts import write_data
+    from tools.report import main
+
+    labels, rows, baseline, faults = copy.deepcopy(acceptance)
+    faults["qualification"] = {
+        "candidates": 4,
+        "eligible": 1,
+        "target": 2,
+        "sufficient": False,
+        "recordings": [
+            {
+                "clip_id": "private-recording-sentinel",
+                "recognized_transcript": "private transcript sentinel",
+                "turn_audio": "private/audio.wav",
+                "failure_messages": ["ValueError: private failure sentinel"],
+                "eligible": cause is None,
+                "cause": cause,
+            }
+            for cause in [None, "no_wake", "unavailable", "unavailable"]
+        ],
+    }
+    write_data(tmp_path / "correct_transcripts.jsonl", transcript_references(labels))
+    paths = {
+        key: tmp_path / (key + ".json")
+        for key in (
+            "labels",
+            "runs",
+            "baseline",
+            "faults",
+            "native",
+            "calibration",
+            "output",
+        )
+    }
+    paths["labels"].write_text("".join(json.dumps(label) + "\n" for label in labels))
+    (tmp_path / "corpus.sha256").write_text(
+        hashlib.sha256(paths["labels"].read_bytes()).hexdigest()
+        + "  labels\n"
+        + "".join(
+            label["audio_sha256"] + "  audio/" + label["audio_path"] + "\n"
+            for label in labels
+        )
+    )
+    for key, value in (
+        ("baseline", baseline),
+        ("faults", faults),
+        ("native", observed_rows()),
+        ("calibration", calibration()),
+    ):
+        paths[key].write_text(json.dumps(value))
+    paths["runs"].write_text("".join(json.dumps(row) + "\n" for row in rows))
+    markdown = tmp_path / "report.md"
+    args = ["p1", "--split", "held_out", "--check", "--markdown", str(markdown)]
+    for key, path in paths.items():
+        args.extend(["--" + key, str(path)])
+    assert main(args) == 1
+    emitted = paths["output"].read_text()
+    assert json.loads(emitted)["faults"].get("qualification") == {
+        "candidates": 4,
+        "eligible": 1,
+        "needed": 2,
+        "causes": {"no_wake": 1, "unavailable": 2},
+    }, "PUBLIC_QUALIFICATION_COUNTS"
+    text = capsys.readouterr().out
+    assert "qualification candidates=4 eligible=1 needed=2" in text
+    assert '"no_wake": 1' in text and '"unavailable": 2' in text
+    assert "Qualification: candidates=4 eligible=1 needed=2" in markdown.read_text()
+    for private in (
+        "private-recording-sentinel",
+        "private transcript sentinel",
+        "private/audio.wav",
+        "private failure sentinel",
+        "failure_messages",
+    ):
+        assert private not in emitted + text + markdown.read_text(), (
+            "NO_PRIVATE_FAULT_DATA"
+        )
+
+
 @pytest.mark.parametrize(
     "field,value,error",
     [

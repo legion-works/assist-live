@@ -842,6 +842,41 @@ def test_simulated_trials_never_satisfy_hardware_fault_gate():
     result = fault_gate({"trials": trials})
     assert result["count"] == 40
     assert not result["passed"]
+    assert "qualification" not in result
+
+
+@pytest.mark.parametrize("sufficient", [False, True])
+def test_fault_gate_qualification_contains_only_counts(sufficient):
+    from tools.fault_runner import fault_gate
+
+    qualification = {
+        "candidates": 5,
+        "eligible": 2,
+        "target": 3,
+        "sufficient": sufficient,
+        "recordings": [
+            {
+                "clip_id": f"private-recording-{i}",
+                "recognized_transcript": "private transcript sentinel",
+                "turn_audio": "private/audio.wav",
+                "failure_messages": ["ValueError: private failure sentinel"],
+                "eligible": cause is None,
+                "cause": cause,
+            }
+            for i, cause in enumerate(
+                [None, "unavailable", "server_baseline_intent", "unavailable", None]
+            )
+        ],
+    }
+    result = fault_gate({"qualification": qualification})
+    assert result.get("qualification") == {
+        "candidates": 5,
+        "eligible": 2,
+        "needed": 3,
+        "causes": {"unavailable": 2, "server_baseline_intent": 1},
+    }, "QUALIFICATION_COUNTS_ONLY"
+    if not sufficient:
+        assert result["reason"] == "insufficient_eligible_recordings"
 
 
 def test_native_cli_delegates_the_unchanged_matrix(tmp_path, monkeypatch):

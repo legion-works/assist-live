@@ -188,6 +188,9 @@ SHA-256 checks compare the source before and after the copy with the archived by
 The source stays in HA, and an unsatisfactory copy stays in the archive.
 Private results contain recording paths, transcripts, and entity IDs. Do not publish them.
 
+Hardware mode refuses an `--output` path in the repository with `HARDWARE_OUTPUT_IN_REPOSITORY`, also with `--check`.
+This check resolves symlinks before it compares paths. Keep hardware results in an external directory.
+
 ### Recording qualification
 
 Before calibration or the first fault, the runner plays each candidate one time without a fault.
@@ -222,6 +225,11 @@ Its `recordings` list keeps each qualification test run, the two baseline transc
 Causes include `no_wake`, `early_end`, `server_baseline_intent`, `fallback_baseline_intent`, `operations`, and `unavailable`.
 Unavailable results keep private `failure_messages`, with the same message-length limit as trials.
 The `trials` and `attempts` lists and trial denominators do not include qualification plays.
+
+The public fault gate includes `qualification` with `candidates`, `eligible`, `needed`, and `causes` counts only.
+The `needed` count is the private `target` count. The `causes` mapping counts recordings for each cause, without eligible recordings.
+The JSON report, Markdown report, and fault-gate output show these counts, without recording IDs, transcripts, audio paths, or messages.
+Simulated results without qualification keep their previous format.
 
 Add `--qualify-only` to the hardware command to measure eligibility without calibration or faults.
 This flag also plays audio. Get bench approval for this flag.

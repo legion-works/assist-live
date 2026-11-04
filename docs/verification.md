@@ -3949,3 +3949,30 @@ A work branch had these commits before a rebase. The `main` branch does not have
 In `main`, commit `04dddb4` has the same code as `f579ac8`. Only `docs/design.md` is different.
 In `main`, commit `b00be87` has the qualification change of `993055e`, and its parent is `6963299`.
 The tests in the three records ran on the work-branch commits.
+
+## Public qualification counts and private hardware results
+
+Date: 2026-11-04 (UTC).
+
+The public fault summary gives `candidates`, `eligible`, `needed`, and counts for each cause in `qualification`.
+The report writes these counts to JSON, Markdown, and the fault-gate output without private recording records.
+Hardware mode refuses repository output with `HARDWARE_OUTPUT_IN_REPOSITORY`, also for symlink targets and checked output.
+The simulated-output and native-matrix rules stay unchanged.
+
+On `cb93a67`, the selected tests gave `8 failed, 10 passed, 419 deselected` before the source changes.
+The failures named the missing public counts, the hardware output rule, and refusal before hardware preflight.
+After the repair, the related suites gave `437 passed` with this command:
+
+```sh
+uv run --locked pytest tests/test_fault_runner.py tests/test_fault_hardware.py tests/test_report.py -q
+```
+
+The full suite gave `1909 passed` with HA `2026.10.4` and HA `2026.10.1`.
+
+Two syntax-valid production mutations in scratch copies gave named assertion failures:
+
+- Drop the qualification counts: `QUALIFICATION_COUNTS_ONLY` (`2 failed, 178 deselected`).
+- Accept hardware output in the repository: `HARDWARE_REPOSITORY_OUTPUT_REFUSED` (`4 failed, 2 passed, 144 deselected`).
+
+The tests check external output, repository output, and an external symlink into the repository without hardware operations.
+No live playback, HA call, or container call ran for this repair. Hardware acceptance stays `NOT RUN`.

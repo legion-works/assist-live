@@ -785,6 +785,20 @@ def markdown(report: Row) -> str:
     lines.extend(["", "| Split | Unintelligible recordings |", "|---|---:|"])
     for split, count in report["unintelligible"].items():
         lines.append(f"| {split} | {count} |")
+    qualification = report.get("faults", {}).get("qualification")
+    if qualification is not None:
+        lines.extend(
+            [
+                "",
+                "## Fault qualification",
+                "",
+                f"Qualification: candidates={qualification['candidates']} "
+                f"eligible={qualification['eligible']} "
+                f"needed={qualification['needed']}",
+                "",
+                "Causes: " + json.dumps(qualification["causes"], sort_keys=True),
+            ]
+        )
     lines.extend(
         [
             "",
@@ -852,6 +866,15 @@ def main(argv: list[str] | None = None) -> int:
         }
         for gate, passed in report["gates"].items():
             print(f"{'PASS' if passed else 'FAIL'} {names.get(gate, gate)}")
+            if gate == "faults" and "qualification" in report["faults"]:
+                qualification = report["faults"]["qualification"]
+                print(
+                    "NOTE faults qualification "
+                    f"candidates={qualification['candidates']} "
+                    f"eligible={qualification['eligible']} "
+                    f"needed={qualification['needed']}; causes="
+                    + json.dumps(qualification["causes"], sort_keys=True)
+                )
         print(f"{'PASS' if report['accepted'] else 'FAIL'} {args.phase.upper()}")
         return int(args.check and not report["accepted"])
     except (OSError, ValueError, TypeError, KeyError) as error:

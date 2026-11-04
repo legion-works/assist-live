@@ -75,6 +75,103 @@ def test_hardware_cli_requires_every_explicit_argument(missing, tmp_path, capsys
     assert "hardware requires" in capsys.readouterr().err, "EXPLICIT_ARGUMENT_ERROR"
 
 
+@pytest.mark.parametrize("location", ["inside", "outside", "symlink"])
+@pytest.mark.parametrize("check", [False, True])
+def test_hardware_cli_keeps_output_outside_repository(
+    tmp_path, monkeypatch, capsys, location, check
+):
+    root = tmp_path / "repository"
+    reports = root / "docs/reports"
+    reports.mkdir(parents=True)
+    link = tmp_path / "linked-reports"
+    link.symlink_to(reports, target_is_directory=True)
+    output = {
+        "inside": reports / "trial.json",
+        "outside": tmp_path / "trial.json",
+        "symlink": link / "trial.json",
+    }[location]
+    monkeypatch.setattr(fault_runner, "ROOT", root)
+    calls = []
+
+    async def run(args):
+        calls.append(args.output)
+        return {"qualification": {"sufficient": True, "eligible": 1, "candidates": 1}}
+
+    monkeypatch.setattr(fault_runner, "run", run)
+    argv = [
+        "--hardware",
+        "--qualify-only",
+        "--satellite",
+        "assist_satellite.test",
+        "--playback-sink",
+        "test-sink",
+        "--wake-audio",
+        str(tmp_path / "wake.wav"),
+        "--ha-container",
+        "test-ha",
+        "--turn-audio-archive",
+        str(tmp_path / "archive"),
+        "--token-file",
+        "unused",
+        "--pipeline",
+        "test",
+        "--audio-root",
+        str(tmp_path),
+        "--temporary-agent-pipeline",
+        "--output",
+        str(output),
+        *(["--check"] if check else []),
+    ]
+    status = fault_runner.main(argv)
+    text = capsys.readouterr().out
+    if location == "outside":
+        assert status == 0, "EXTERNAL_HARDWARE_OUTPUT_ALLOWED"
+        assert calls == [output]
+    else:
+        assert status == 1, "HARDWARE_REPOSITORY_OUTPUT_REFUSED"
+        assert "HARDWARE_OUTPUT_IN_REPOSITORY" in text, "NAMED_HARDWARE_OUTPUT_ERROR"
+        assert calls == [], "HARDWARE_OUTPUT_REFUSED_BEFORE_RUN"
+    assert not output.exists()
+
+
+async def test_hardware_run_refuses_repository_output_before_preflight(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(fault_runner, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        hardware_module(),
+        "Hardware",
+        Mock(side_effect=AssertionError("HARDWARE_OUTPUT_REFUSED_BEFORE_PREFLIGHT")),
+    )
+    args = Namespace(
+        output=tmp_path / "docs/reports/trial.json",
+        simulate=False,
+        hardware=True,
+        check=True,
+    )
+    with pytest.raises(ValueError, match="HARDWARE_OUTPUT_IN_REPOSITORY"):
+        await fault_runner.run(args)
+
+
+@pytest.mark.parametrize("location", ["inside", "outside", "symlink"])
+def test_simulated_output_rule_stays_external(tmp_path, monkeypatch, location):
+    root = tmp_path / "repository"
+    root.mkdir()
+    link = tmp_path / "linked-repository"
+    link.symlink_to(root, target_is_directory=True)
+    monkeypatch.setattr(fault_runner, "ROOT", root)
+    output = {
+        "inside": root / "trial.json",
+        "outside": tmp_path / "trial.json",
+        "symlink": link / "trial.json",
+    }[location]
+    if location == "outside":
+        fault_runner.validate_output(output, simulated=True, check=True)
+    else:
+        with pytest.raises(ValueError, match="SIMULATED_OUTPUT_IN_REPOSITORY"):
+            fault_runner.validate_output(output, simulated=True, check=True)
+
+
 @pytest.fixture
 def satellite_bench(tmp_path):
     calls = []

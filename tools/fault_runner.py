@@ -349,8 +349,21 @@ def fault_gate(faults: Row) -> Row:
         and not any(trial.get("scope") == "simulated" for trial in trials),
     }
     qualification = faults.get("qualification")
-    if qualification is not None and qualification.get("sufficient") is not True:
-        summary.update(passed=False, reason="insufficient_eligible_recordings")
+    if qualification is not None:
+        summary["qualification"] = {
+            "candidates": qualification.get("candidates", 0),
+            "eligible": qualification.get("eligible", 0),
+            "needed": qualification.get("target", 0),
+            "causes": dict(
+                Counter(
+                    cause
+                    for row in qualification.get("recordings", [])
+                    if (cause := row.get("cause")) is not None
+                )
+            ),
+        }
+        if qualification.get("sufficient") is not True:
+            summary.update(passed=False, reason="insufficient_eligible_recordings")
     return summary
 
 
@@ -1287,12 +1300,16 @@ async def temporary_pipeline(
             raise asyncio.CancelledError
 
 
-def validate_output(path: Path, *, simulated: bool, check: bool) -> None:
+def validate_output(
+    path: Path, *, simulated: bool, check: bool, hardware: bool = False
+) -> None:
     resolved = path.resolve()
     if not resolved.is_relative_to(ROOT):
         return
     if simulated:
         raise ValueError("SIMULATED_OUTPUT_IN_REPOSITORY")
+    if hardware:
+        raise ValueError("HARDWARE_OUTPUT_IN_REPOSITORY")
     if (
         not check
         or resolved.parent != ROOT / "docs/reports"
@@ -1302,7 +1319,12 @@ def validate_output(path: Path, *, simulated: bool, check: bool) -> None:
 
 
 async def run(args: argparse.Namespace) -> Row:
-    validate_output(args.output, simulated=args.simulate, check=args.check)
+    validate_output(
+        args.output,
+        simulated=args.simulate,
+        check=args.check,
+        hardware=getattr(args, "hardware", False),
+    )
     from tools.fault_hardware import Hardware
 
     hardware = Hardware(args) if getattr(args, "hardware", False) else None
@@ -1834,7 +1856,12 @@ def main(argv: list[str] | None = None) -> int:
             "do not combine with --simulate or --native-matrix"
         )
     try:
-        validate_output(args.output, simulated=args.simulate, check=args.check)
+        validate_output(
+            args.output,
+            simulated=args.simulate,
+            check=args.check,
+            hardware=args.hardware,
+        )
     except ValueError as error:
         print("FAIL " + str(error))
         return 1
