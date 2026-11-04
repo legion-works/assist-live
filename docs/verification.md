@@ -4017,3 +4017,41 @@ The success path keeps one cleanup call. The related suites gave `417 passed`.
 
 Each test command used the idle-CPU wrapper. No live playback, HA call, or container call ran.
 Hardware acceptance stays `NOT RUN`.
+
+## Test-agent timers use the virtual receiver
+
+Date: 2026-11-04 (UTC).
+
+The test agent gives the native agent its virtual timer device and `satellite_id=None`.
+The record and the device-operation bridge keep the input device.
+The command's area context comes from the virtual device's area, not the input satellite's area.
+The initial satellite pipeline receives the agent reply for TTS.
+
+The installed HA `2026.10.4` package and the `task ha-minimum` environment for HA `2026.10.1` have the same source rules:
+
+- `components/conversation/default_agent.py:606-608,641-642` resolves the device and gives it to the intent handler.
+- `components/conversation/default_agent.py:1419-1424` replaces the supplied device with the satellite's device from the entity registry when a satellite ID is available.
+- `components/conversation/default_agent.py:1426-1429` gets the area from the selected device when the satellite supplies no area.
+- `components/intent/timers.py:894-902` starts the timer with the intent's device ID.
+- `components/intent/timers.py:310-311` sends a started callback only for timers without `conversation_command`.
+
+On `ea9333a`, the new timer-routing tests gave `4 failed, 4 passed` before the source change.
+The four satellite cases gave `AssertionError: native timer device` for usual timers and scheduled commands in the two response groups.
+The virtual-device cases gave `4 passed`.
+After the repair, this command gave `57 passed` in the HA test harness:
+
+```sh
+uv run --locked pytest tests/test_virtual_timer_routing.py tests/test_test_environment.py tests/test_native_functions.py -q
+```
+
+The tests use a different satellite timer handler and the actual virtual receiver callback.
+They check the timer interval, operation record, input device, voice-turn connection, virtual area, and the two response groups.
+Scheduled commands keep their `timer.scheduled` record without a native timer callback.
+The pipeline tests send the two replies to fake TTS through the input satellite's pipeline.
+
+Two syntax-valid agent mutations in scratch copies gave named assertion failures:
+
+- Forward the input device: `native timer device` (`4 failed, 4 passed, 2 deselected`).
+- Drop the operation record: `timer operation recorded` (`8 failed, 2 deselected`).
+
+No live HA call, playback, or container operation ran for this repair. Hardware acceptance stays `NOT RUN`.

@@ -47,9 +47,16 @@ Do not use this configuration on a different HA instance.
 
 `conversation.assist_live_short` and `conversation.assist_live_long` receive usual HA conversation input.
 Each agent delegates recognition and execution to the standard HA agent through `conversation.async_converse`.
-It gives HA the initial context, device, satellite, and language.
+It gives HA the initial context and language, but uses the virtual timer device and no satellite ID.
+
+Thus native timers start on the virtual receiver, not on a satellite, and the receiver records their operations.
+HA uses a satellite ID from the entity registry to replace the supplied device, so the delegated call must use no satellite ID.
+The command's area context comes from the virtual device's area, not the input satellite's area.
 It does not interpret sentences or change HA intent handlers.
 Tests check hidden entities, conflicting areas, public service-call events, and commands with time intervals.
+
+The input satellite speaks the agent reply through its initial pipeline.
+This device change applies only to the delegated native conversation call.
 
 The short response has 38 characters and does not stream text.
 The long response has more than 60 characters and uses the HA chat-log delta interface.
@@ -102,6 +109,8 @@ The text-only run does not invent an assist-live turn identifier.
 For device replay, the test agent finds the public latency sensor through the HA entity registry for the input device.
 The sensor shows `turn_id` and `turn_type` when the turn opens.
 The agent connects that voice turn to the conversation context ID and device ID.
+The record's `device_id` and the sensor lookup keep the input device, not the virtual timer device.
+
 A missing sensor, ambiguous sensor, missing turn ID, or non-voice turn gives no connection.
 The device recorder refuses such a record.
 

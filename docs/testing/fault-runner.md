@@ -163,6 +163,7 @@ Ten satisfactory counted trials for each of the four fault points are necessary 
 The [design](../design.md#phases-and-gates) gives the hardware fault criterion.
 Get approval before playback or a server stop. Use only the isolated bench and approved test audio.
 Each argument below is necessary. Do not use hardware mode with `--simulate` or `--native-matrix`.
+Hardware timer commands through the test agent start timers on the virtual receiver, not on the satellite.
 
 ```sh
 uv run --locked python tools/fault_runner.py --hardware \

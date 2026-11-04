@@ -126,8 +126,8 @@ class TestAgent(conversation.ConversationEntity):
                 user_input.context,
                 language=user_input.language,
                 agent_id=conversation.HOME_ASSISTANT_AGENT,
-                device_id=user_input.device_id,
-                satellite_id=user_input.satellite_id,
+                device_id=self._virtual_device_id,
+                satellite_id=None,
             )
             record["completed"] = True
         finally:
