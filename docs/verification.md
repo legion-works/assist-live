@@ -4129,3 +4129,52 @@ An isolated copy of base `a577344` with the current tests gave `32 failed, 188 p
 This includes the two changed calibration expectations. The complete-correlation grading checks were satisfactory on that base.
 All test commands used the idle-CPU wrapper. No service, live HA call, playback, or container operation started.
 Hardware acceptance stays `NOT RUN`.
+
+## Hardware fault failure names
+
+Date: 2026-11-06 (UTC).
+
+Simulated and hardware trials use one helper for default failure codes and messages.
+An unavailable hardware baseline gives `BASELINE_UNAVAILABLE` when the row has no other named cause.
+A transcript or operations mismatch without a named cause gives `INCORRECT_TRANSCRIPT_OR_OPERATIONS`.
+The messages keep these two codes. They do not use the generic message or a token marker.
+
+Previous hardware causes and the simulated baseline code stay unchanged.
+Status, acceptance, replacement, and trial counts stay unchanged.
+
+Before the repair, the hardware regression gave `2 failed, 3 passed`.
+The failures named the missing transcript-mismatch and baseline codes.
+After the repair, the fault suites gave `484 passed`:
+
+```sh
+uv run --locked pytest tests/test_fault_hardware.py tests/test_fault_runner.py tests/test_fault_attempts.py tests/test_fault_baselines.py tests/test_fault_calibration.py tests/test_fault_cleanup.py tests/test_fault_timers.py -q
+```
+
+The tests also check previous correlation, invalid-injection, and turn-link causes, with status and count assertions.
+A scratch mutation removed the shared helper from the hardware result path.
+The named test `test_hardware_run_names_failure_without_changing_existing_causes` gave `2 failed, 3 passed`.
+The two failures used the assertion `HARDWARE_FAILURE_NAMES_EXACT_CAUSE`.
+
+`task check` and `task ha-minimum` each gave `2028 passed`, with exit code 0.
+Ruff, mypy, the append-only check, and the privacy checks were satisfactory.
+All commands used the idle-CPU wrapper. Hardware acceptance stays `NOT RUN`.
+
+## Hardware reason-field failure names
+
+Date: 2026-11-06 (UTC).
+
+The first failure-name tests put correlation and invalid-injection causes in `failures`.
+Production keeps these causes in `hardware_invalid_reason`, with `failures` empty.
+The shared helper checks `failures`, `hardware_invalid_reason`, and `unavailable_reason` before it adds a default code.
+Previous cause fields, messages, console lines, and exhausted-slot rows keep their previous causes.
+Acceptance, status, replacement, and count rules stay unchanged.
+
+Before this repair, the corrected hardware regression gave `5 failed, 4 passed`.
+The four invalid-injection causes and the unavailable cause found the incorrect default codes.
+After the repair, the same regression gave `9 passed`.
+The tests check console lines and the replacement row after `MAX_SLOT_ATTEMPTS`, through the production run loop.
+The preservation tests use `PLAYBACK_FAILED` in `failures`, not an invented turn-link code.
+
+A scratch mutation that removed the cause-field checks gave `5 failed, 4 passed` in the named regression.
+`task check` and `task ha-minimum` each gave `2031 passed`, with exit code 0.
+Hardware acceptance stays `NOT RUN`.

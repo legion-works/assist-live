@@ -1321,6 +1321,110 @@ def qualified_run_bench(run_bench, monkeypatch):
     return run_bench
 
 
+@pytest.mark.parametrize(
+    "cause,status,attempts",
+    [
+        ("INCORRECT_TRANSCRIPT_OR_OPERATIONS", "failed", 1),
+        ("BASELINE_UNAVAILABLE", "unavailable", 1),
+        ("no_wake", "invalid_injection", 3),
+        ("early_end", "invalid_injection", 3),
+        ("correlation_unavailable", "invalid_injection", 3),
+        ("fault_outside_window", "invalid_injection", 3),
+        ("satellite_not_idle", "unavailable", 1),
+        ("PLAYBACK_FAILED", "failed", 1),
+        ("PLAYBACK_FAILED", "unavailable", 1),
+    ],
+)
+async def test_hardware_run_names_failure_without_changing_existing_causes(
+    run_bench, monkeypatch, capsys, cause, status, attempts
+):
+    module = hardware_module()
+    reason_field = (
+        "hardware_invalid_reason"
+        if status == "invalid_injection"
+        else "unavailable_reason"
+        if cause == "satellite_not_idle"
+        else None
+    )
+    expected_failures = [] if reason_field else [cause]
+
+    async def hardware_trial(self, *args, **kwargs):
+        row = hardware_row()
+        row.update(stage=args[5], failures=[], failure_messages=[])
+        if args[5] == "qualification":
+            for baseline in row["baselines"].values():
+                baseline["evidence"] = hardware_row()
+            return row
+        from tests.test_fault_runner import set_reasons
+
+        set_reasons(row, "after-final")
+        row["recognized_transcript"] = "1 hour 3 minutes"
+        row["baselines"]["server"]["transcript"] = "1 hour 30 minutes"
+        if status == "unavailable":
+            row["baselines"]["server"]["status"] = "unavailable"
+        if cause == "correlation_unavailable":
+            row["correlation"]["complete"] = False
+        elif reason_field:
+            row[reason_field] = cause
+        elif cause == "PLAYBACK_FAILED":
+            row["failures"] = [cause]
+        return row
+
+    async def baselines(self, *args):
+        pass
+
+    async def engines(*args):
+        return trial()["stt_engines"]
+
+    monkeypatch.setattr(module.Hardware, "trial", hardware_trial)
+    monkeypatch.setattr(module.Hardware, "baselines", baselines)
+    monkeypatch.setattr(fault_runner, "baseline_engines", engines)
+    result = await run_bench["run"]("after-final")
+    assert len(result["attempts"]) == attempts
+    for row in result["attempts"]:
+        assert row["status"] == status
+        assert row["acceptable"] is False
+        assert row["failures"] == expected_failures, (
+            "HARDWARE_FAILURE_NAMES_EXACT_CAUSE"
+        )
+        if reason_field:
+            assert row[reason_field] == cause, "HARDWARE_REASON_FIELD_RETAINED"
+        expected_message = (
+            "ValueError: [token]"
+            if cause in ("correlation_unavailable", "fault_outside_window")
+            else f"ValueError: {cause}"
+        )
+        assert row["failure_messages"] == [expected_message]
+        assert "trial evidence or acceptance unavailable" not in str(
+            row["failure_messages"]
+        )
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        f"{status.upper()} hardware after-final 1 attempt {attempt}: "
+        + ",".join(expected_failures)
+        for attempt in range(1, attempts + 1)
+    ], "HARDWARE_CONSOLE_CAUSES_UNCHANGED"
+    if status == "invalid_injection":
+        replacement = result["trials"][0]
+        assert replacement["status"] == "unavailable"
+        assert replacement["attempt"] == fault_runner.MAX_SLOT_ATTEMPTS
+        assert replacement[reason_field] == cause
+        assert replacement["failures"] == ["FAULT_ATTEMPTS_EXHAUSTED"], (
+            "HARDWARE_EXHAUSTION_HAS_NO_TRANSCRIPT_CAUSE"
+        )
+        assert (
+            replacement["failure_messages"]
+            == result["attempts"][-1]["failure_messages"]
+        )
+    assert result["faults"]["stages"]["after-final"] == {
+        "counted_trials": int(status == "failed"),
+        "passed": 0,
+        "failed": int(status == "failed"),
+        "unavailable": int(status != "failed"),
+        "invalid_attempts": attempts if status == "invalid_injection" else 0,
+    }
+
+
 async def stop_run(state, stage, wait_for, timeout=15):
     """Run one hardware fault run and cancel it when the named point is reached."""
     before = asyncio.all_tasks()

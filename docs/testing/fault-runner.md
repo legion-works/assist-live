@@ -65,6 +65,15 @@ Each message has a maximum of 500 characters. The class name and the ` [truncate
 Error text from HA responses has the same limit. Do not publish these private messages.
 The runner uses `scrub_cleanup_error` to remove tokens, URLs, and addresses before it applies the 500-character limit.
 
+Simulated and hardware trials use one helper to name failures before they complete the messages.
+An unavailable hardware row without a named cause gets `BASELINE_UNAVAILABLE`.
+An unsatisfactory row without a named cause gets `INCORRECT_TRANSCRIPT_OR_OPERATIONS`.
+These two codes stay readable in `failure_messages`. They contain no external error text.
+
+Hardware rows keep named causes in `failures`, `hardware_invalid_reason`, or `unavailable_reason` without a new default code.
+Simulated unavailable rows keep their previous `BASELINE_UNAVAILABLE` code.
+Status, acceptance, replacement, and trial counts do not change.
+
 This section gives the simulated-mode rules. The hardware section gives its own turn-specific cause rules.
 
 Each trial downloads public diagnostics for the pipeline STT config entry before and after the turn.

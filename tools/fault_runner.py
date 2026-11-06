@@ -594,6 +594,34 @@ def complete_failure_messages(row: Row) -> None:
         ]
 
 
+def complete_trial_failure(row: Row) -> None:
+    if row["acceptable"]:
+        return
+    if (
+        row["status"] == "unavailable"
+        and row.get("scope") != "hardware"
+        and "BASELINE_UNAVAILABLE" not in row["failures"]
+    ):
+        row["failures"].append("BASELINE_UNAVAILABLE")
+    if not (
+        row["failures"]
+        or row.get("hardware_invalid_reason")
+        or row.get("unavailable_reason")
+    ):
+        cause = (
+            "BASELINE_UNAVAILABLE"
+            if row["status"] == "unavailable"
+            else "INCORRECT_TRANSCRIPT_OR_OPERATIONS"
+        )
+        row["failures"].append(cause)
+    if not row.get("failure_messages") and row["failures"] in (
+        ["BASELINE_UNAVAILABLE"],
+        ["INCORRECT_TRANSCRIPT_OR_OPERATIONS"],
+    ):
+        row["failure_messages"] = [f"ValueError: {row['failures'][0]}"]
+    complete_failure_messages(row)
+
+
 async def fallback_snapshot(
     session: aiohttp.ClientSession, token_file: Path, pipeline: str
 ) -> Row | None:
@@ -993,15 +1021,10 @@ async def pipeline_trial(
     row["transcript_engine"] = transcript_engine(row)
     row["status"] = trial_status(row)
     row["acceptable"] = row["status"] == "passed"
-    if row["status"] == "unavailable":
-        row["failures"].append("BASELINE_UNAVAILABLE")
     for event in row["events"]:
         event["turn_id"] = row["turn_id"]
     row["test_pipeline"] = pipeline_observations(row)
-    if not row["acceptable"] and not row["failures"]:
-        row["failures"].append("INCORRECT_TRANSCRIPT_OR_OPERATIONS")
-    if not row["acceptable"]:
-        complete_failure_messages(row)
+    complete_trial_failure(row)
     return row
 
 
@@ -1728,8 +1751,7 @@ async def run(args: argparse.Namespace) -> Row:
                             missed = injection_status(row) == "invalid_injection"
                             row["status"] = trial_status(row)
                             row["acceptable"] = row["status"] == "passed"
-                            if not row["acceptable"]:
-                                complete_failure_messages(row)
+                            complete_trial_failure(row)
                             result["attempts"].append(row)
                             if not missed:
                                 result["trials"].append(row)
