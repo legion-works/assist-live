@@ -230,6 +230,27 @@ The `final` decode uses the turn audio to the end sample of the turn detector, a
 The audio message that contains the end sample can also contain audio after the end, and that audio does not go to the `final` decode.
 Thus the `final` transcript does not change when the client divides the same audio into different messages.
 
+The server setting `ASSIST_LIVE_END_RULE` selects the end rule of the turn detector.
+The value `partial` is the default and keeps the current rule.
+Before the maximum time without voice, the end conditions use the newest `partial` transcript that is available.
+The value `checkpoint` is available only with the Parakeet STT provider.
+A cloud provider cannot stop a decode at a given position in the turn audio.
+With a different STT provider, the server does not start, and the error message names `ASSIST_LIVE_END_RULE`.
+The value `checkpoint` makes the end sample a function of the turn audio only:
+
+- The server decodes the turn audio to each checkpoint, at each 400 ms of turn audio.
+  The end conditions use the text of the newest checkpoint.
+  If that result is not available, the turn detector waits for it.
+- Only the turn audio and the checkpoint text set the positions where the turn-end model runs.
+  A stop in the audio stream does not divide or fill a voice detector window.
+- If a checkpoint result is not available in 1 s, the turn stops with the error `stt_failed`.
+  If the wall time limit expires before the end that the audio gives, the turn also stops with that error.
+  The server does not select a different end sample.
+- Transcript replacement uses the checkpoint text at the end sample.
+
+In each mode, a server metric records the time from the arrival of the end sample to the end decision.
+P1 selects the default value after bench measurements of the latency and of the behavior with a high load.
+
 For `partial` transcripts, the provider uses the greedy search, because it makes them frequently during a turn.
 A device test showed that the greedy search can follow `blank` tokens through a full command and then give a short incorrect word.
 The model score of the command was better than the score of that word.
