@@ -226,6 +226,10 @@ For the `final` transcript, the Parakeet provider uses the TDT beam search of th
 The beam width is 16, and the provider uses the NeMo score normalization.
 It uses no language model, no word list, and no change to the audio.
 
+The `final` decode uses the turn audio to the end sample of the turn detector, and no audio after it.
+The audio message that contains the end sample can also contain audio after the end, and that audio does not go to the `final` decode.
+Thus the `final` transcript does not change when the client divides the same audio into different messages.
+
 For `partial` transcripts, the provider uses the greedy search, because it makes them frequently during a turn.
 A device test showed that the greedy search can follow `blank` tokens through a full command and then give a short incorrect word.
 The model score of the command was better than the score of that word.
