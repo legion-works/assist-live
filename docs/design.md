@@ -210,8 +210,14 @@ Thus the turn detector uses a start guard:
   The STT provider continues to decode all audio.
 - Before the command starts, the three conditions above and the maximum time without voice do not end the turn.
   The time without voice starts at the command start.
-- If no command starts in 5 s, the turn ends, and the server sends the transcript of all the audio.
+- If no command starts in 5 s, the turn ends with an empty transcript.
   If voice continues at 5 s, the server waits until that voice becomes a command or stops.
+- If the turn detector does not find a command start, the `final` transcript is empty.
+  This rule applies to each type of turn end and to each STT provider.
+  The server does not do a `final` decode for that turn, and it does not use a `partial` transcript as the `final` transcript.
+  Thus room noise in a turn without a command cannot become a transcript.
+  A short word with less than 250 ms of continuous voice does not start a command, so its turn has no transcript.
+  P1 sets the start rule with the volunteer recordings.
 - The guard applies to all turns, also to a follow-up turn.
 
 P1 sets these three values with human recordings.
