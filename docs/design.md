@@ -210,6 +210,8 @@ The server ends a turn before the maximum time only with all three conditions:
 - The time without voice is equal to or more than the minimum (initial default: 400 ms).
 - The Smart Turn score is equal to or more than its limit (initial default: 0.8).
 - The transcript does not end with words that cannot complete a command.
+  The words `on`, `off`, `up`, `down`, `out`, and `over` can complete a command when they come after the object, as in "turn the light on" or "is the fan on".
+  Such a word cannot complete a command when the word before it is a verb that starts a command, as in "turn on" or "switch off".
 
 If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
 The `safe` and `fast` settings keep all three conditions.
