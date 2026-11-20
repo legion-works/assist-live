@@ -189,14 +189,19 @@ The optional `pre_roll` setting of the ESPHome component keeps this audio:
 Wake word during a reply:
 
 - Each wake model uses the cutoff of the stock option "Very sensitive" while a reply or an announcement plays.
-  It also uses this cutoff for 1000 ms after the satellite goes to `idle`.
+  It also uses this cutoff for 2000 ms after the satellite goes to `idle`.
   At other times, each model uses the cutoff of the option that the user selected.
 - A user frequently says the wake word again before the reply ends.
   Such wake words got scores from 0.60 to 0.66 in a device test.
   These scores are below the "Moderately sensitive" cutoff of 0.69, so the satellite did not wake.
   The option "Very sensitive" at all times doubles the published rate of incorrect wakes.
   Thus the lower cutoff applies only in this interval.
-- The Stop word, the timers, and the stock wake handler do not change.
+- If a wake word occurs while a reply plays, the satellite stops the reply and starts a new wake-word turn.
+  The stock firmware only stops the reply, so the user must say the command again.
+  The new turn gets the same history as a wake-word turn from `idle`.
+- The Stop word, the timers, and the other branches of the stock wake handler do not change.
+- A device test measured the wake words that started at the end of the reply.
+  The detection occurred 1.3 s to 1.5 s after the reply, so the interval after the reply is 2000 ms.
 - With the lower cutoff, the detection occurs earlier in the wake word, so more of the wake word can be in the turn audio.
   A device measurement selects the rule for the history in this case before the change is on by default.
 
