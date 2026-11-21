@@ -1,6 +1,7 @@
 from assist_live_client.protocol import MESSAGE_DEADLINE as MESSAGE_DEADLINE
 
 DOMAIN = "assist_live"
+HEALTH_TIMEOUT = 0.2
 CONF_NOTIFY_TTS_FAILURE = "notify_tts_failure"
 CONF_FALLBACK_TTS_VOICE = "fallback_tts_voice"
 TIMING_EVENT_TIMEOUT = 2.0

@@ -17,6 +17,8 @@ from homeassistant.helpers import intent
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
+from .const import HEALTH_TIMEOUT
+
 _LOGGER = logging.getLogger(__name__)
 _DEVICE_FIELDS = ("name", "name_by_user", "area_id", "parent_device_id")
 
@@ -193,7 +195,9 @@ class STTHints:
             try:
                 if self._rebuild:
                     self._rebuild = False
-                    self._health = await self.client.health_capabilities(timeout=0.2)
+                    self._health = await self.client.health_capabilities(
+                        timeout=HEALTH_TIMEOUT
+                    )
                     self._ready = False
                 if self._health is None or not self._health.stt_hints:
                     for satellite in satellites:

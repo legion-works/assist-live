@@ -30,7 +30,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN
+from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN, HEALTH_TIMEOUT
 from .ledger import TurnLedger
 from .repairs import (
     event_stream_issue,
@@ -366,7 +366,7 @@ class Runtime:
                             True,
                         )
         try:
-            health = await self.client.health_capabilities(timeout=0.2)
+            health = await self.client.health_capabilities(timeout=HEALTH_TIMEOUT)
         except ProtocolError, TimeoutError, OSError:
             self._healthy = False
         else:

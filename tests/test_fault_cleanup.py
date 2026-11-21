@@ -79,7 +79,9 @@ async def test_idle_control_reader_answers_ha_heartbeat(ha_socket):
             assert await command("get_states")
 
 
-async def test_cleanup_uses_fresh_authenticated_socket_after_idle_close(ha_socket):
+async def test_cleanup_uses_fresh_authenticated_socket_after_idle_close(
+    ha_socket, io_timeout
+):
     token_file, sockets, deletes, _, closed = ha_socket
     result = {}
     async with aiohttp.ClientSession() as session:
@@ -99,7 +101,7 @@ async def test_cleanup_uses_fresh_authenticated_socket_after_idle_close(ha_socke
             async with fault_runner.temporary_pipeline(
                 command, result, "existing", cleanup_command=fresh
             ):
-                await asyncio.wait_for(closed.wait(), 1)
+                await asyncio.wait_for(closed.wait(), io_timeout)
                 assert sockets[0].closed
             assert result["bench_restored"] is True
     assert len(deletes) == 1

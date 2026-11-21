@@ -4301,3 +4301,21 @@ Stereo PCM follows FFmpeg's `-3 dB` pan law, with equal outputs and a `1 LSB` to
 
 The conversion tests give `2 passed` on each of HA `2026.10.1`, `2026.10.4`, and `2026.11.2`. The CI tests give `78 passed`.
 A scratch change that writes the stereo WAV without FFmpeg gives a failure at `HA_WAV_FFMPEG_NOT_USED`.
+
+## Health deadlines in integration tests
+
+Date: 2026-11-21 (UTC).
+
+A 250 ms health response reproduced the local-only selection test failure without host load.
+The test selected local fallback, not the server transcript, and recorded `health_timeout`.
+The same response gives `PASS` with an explicit test-only health limit.
+
+The production health limit stays at 200 ms in one `HEALTH_TIMEOUT` constant.
+Tests for policy, content, and order use explicit fixtures for unrelated health, message, and I/O deadlines.
+The health-timeout cases keep the production limit and a server response after 250 ms.
+The controlled-clock deadline tests keep their boundary values and assertions.
+
+The changed test files and the STT and TTS deadline files give `423 passed` in isolated runs.
+A scratch mutation that changes the production health limit to 10 s gives a failure in the real-client health-timeout test.
+It records `stream_closed`, not the necessary `health_timeout`.
+No production timing value changes.

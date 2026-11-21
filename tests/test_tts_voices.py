@@ -78,7 +78,12 @@ async def test_default_options_use_server_default(client, ledger):
 @pytest.mark.parametrize("with_list", [True, False])
 @pytest.mark.parametrize("requested_voice", [None, "server-us", "server-retired"])
 async def test_no_voice_reaches_fake_server_without_voice_field(
-    hass, socket_enabled, with_list, requested_voice
+    hass,
+    socket_enabled,
+    relaxed_health_timeout,
+    relaxed_message_deadline,
+    with_list,
+    requested_voice,
 ):
     from aiohttp import web
     from aiohttp.test_utils import TestServer

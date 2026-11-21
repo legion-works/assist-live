@@ -240,13 +240,17 @@ async def test_tts_continuation_keeps_failure_reason(
     ],
 )
 async def test_pinned_client_kinds_reach_fallback_events(
-    socket_enabled, part, cause, reason
+    socket_enabled, request, part, cause, reason
 ):
+    if cause != "health_timeout":
+        request.getfixturevalue("relaxed_health_timeout")
+    if cause != "message_timeout":
+        request.getfixturevalue("relaxed_message_deadline")
     release = asyncio.Event()
 
     async def health(request):
         if cause == "health_timeout":
-            await release.wait()
+            await asyncio.sleep(0.25)
         return web.json_response(
             {"version": 1, "healthy": True, "capabilities": {"stt": True, "tts": True}}
         )

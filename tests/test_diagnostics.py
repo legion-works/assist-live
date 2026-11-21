@@ -264,7 +264,9 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
     assert result["turns"][0]["tts_text_input"] == "sentence_buffered"
 
 
-async def test_health_destination_keys_do_not_disclose_content(hass, socket_enabled):
+async def test_health_destination_keys_do_not_disclose_content(
+    hass, socket_enabled, relaxed_health_timeout
+):
     from aiohttp import web
     from aiohttp.test_utils import TestServer
     from assist_live_client import AssistLiveClient

@@ -123,7 +123,7 @@ class SpeakerWire:
     async def send(self, turn_id, kind, **fields):
         self.queues[turn_id].put_nowait(encode_control(kind, turn_id, **fields))
         while True:
-            message = await asyncio.wait_for(self.decoded.get(), 1)
+            message = await asyncio.wait_for(self.decoded.get(), self.io_timeout)
             if message["type"] == kind and message["turn_id"] == turn_id:
                 break
         await self.hass.async_block_till_done()
@@ -182,7 +182,7 @@ class SpeakerWire:
         self.event_queue.put_nowait(
             {"version": 1, "event_id": self.event_id, "event": event}
         )
-        assert await asyncio.wait_for(self.processed.get(), 1) == (
+        assert await asyncio.wait_for(self.processed.get(), self.io_timeout) == (
             "satellite-a",
             self.event_id,
         )
@@ -190,8 +190,16 @@ class SpeakerWire:
 
 
 @pytest.fixture
-async def wire(hass, socket_enabled, monkeypatch):
+async def wire(
+    hass,
+    socket_enabled,
+    monkeypatch,
+    relaxed_health_timeout,
+    relaxed_message_deadline,
+    io_timeout,
+):
     harness = SpeakerWire(hass, monkeypatch)
+    harness.io_timeout = io_timeout
     app = web.Application()
     app.router.add_get("/health", harness.health)
     app.router.add_post("/v1/turns", harness.accepted)
@@ -258,7 +266,7 @@ async def test_heartbeats_do_not_extend_speaker_deadline(wire):
             destination="cloud",
         )
     )
-    await asyncio.wait_for(asyncio.shield(task), 1)
+    await asyncio.wait_for(asyncio.shield(task), wire.io_timeout)
     await wire.hass.async_block_till_done()
     assert wire.runtime.ledger.speaker_missing == 1
     assert turn_id not in wire.runtime.ledger.speaker_reads

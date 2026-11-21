@@ -214,7 +214,11 @@ async def test_runtime_subscribes_each_key_before_first_turn(hass, client):
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, client):  # noqa: F811
+async def test_real_entry_registers_pair_and_owns_pipeline(
+    configured_hass,  # noqa: F811
+    client,
+    io_timeout,
+):
     import asyncio
 
     from homeassistant.components import assist_pipeline
@@ -329,7 +333,9 @@ async def test_real_entry_registers_pair_and_owns_pipeline(configured_hass, clie
     runtime.ledger.schedule_events()
     await asyncio.wait_for(sending.wait(), 1)
     sender = runtime.ledger._event_sender
-    assert await asyncio.wait_for(hass.config_entries.async_unload(entry.entry_id), 1)
+    assert await asyncio.wait_for(
+        hass.config_entries.async_unload(entry.entry_id), io_timeout
+    )
     assert cancelled.is_set()
     assert sender.done()
     assert not runtime.ledger._pending
@@ -640,7 +646,7 @@ async def test_start_failure_cancels_tasks_and_removes_runtime(hass, client):
 
 
 async def test_poison_event_retries_with_repair_backoff_and_no_cursor_skip(
-    hass, client, runtime_entry, caplog
+    hass, client, runtime_entry, caplog, io_timeout
 ):
     import asyncio
     import logging
@@ -697,7 +703,7 @@ async def test_poison_event_retries_with_repair_backoff_and_no_cursor_skip(
         assert len(retries) == 6
         poison[0] = False
         release.set()
-        await asyncio.wait_for(processed.wait(), 1)
+        await asyncio.wait_for(processed.wait(), io_timeout)
         assert subscriptions == [0] * 7
         assert runtime.cursors["satellite-a"] == 7
         assert runtime.failures["satellite-a"] == 0
@@ -797,7 +803,7 @@ async def test_client_timing_history_event_reaches_ledger_or_retries(
 
 @pytest.mark.parametrize("silent", [False, True])
 async def test_store_failure_does_not_acknowledge_event(
-    hass, client, runtime_entry, silent
+    hass, client, runtime_entry, silent, io_timeout
 ):
     import asyncio
 
@@ -844,7 +850,7 @@ async def test_store_failure_does_not_acknowledge_event(
             assert runtime.cursors.get("satellite-a", 0) == 0
             assert not runtime.tasks[0].done()
             release.set()
-            await asyncio.wait_for(processed.wait(), 1)
+            await asyncio.wait_for(processed.wait(), io_timeout)
             assert subscriptions == [0, 0]
             assert runtime.cursors["satellite-a"] == 9
         finally:

@@ -7,6 +7,29 @@ import custom_components.assist_live  # noqa: F401
 
 
 @pytest.fixture
+def relaxed_health_timeout(monkeypatch, io_timeout):
+    # HTTP setup does not test the 200 ms health deadline.
+    for module in ("", ".stt", ".tts", ".stt_hints"):
+        monkeypatch.setattr(
+            f"custom_components.assist_live{module}.HEALTH_TIMEOUT", io_timeout
+        )
+
+
+@pytest.fixture
+def io_timeout():
+    return 10.0
+
+
+@pytest.fixture
+def relaxed_message_deadline(monkeypatch, io_timeout):
+    # These protocol tests check content and order, not receive latency.
+    monkeypatch.setattr("assist_live_client.client.MESSAGE_DEADLINE", io_timeout)
+    monkeypatch.setattr(
+        "custom_components.assist_live.stt.MESSAGE_DEADLINE", io_timeout
+    )
+
+
+@pytest.fixture
 def available_fallbacks():
     from test_stt_forward import Fallback as SttFallback
     from test_tts_forward import Fallback as TtsFallback

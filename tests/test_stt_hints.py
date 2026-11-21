@@ -95,7 +95,7 @@ def test_digest_protocol_vectors():
 
 
 @pytest.fixture
-async def hint_runtime(hass, socket_enabled):
+async def hint_runtime(hass, socket_enabled, relaxed_health_timeout):
     assert await async_setup_component(hass, "homeassistant", {})
     registry = er.async_get(hass)
     entity = registry.async_get_or_create(
@@ -503,23 +503,27 @@ async def test_support_downgrade_stops_sends_after_registry_change(hass, hint_ru
     ), "downgrade_result"
 
 
-async def test_hanging_hint_request_does_not_delay_fallback_turn(hass, hint_runtime):
+async def test_hanging_hint_request_does_not_delay_fallback_turn(
+    hass, hint_runtime, io_timeout
+):
     from homeassistant.components.tts import TTSAudioRequest
     from test_tts_forward import Fallback, entity, text
 
     runtime, _, state, _ = hint_runtime
     state["hang"] = True
     await runtime.refresh_health()
-    await asyncio.wait_for(state["entered"].wait(), 1)
+    await asyncio.wait_for(state["entered"].wait(), io_timeout)
     forward = entity(runtime.client, runtime.ledger, Fallback())
     forward.hass = hass
     forward.entity_id = "tts.hint_turn"
-    async with asyncio.timeout(1):
+    async with asyncio.timeout(io_timeout):
         response = await forward.async_stream_tts_audio(
             TTSAudioRequest("en", {}, text())
         )
         audio = b"".join([part async for part in response.data_gen])
     assert audio == b"fallback", "turn_finishes_while_hint_send_hangs"
+    assert runtime.hints._task is not None and not runtime.hints._task.done()
+    assert runtime.hints.failures == 0
     state["release"].set()
     await hass.async_block_till_done()
 

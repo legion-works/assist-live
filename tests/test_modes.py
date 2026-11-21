@@ -427,7 +427,9 @@ async def test_transcript_option_through_pinned_wire_and_sqlite(
             ) is want
 
 
-async def test_real_client_delivers_final_before_speaker_event(hass, socket_enabled):
+async def test_real_client_delivers_final_before_speaker_event(
+    hass, socket_enabled, relaxed_health_timeout, relaxed_message_deadline, io_timeout
+):
     import asyncio
 
     from aiohttp import web
@@ -496,12 +498,13 @@ async def test_real_client_delivers_final_before_speaker_event(hass, socket_enab
         forward = entity(actual, runtime.ledger, Fallback())
         try:
             result = await asyncio.wait_for(
-                forward.async_process_audio_stream(metadata(), audio([bytes(320)])), 1
+                forward.async_process_audio_stream(metadata(), audio([bytes(320)])),
+                io_timeout,
             )
             assert result.text.encode() == "  synthetic command é\n".encode()
             assert seen == []
             release.set()
-            await asyncio.wait_for(received.wait(), 1)
+            await asyncio.wait_for(received.wait(), io_timeout)
             assert seen[0]["name"] == "synthetic-speaker"
             assert seen[0]["distance"] == 0.25
             assert seen[0]["destination"] == "local"

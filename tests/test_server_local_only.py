@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -78,11 +80,21 @@ from custom_components.assist_live.diagnostics import async_get_config_entry_dia
     ],
 )
 async def test_selection_through_pinned_health_decoder(
-    hass, socket_enabled, caplog, part, local_only, policy, reason
+    hass,
+    socket_enabled,
+    relaxed_health_timeout,
+    relaxed_message_deadline,
+    caplog,
+    part,
+    local_only,
+    policy,
+    reason,
 ):
     calls = []
 
     async def health(request):
+        # Policy selection does not test the health response deadline.
+        await asyncio.sleep(0.25)
         return web.json_response(
             {
                 "version": 1,

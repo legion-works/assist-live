@@ -463,7 +463,7 @@ async def test_fallback_health_outage_retains_open_without_connect_attempt(
     "turn_exists", [True, False], ids=["accepted-open", "absent-turn"]
 )
 async def test_refused_late_open_still_sends_each_queued_event(
-    aiohttp_server, socket_enabled, turn_exists, hass
+    aiohttp_server, socket_enabled, turn_exists, hass, io_timeout
 ):
     from aiohttp import web
     from assist_live_client.models import TurnOpen
@@ -503,7 +503,7 @@ async def test_refused_late_open_still_sends_each_queued_event(
         ledger.mark(turn.turn_id, "turn_superseded")
         ledger.schedule_events(retry=True)
         try:
-            await asyncio.wait_for(ledger._event_sender, 1)
+            await asyncio.wait_for(ledger._event_sender, io_timeout)
             assert paths == ["open", "event", "event"], (
                 "refused late open blocked queued events"
             )
@@ -520,7 +520,7 @@ async def test_refused_late_open_still_sends_each_queued_event(
 
 
 async def test_identical_late_open_after_lost_response_keeps_events(
-    aiohttp_server, socket_enabled
+    aiohttp_server, socket_enabled, io_timeout
 ):
     from aiohttp import web
 
@@ -557,7 +557,7 @@ async def test_identical_late_open_after_lost_response_keeps_events(
             ledger.mark(turn.turn_id, "stt_final_received")
             ledger.mark(turn.turn_id, "tts_first_text")
             ledger.schedule_events(retry=True)
-            await asyncio.wait_for(ledger._event_sender, 1)
+            await asyncio.wait_for(ledger._event_sender, io_timeout)
             assert stages == ["stt_final_received", "tts_first_text"], (
                 "lost_response_retry_sends_turn_events"
             )

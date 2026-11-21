@@ -23,7 +23,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
+from .const import (
+    CONF_FALLBACK_TTS_VOICE,
+    CONF_NOTIFY_TTS_FAILURE,
+    DOMAIN,
+    HEALTH_TIMEOUT,
+)
 from .ledger import FallbackReason, TurnLedger, stream_failure_reason
 from .repairs import fallback_issue
 from .settings import FallbackMetadata, effective_settings
@@ -249,8 +254,8 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         reason: FallbackReason = "server_unhealthy"
         error_class = "None"
         try:
-            async with asyncio.timeout(0.2):
-                health = await self.client.health_capabilities(timeout=0.2)
+            async with asyncio.timeout(HEALTH_TIMEOUT):
+                health = await self.client.health_capabilities(timeout=HEALTH_TIMEOUT)
                 healthy = self.ledger.server_selected(health, "tts", turn.turn_id)
                 if not healthy:
                     reason = self.ledger.records[turn.turn_id].fallback_reasons["tts"]

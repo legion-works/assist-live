@@ -16,6 +16,7 @@ from pymicro_vad import MicroVad
 
 from .const import (
     DOMAIN,
+    HEALTH_TIMEOUT,
     MAX_SPEAKER_DISTANCE,
     MESSAGE_DEADLINE,
     SPEAKER_RESULT_DEADLINE,
@@ -256,8 +257,10 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                 if self.ledger.save is not None:
                     await self.ledger.save()
                 try:
-                    async with asyncio.timeout(0.2):
-                        health = await self.client.health_capabilities(timeout=0.2)
+                    async with asyncio.timeout(HEALTH_TIMEOUT):
+                        health = await self.client.health_capabilities(
+                            timeout=HEALTH_TIMEOUT
+                        )
                         healthy = self.ledger.server_selected(
                             health, "stt", turn.turn_id
                         )
