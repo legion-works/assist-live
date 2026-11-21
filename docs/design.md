@@ -200,10 +200,9 @@ Wake word during a reply:
 - If a wake word occurs while a reply plays, the satellite stops the reply and starts a new wake-word turn.
   The stock firmware only stops the reply, so the user must say the command again.
   The new turn gets the same history as a wake-word turn from `idle`.
-- The Stop word and the other branches of the stock wake handler do not change, but the timer branch has a short interval without effect.
-  This interval starts at the wake word that stops the reply and ends when the new turn starts.
-  It is approximately 800 ms or less.
-  In this interval, a wake word other than the Stop word does not stop a ringing timer.
+- The Stop word and the other branches of the stock wake handler do not change.
+  If a timer rings while the new turn waits to start, a wake word stops the timer as in the stock firmware.
+  The satellite then does not start the new turn.
 - A device test measured the wake words that started at the end of the reply.
   The detection occurred 1.3 s to 1.5 s after the reply, so the interval after the reply is 2000 ms.
 - With the lower cutoff, the detection occurs earlier in the wake word, so more of the wake word can be in the turn audio.
