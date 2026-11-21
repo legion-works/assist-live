@@ -208,6 +208,7 @@ Wake word during a reply:
 - If a wake word occurs while a reply plays, the satellite stops the reply and starts a new wake-word turn.
   The stock firmware only stops the reply, so the user must say the command again.
   The new turn gets the same history as a wake-word turn from `idle`.
+  If the satellite has no history buffer, the new turn gets no history.
 - The Stop word and the other branches of the stock wake handler do not change.
   If a timer rings while the new turn waits to start, a wake word stops the timer as in the stock firmware.
   The satellite then does not start the new turn.
