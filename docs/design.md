@@ -189,7 +189,8 @@ The optional `pre_roll` setting of the ESPHome component keeps this audio:
 Wake word during a reply:
 
 - Each wake model uses the cutoff of the stock option "Very sensitive" while a reply or an announcement plays.
-  It also uses this cutoff for 2000 ms after the satellite goes to `idle`.
+  It also uses this cutoff for 2000 ms after the reply or announcement playback ends.
+  A new listening turn in that interval does not start the interval again.
   At other times, each model uses the cutoff of the option that the user selected.
 - A user frequently says the wake word again before the reply ends.
   Such wake words got scores from 0.60 to 0.66 in a device test.
@@ -199,7 +200,10 @@ Wake word during a reply:
 - If a wake word occurs while a reply plays, the satellite stops the reply and starts a new wake-word turn.
   The stock firmware only stops the reply, so the user must say the command again.
   The new turn gets the same history as a wake-word turn from `idle`.
-- The Stop word, the timers, and the other branches of the stock wake handler do not change.
+- The Stop word and the other branches of the stock wake handler do not change, but the timer branch has a short interval without effect.
+  This interval starts at the wake word that stops the reply and ends when the new turn starts.
+  It is approximately 800 ms or less.
+  In this interval, a wake word other than the Stop word does not stop a ringing timer.
 - A device test measured the wake words that started at the end of the reply.
   The detection occurred 1.3 s to 1.5 s after the reply, so the interval after the reply is 2000 ms.
 - With the lower cutoff, the detection occurs earlier in the wake word, so more of the wake word can be in the turn audio.
@@ -217,6 +221,10 @@ The server ends a turn before the maximum time only with all three conditions:
 - The transcript does not end with words that cannot complete a command.
   The words `on`, `off`, `up`, `down`, `out`, and `over` can complete a command when they come after the object, as in "turn the light on" or "is the fan on".
   Such a word cannot complete a command when the word before it is a verb that starts a command, as in "turn on" or "switch off".
+  Each of these words has its own set of verbs from the HA English sentence templates, and the server documentation lists the sets.
+  A verb from the set earlier in the transcript lets the object contain a verb word, as in "turn the switch off".
+  A transcript that is only an opening verb or a particle does not complete a command, also after "please" or an initial filler.
+  The words "next", "skip", and "replay" are complete media commands in the templates, so they can end a turn alone.
 
 If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
 The `safe` and `fast` settings keep all three conditions.
