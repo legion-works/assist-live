@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestServer
 from assist_live_client import AssistLiveClient
 from homeassistant.components.homeassistant import exposed_entities as ee
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
@@ -248,6 +249,87 @@ async def test_registry_and_exposure_share_five_second_debounce(
         assert names[0] == "next area", "area_change_sent_first"
     if trigger in ("exposure", "all"):
         assert "synthetic hidden" in names, "assist_exposure_change_sent"
+
+
+async def device_entity(hass, runtime, state):
+    # The device name is the entity name, because the entity has no own name.
+    source = MockConfigEntry(domain="test")
+    source.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=source.entry_id,
+        identifiers={("test", "synthetic-device")},
+        name="Synthetic Device",
+    )
+    entity = er.async_get(hass).async_get_or_create(
+        "light",
+        "test",
+        "device-light",
+        device_id=device.id,
+        has_entity_name=True,
+        original_name=None,
+    )
+    hass.states.async_set(entity.entity_id, "on")
+    # The first exposure read stores the default and sends an entity registry
+    # event. Read it here, so that the event does not refresh the hints later.
+    assert ee.async_should_expose(hass, "conversation", entity.entity_id)
+    area = ar.async_get(hass).async_create("Device Area")
+    await hass.async_block_till_done()
+    await advance(hass, 6)
+    assert "synthetic device" in state["requests"][-1][1], "device_name_sent"
+    assert runtime.hints._debounce is None, "no_change_pending_before_device_update"
+    state["requests"].clear()
+    return device, area
+
+
+@pytest.mark.parametrize("field", ["name_by_user", "name"])
+async def test_device_rename_refreshes_hints(hass, hint_runtime, field):
+    runtime, _, state, _ = hint_runtime
+    await refresh(hass, runtime)
+    device, _ = await device_entity(hass, runtime, state)
+    dr.async_get(hass).async_update_device(device.id, **{field: "Synthetic Renamed"})
+    await hass.async_block_till_done()
+    await advance(hass, 4)
+    assert not state["requests"], "device_change_no_send_before_five_seconds"
+    await advance(hass, 6)
+    assert len(state["requests"]) == 2, "device_rename_one_send_per_satellite"
+    for _, names in state["requests"]:
+        assert "synthetic renamed" in names, "device_rename_new_name_sent"
+        assert "synthetic device" not in names, "device_rename_old_name_removed"
+
+
+async def test_device_area_change_refreshes_hints(hass, hint_runtime):
+    runtime, _, state, _ = hint_runtime
+    await refresh(hass, runtime)
+    device, area = await device_entity(hass, runtime, state)
+    dr.async_get(hass).async_update_device(device.id, area_id=area.id)
+    await hass.async_block_till_done()
+    await advance(hass, 6)
+    assert len(state["requests"]) == 2, "device_area_change_one_send_per_satellite"
+
+
+async def test_unrelated_device_change_sends_no_hints(hass, hint_runtime):
+    runtime, _, state, _ = hint_runtime
+    await refresh(hass, runtime)
+    device, _ = await device_entity(hass, runtime, state)
+    dr.async_get(hass).async_update_device(device.id, sw_version="2.0")
+    await hass.async_block_till_done()
+    assert runtime.hints._debounce is None, "unrelated_device_change_no_debounce"
+    await advance(hass, 6)
+    assert not state["requests"], "unrelated_device_change_no_send"
+
+
+async def test_stop_removes_device_listener(hass, hint_runtime):
+    runtime, _, state, _ = hint_runtime
+    await refresh(hass, runtime)
+    device, _ = await device_entity(hass, runtime, state)
+    before = hass.bus.async_listeners().get(dr.EVENT_DEVICE_REGISTRY_UPDATED, 0)
+    await runtime.stop()
+    after = hass.bus.async_listeners().get(dr.EVENT_DEVICE_REGISTRY_UPDATED, 0)
+    assert before - after == 1, "stop_removes_device_listener"
+    dr.async_get(hass).async_update_device(device.id, name_by_user="Late Name")
+    await hass.async_block_till_done()
+    await advance(hass, 6)
+    assert not state["requests"], "stopped_hints_ignore_device_rename"
 
 
 async def test_health_digest_mismatch_resends_only_restarted_satellite(

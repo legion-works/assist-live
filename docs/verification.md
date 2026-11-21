@@ -4178,3 +4178,21 @@ The preservation tests use `PLAYBACK_FAILED` in `failures`, not an invented turn
 A scratch mutation that removed the cause-field checks gave `5 failed, 4 passed` in the named regression.
 `task check` and `task ha-minimum` each gave `2031 passed`, with exit code 0.
 Hardware acceptance stays `NOT RUN`.
+
+## STT hints after a device rename
+
+Date: 2026-11-21 (UTC).
+
+A device rename changes the names of the entities on that device, but HA sends no entity registry event for it.
+Before this repair, the hints kept the previous device name until a different registry change or a restart.
+The hint service also listens to device registry updates that change `name`, `name_by_user`, or `area_id`.
+These updates use the same 5 s debounce timer, and the listener stops when the hint service stops.
+
+Before this repair, the new tests in `tests/test_stt_hints.py` gave `4 failed, 1 passed` on HA 2026.10.4 and on HA 2026.11.2.
+The failures used the assertions `device_rename_one_send_per_satellite` (two cases), `device_area_change_one_send_per_satellite`, and `stop_removes_device_listener`.
+The one satisfactory test checks that a `sw_version` update starts no send.
+After the repair, `tests/test_stt_hints.py` gave `23 passed` on HA 2026.10.4 and on HA 2026.11.2.
+
+A scratch mutation removed `name_by_user` from the device filter.
+The test `test_device_rename_refreshes_hints[name_by_user]` gave `1 failed, 4 passed` with the assertion `device_rename_one_send_per_satellite`.
+`task check` and `task ha-minimum` were not run for this change.

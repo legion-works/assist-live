@@ -11,12 +11,14 @@ from assist_live_client.models import HealthCapabilities
 from homeassistant.components.homeassistant import exposed_entities
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
+_DEVICE_FIELDS = ("name", "name_by_user", "area_id")
 
 
 def build_name_hints(
@@ -40,6 +42,13 @@ def hints_digest(names: list[str]) -> str:
     return hashlib.sha256(
         json.dumps(names, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+@callback
+def _device_changed(data: dr.EventDeviceRegistryUpdatedData) -> bool:
+    return data["action"] == "update" and any(
+        field in data["changes"] for field in _DEVICE_FIELDS
+    )
 
 
 class HintStatus(TypedDict):
@@ -93,6 +102,14 @@ class STTHints:
                 ),
                 self.hass.bus.async_listen(
                     ar.EVENT_AREA_REGISTRY_UPDATED, self._changed
+                ),
+                # A device rename changes the entity names but HA sends no
+                # entity registry event for it. The default agent also
+                # listens to these device fields.
+                self.hass.bus.async_listen(
+                    dr.EVENT_DEVICE_REGISTRY_UPDATED,
+                    self._changed,
+                    event_filter=_device_changed,
                 ),
             ]
         )
