@@ -325,7 +325,7 @@ A list has a maximum of 500 names in a stable order. Diagnostics record the numb
 
 The integration sends the list for each satellite with `PUT /v1/satellites/{satellite}/hints`.
 It sends the list at setup and 5 s after a change in the entity registry, the area registry, or the Assist entity list.
-A change to the name or the area of a device also starts this send.
+A change to the name, the area, or the parent device of a device also starts this send.
 The names of its entities can include the device name.
 It also sends the list when the health response gives a different list digest for the satellite, for example after a server restart.
 The server refuses a list that does not obey these rules with `invalid_hints`.
