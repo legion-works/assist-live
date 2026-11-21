@@ -307,6 +307,33 @@ async def test_device_area_change_refreshes_hints(hass, hint_runtime):
     assert len(state["requests"]) == 2, "device_area_change_one_send_per_satellite"
 
 
+async def test_device_child_conversion_refreshes_hints(hass, hint_runtime):
+    runtime, _, state, _ = hint_runtime
+    await refresh(hass, runtime)
+    device, _ = await device_entity(hass, runtime, state)
+    registry = dr.async_get(hass)
+    parent = registry.async_get_or_create(
+        config_entry_id=device.config_entry_id,
+        identifiers={("test", "synthetic-hub")},
+        name="Synthetic Hub",
+    )
+    # HA converts only a device from an earlier run, as after a restart.
+    registry.async_config_entry_unloaded(device.config_entry_id)
+    child = registry.async_get_or_create_child(
+        config_entry_id=device.config_entry_id,
+        identifiers={("test", "synthetic-device")},
+        parent_device_id=parent.id,
+    )
+    assert child.id == device.id, "conversion_keeps_device_id"
+    await hass.async_block_till_done()
+    await advance(hass, 6)
+    assert len(state["requests"]) == 2, "device_conversion_one_send_per_satellite"
+    for _, names in state["requests"]:
+        assert "synthetic hub synthetic device" in names, (
+            "device_conversion_parent_prefix_sent"
+        )
+
+
 async def test_unrelated_device_change_sends_no_hints(hass, hint_runtime):
     runtime, _, state, _ = hint_runtime
     await refresh(hass, runtime)

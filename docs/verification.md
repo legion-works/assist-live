@@ -4196,3 +4196,12 @@ After the repair, `tests/test_stt_hints.py` gave `23 passed` on HA 2026.10.4 and
 A scratch mutation removed `name_by_user` from the device filter.
 The test `test_device_rename_refreshes_hints[name_by_user]` gave `1 failed, 4 passed` with the assertion `device_rename_one_send_per_satellite`.
 `task check` and `task ha-minimum` were not run for this change.
+
+When HA changes a device into a child device, the update event contains `parent_device_id` but no name or area field.
+After the conversion, the entity names start with the parent device name.
+The default agent also listens to `parent_device_id`, so the hint service also listens to it.
+The test `test_device_child_conversion_refreshes_hints` changes a device with an Assist entity into a child device. Then it checks that the hints contain the new full name.
+
+Before this repair, `tests/test_stt_hints.py` gave `1 failed, 23 passed` on HA 2026.10.4 and on HA 2026.11.2, with the assertion `device_conversion_one_send_per_satellite`.
+After the repair, it gave `24 passed` on the two versions.
+A scratch mutation that removed `parent_device_id` from the device filter gave the same failure on HA 2026.10.4.

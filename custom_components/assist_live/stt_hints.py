@@ -18,7 +18,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
-_DEVICE_FIELDS = ("name", "name_by_user", "area_id")
+_DEVICE_FIELDS = ("name", "name_by_user", "area_id", "parent_device_id")
 
 
 def build_name_hints(
@@ -103,9 +103,9 @@ class STTHints:
                 self.hass.bus.async_listen(
                     ar.EVENT_AREA_REGISTRY_UPDATED, self._changed
                 ),
-                # A device rename changes the entity names but HA sends no
-                # entity registry event for it. The default agent also
-                # listens to these device fields.
+                # A change to these device fields can change the entity names
+                # that Assist uses, but HA sends no entity registry event for
+                # it. The default agent listens to the same device fields.
                 self.hass.bus.async_listen(
                     dr.EVENT_DEVICE_REGISTRY_UPDATED,
                     self._changed,

@@ -62,7 +62,11 @@ Sorted area names come first, then sorted entity names and aliases. The integrat
 
 It sends the list at setup and 5 s after an entity registry, area registry, or Assist exposure change.
 These three change sources use one debounce timer.
-A change to a device name or device area also starts this timer, because HA sends no entity registry event for a device rename.
+
+A change to the name, area, or parent device of a device also starts this timer.
+HA does not always send an entity registry event for these changes, but they can change the entity names.
+For example, HA adds the parent device name to the entity names of a child device.
+
 A different digest in server health also starts a send for that satellite, for example after a server restart.
 After a server restart, the integration sends the list again on its next maintenance health read.
 Only setup and maintenance health reads start this recovery. A turn does not wait for the list.
