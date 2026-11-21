@@ -6,13 +6,24 @@ import yaml
 from test_public_tree import denylist, repository  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
+FFMPEG_INSTALL_COMMAND = (
+    "sudo apt-get update\n"
+    "sudo apt-get install --yes --no-install-recommends ffmpeg\n"
+    "ffmpeg -version | head -1\n"
+)
 CI_RUN_EXEMPTIONS = {
     "lint": {"Install actionlint", "Check source build compilers"},
     "typecheck": {"Check source build compilers"},
-    "unit": {"Install Gitleaks", "Install Node", "Check source build compilers"},
+    "unit": {
+        "Install Gitleaks",
+        "Install Node",
+        "Install FFmpeg",
+        "Check source build compilers",
+    },
     "ha": {
         "Install Gitleaks",
         "Install Node",
+        "Install FFmpeg",
         "Check source build compilers",
         "result",
     },
@@ -465,6 +476,55 @@ def test_gitleaks_install_precedes_pytest(job_name):
         i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
     )
     assert install < pytest_step
+
+
+@pytest.mark.parametrize("job_name", ["unit", "ha"])
+def test_ffmpeg_install_precedes_audio_tests(job_name):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"][job_name]["steps"]
+    installs = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if step.get("name") == "Install FFmpeg"
+    ]
+    assert len(installs) == 1, "FFMPEG_INSTALL_STEP_MISSING"
+    index, step = installs[0]
+    assert step["run"] == FFMPEG_INSTALL_COMMAND
+    assert index < next(
+        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
+    )
+
+
+@pytest.mark.parametrize("job_name", ["unit", "ha"])
+@pytest.mark.parametrize("mutation", ["missing", "command", "late"])
+def test_ci_requires_ffmpeg_install_for_audio_tests(tmp_path, job_name, mutation):
+    from tools.check_ci import check_jobs
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    for name in ("unit", "ha"):
+        steps = workflow["jobs"][name]["steps"]
+        if not any(step.get("name") == "Install FFmpeg" for step in steps):
+            index = next(
+                i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
+            )
+            steps.insert(
+                index, {"name": "Install FFmpeg", "run": FFMPEG_INSTALL_COMMAND}
+            )
+    path = tmp_path / "ci.yml"
+    path.write_text(yaml.safe_dump(workflow))
+    assert check_jobs(path)
+    steps = workflow["jobs"][job_name]["steps"]
+    install = next(step for step in steps if step.get("name") == "Install FFmpeg")
+    if mutation == "missing":
+        steps.remove(install)
+    elif mutation == "command":
+        install["run"] = install["run"].replace("--no-install-recommends ", "")
+    else:
+        steps.remove(install)
+        steps.append(install)
+    path.write_text(yaml.safe_dump(workflow))
+    with pytest.raises(ValueError, match=f"FFmpeg install {job_name}"):
+        check_jobs(path)
 
 
 @pytest.mark.parametrize("job_name", ["unit", "ha"])

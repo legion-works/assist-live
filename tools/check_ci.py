@@ -50,6 +50,14 @@ def node_install() -> str:
     )
 
 
+def ffmpeg_install() -> str:
+    return (
+        "sudo apt-get update\n"
+        "sudo apt-get install --yes --no-install-recommends ffmpeg\n"
+        "ffmpeg -version | head -1\n"
+    )
+
+
 def ha_2026_11_commands(client_requirement: str) -> list[list[str]]:
     python = ".venv-ha-2026-11/bin/python"
     requirements = [
@@ -141,6 +149,26 @@ def check_jobs(path: str | Path) -> set[str]:
         ]
         if installs != [node_install()]:
             failures.append(f"Node install {name}")
+        steps = jobs.get(name, {}).get("steps", [])
+        ffmpeg_steps = [
+            (index, step.get("run"))
+            for index, step in enumerate(steps)
+            if step.get("name") == "Install FFmpeg"
+        ]
+        first_pytest = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if "pytest" in step.get("run", "")
+            ),
+            -1,
+        )
+        if (
+            len(ffmpeg_steps) != 1
+            or ffmpeg_steps[0][1] != ffmpeg_install()
+            or not 0 <= ffmpeg_steps[0][0] < first_pytest
+        ):
+            failures.append(f"FFmpeg install {name}")
     for name in ("lint", "typecheck", "unit", "ha"):
         job_steps = jobs.get(name, {}).get("steps", [])
         compilers = [

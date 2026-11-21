@@ -4246,3 +4246,50 @@ task ha-2026-11
 The three commands used the idle-CPU wrapper and gave exit code 0.
 No integration runtime code, device, or household service changed.
 Hardware acceptance stays `NOT RUN`.
+
+## Streaming WAV conversion
+
+Date: 2026-11-21 (UTC).
+
+The test `test_ha_tts_stream_conversion_keeps_streaming_wav_pcm` uses the assist-live TTS entity with HA.
+It sends text through `ResultStream.async_set_message_stream` and reads audio with `ResultStream.async_stream_result`.
+It uses `tts.async_create_stream`, the public API that the Assist pipeline uses.
+The test records converter calls without replacing the converter result.
+Sample options make HA use conversion for WAV input and WAV output.
+
+The test checks WAV, `getframerate()==16000`, `getnchannels()==1`, `getsampwidth()==2`, and PCM format.
+The decoded PCM must equal all 3884 bytes from the synthetic server chunks and the entity output.
+The test also checks for audio after the last sample.
+HA `2026.11.2` does not use FFmpeg for compatible-WAV input.
+HA `2026.10.1` and `2026.10.4` use FFmpeg through the same public API.
+
+The scratch mutation `streaming_wav_declares_four_data_bytes` changes the WAV `data` size from `0xFFFFFFFF` to `4`.
+Its Python syntax check gave exit code 0.
+HA's FFmpeg conversion gave exit code 0 with only four PCM bytes.
+The new test gave `1 failed in 0.26s` at `HA_STREAM_PCM_CHANGED`.
+
+Test results:
+
+| HA version | Result |
+|---|---|
+| `2026.10.1` | `1 passed in 0.32s` |
+| `2026.10.4` | `1 passed in 1.68s` |
+| `2026.11.2` | `1 passed in 0.87s` |
+
+The tests used the idle-CPU wrapper. No production code changed.
+Hardware acceptance stays `NOT RUN`.
+
+## FFmpeg prerequisite for WAV tests
+
+Date: 2026-11-21 (UTC).
+
+CI installs FFmpeg before pytest in `unit` and `ha`.
+They run `apt-get update`, then `apt-get install --yes --no-install-recommends ffmpeg`.
+They print the version with `ffmpeg -version | head -1`.
+The CI checker checks the install command and its position before pytest.
+Before this guard, the new tests gave `8 failed in 1.40s`.
+After the guard, the CI and conversion tests gave `79 passed in 16.06s`.
+
+The local test checks for `ffmpeg` on `PATH` without an install command or skip.
+With no binary on `PATH`, it gave `1 failed in 0.30s` at `FFMPEG_REQUIRED_FOR_HA_TTS_CONVERSION`.
+No local packages changed.

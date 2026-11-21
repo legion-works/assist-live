@@ -66,6 +66,11 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Check source build compilers
         run: gcc --version && g++ --version
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
       - run: uv sync --locked
       - run: uv run --locked pytest tests/ -q
   ha:
@@ -111,6 +116,11 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Check source build compilers
         run: gcc --version && g++ --version
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
       - name: Test all contracts on the exact HA version
         env:
           HA_VERSION: ${{ matrix.ha }}
