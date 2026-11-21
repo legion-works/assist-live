@@ -223,7 +223,8 @@ The server ends a turn before the maximum time only with all three conditions:
   Each of these words has its own set of verbs from the HA English sentence templates, and the server documentation lists the sets.
   A verb from the set earlier in the transcript lets the object contain a verb word, as in "turn the switch off".
   A transcript that is only an opening verb or a particle does not complete a command, also after "please" or an initial filler.
-  The words "next", "skip", and "replay" are complete media commands in the templates, so they can end a turn alone.
+  The words "next", "skip", and "replay" are complete media commands in the templates.
+  Thus they can end a turn alone or after "please" or a filler.
 
 If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
 The `safe` and `fast` settings keep all three conditions.
