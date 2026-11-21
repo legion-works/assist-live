@@ -174,6 +174,92 @@ async def pipeline_hass(hass):
     return hass
 
 
+async def test_native_pipeline_preserves_assist_live_stt_result_and_timing(
+    pipeline_hass, client, ledger, drain_timing_events, monkeypatch
+):
+    from assist_live_client.models import HealthCapabilities
+    from homeassistant.components import assist_pipeline, stt
+    from homeassistant.components.stt.const import DATA_COMPONENT
+    from homeassistant.core import Context
+    from test_stt_forward import metadata
+
+    from custom_components.assist_live.stt import AssistLiveSTT
+
+    hass = pipeline_hass
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+    received = []
+
+    async def final(turn_id, stream):
+        received.append((turn_id, b"".join([chunk async for chunk in stream])))
+        yield {"type": "final", "text": "native pipeline command"}
+
+    client.stt = final
+    forward = AssistLiveSTT(
+        "satellite-native",
+        "device-native",
+        client,
+        ledger,
+        "stt.contract_stt",
+        "native-entry",
+    )
+    await hass.data[DATA_COMPONENT].async_add_entities([forward])
+    internal_calls = []
+    internal = forward.internal_async_process_audio_stream
+
+    async def process_internal(metadata, stream):
+        internal_calls.append(metadata)
+        return await internal(metadata, stream)
+
+    monkeypatch.setattr(
+        forward, "internal_async_process_audio_stream", process_internal
+    )
+    pipeline = await assist_pipeline.async_create_default_pipeline(
+        hass, forward.entity_id, "tts.contract_tts", "Native STT"
+    )
+    assert pipeline is not None
+
+    async def audio():
+        yield bytes(640)
+
+    events = []
+    try:
+        await assist_pipeline.async_pipeline_from_audio_stream(
+            hass,
+            context=Context(),
+            event_callback=events.append,
+            stt_metadata=metadata(),
+            stt_stream=audio(),
+            pipeline_id=pipeline.id,
+            end_stage=assist_pipeline.PipelineStage.STT,
+        )
+        await drain_timing_events(ledger)
+        assert [event.type for event in events] == [
+            "run-start",
+            "stt-start",
+            "stt-end",
+            "run-end",
+        ]
+        assert events[2].data == {"stt_output": {"text": "native pipeline command"}}
+        assert len(ledger.records) == 1
+        record = ledger.latest["satellite-native"]
+        assert record.turn.turn_type == "voice"
+        assert record.stages == {"stt_final_received"}
+        assert received == [(record.turn.turn_id, bytes(640))]
+        client.open_turn.assert_awaited_once_with(record.turn)
+        timing = [call.args[0] for call in client.event.await_args_list]
+        assert [(event.turn_id, event.stage) for event in timing] == [
+            (record.turn.turn_id, "stt_final_received")
+        ]
+        if hasattr(stt.SpeechToTextEntity, "async_process_audio_stream_with_progress"):
+            assert internal_calls == [metadata()]
+            assert forward.state is not None
+        else:
+            assert internal_calls == []
+    finally:
+        await ledger.stop_speaker_reads()
+        await ledger.stop_events()
+
+
 async def test_public_in_process_creation_update_and_refusal(pipeline_hass):
     from homeassistant.components import assist_pipeline
 

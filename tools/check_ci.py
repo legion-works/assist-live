@@ -24,6 +24,7 @@ RECORDS_COMMAND = "uv run --locked python tools/check_records.py"
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
     {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
+    {"ha": "2026.11.2", "plugin": "0.13.375", "member": "compatibility"},
 ]
 HA_COMPONENT_REQUIREMENTS = [
     "gazetteer-matcher==1.1.0",
@@ -47,6 +48,34 @@ def node_install() -> str:
         'tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"\n'
         f'echo "$RUNNER_TEMP/node-v{NODE_VERSION}-linux-x64/bin" >> "$GITHUB_PATH"\n'
     )
+
+
+def ha_2026_11_commands(client_requirement: str) -> list[list[str]]:
+    python = ".venv-ha-2026-11/bin/python"
+    requirements = [
+        "home-assistant-intents==2026.10.27"
+        if requirement.startswith("home-assistant-intents==")
+        else requirement
+        for requirement in HA_COMPONENT_REQUIREMENTS
+    ]
+    return [
+        ["uv", "venv", "--allow-existing", "--python", "3.14.2", ".venv-ha-2026-11"],
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            python,
+            "--override",
+            "tests/ha-2026-11-override.txt",
+            "homeassistant==2026.11.2",
+            "pytest-homeassistant-custom-component==0.13.375",
+            "PyYAML==6.0.3",
+            *requirements,
+            client_requirement,
+        ],
+        [python, "-m", "pytest", "-p", "tools.ha_2026_11_pytest", "tests/", "-q"],
+    ]
 
 
 def check_jobs(path: str | Path) -> set[str]:
@@ -125,6 +154,7 @@ def check_jobs(path: str | Path) -> set[str]:
                 i
                 for i, step in enumerate(job_steps)
                 if step.get("run", "").startswith("uv ")
+                or step.get("name") == "Test all contracts on the exact HA version"
             ),
             -1,
         )
@@ -154,13 +184,31 @@ def check_jobs(path: str | Path) -> set[str]:
     for requirement in [*HA_COMPONENT_REQUIREMENTS, client_requirement]:
         required.extend(["--with", requirement])
     required.extend(["pytest", "tests/", "-q"])
-    if shlex.split(command) != required:
+    compatibility_commands = ha_2026_11_commands(client_requirement)
+    expected_lines = [
+        shlex.split('if [ "$HA_VERSION" = "2026.11.2" ]; then'),
+        *compatibility_commands,
+        ["else"],
+        required,
+        ["fi"],
+    ]
+    actual_lines = [shlex.split(line) for line in command.splitlines() if line.strip()]
+    if actual_lines != expected_lines:
         failures.append("HA component requirements command")
     if [
         part for part in shlex.split(command) if part.startswith("assist-live-client")
-    ] != [client_requirement]:
+    ] != [client_requirement, client_requirement]:
         failures.append("client pin .github/workflows/ci.yml")
     taskfile = yaml.safe_load((root / "Taskfile.yml").read_text(encoding="utf-8"))
+    if [
+        shlex.split(cmd)
+        for cmd in taskfile["tasks"].get("ha-2026-11", {}).get("cmds", [])
+    ] != compatibility_commands:
+        failures.append("HA 2026.11.2 Taskfile.yml")
+    if (
+        root / "tests/ha-2026-11-override.txt"
+    ).read_text() != "homeassistant==2026.11.2\n":
+        failures.append("HA 2026.11.2 override")
     current_task = taskfile["tasks"]["check"]
     if not any(
         isinstance(command, dict) and command.get("task") == "records-check"
@@ -189,7 +237,7 @@ def check_jobs(path: str | Path) -> set[str]:
         for part in shlex.split(cmd)
         if part.startswith("assist-live-client")
     ]
-    if task_pins != [client_requirement]:
+    if task_pins != [client_requirement, client_requirement]:
         failures.append("client pin Taskfile.yml")
     locked = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
     lock_url = f"{repository}?subdirectory={subdirectory}&rev={revision}"
@@ -212,6 +260,7 @@ def check_jobs(path: str | Path) -> set[str]:
     if ha.get("outputs") != {
         "minimum": "${{ steps.result.outputs.minimum }}",
         "current": "${{ steps.result.outputs.current }}",
+        "compatibility": "${{ steps.result.outputs.compatibility }}",
     }:
         failures.append("HA member outputs")
     if failures:
@@ -229,7 +278,7 @@ def results_pass(needs: object) -> bool:
         return False
     outputs = needs["ha"].get("outputs", {})
     return isinstance(outputs, dict) and all(
-        outputs.get(member) == "success" for member in ("minimum", "current")
+        outputs.get(member["member"]) == "success" for member in HA_MATRIX
     )
 
 

@@ -1,4 +1,5 @@
 import copy
+import inspect
 from pathlib import Path
 
 import pytest
@@ -252,8 +253,13 @@ async def test_real_ha_agent_records_timer_and_streams(configured_hass, monkeypa
         agent = TestAgent(group)
         await hass.data[conversation.DATA_COMPONENT].async_add_entities([agent])
         received_deltas = []
+        session_options = (
+            {"context": None}
+            if "context" in inspect.signature(async_get_chat_session).parameters
+            else {}
+        )
         with (
-            async_get_chat_session(hass, None) as session,
+            async_get_chat_session(hass, None, **session_options) as session,
             conversation.async_get_chat_log(
                 hass,
                 session,

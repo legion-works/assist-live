@@ -84,7 +84,118 @@ def test_ci_current_member_versions():
     assert HA_MATRIX == [
         {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
         {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
+        {"ha": "2026.11.2", "plugin": "0.13.375", "member": "compatibility"},
     ]
+
+
+def test_ha_2026_11_target_uses_override_and_early_pytest_bootstrap():
+    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
+    commands = taskfile["tasks"].get("ha-2026-11", {}).get("cmds", [])
+    assert len(commands) == 3, "HA 2026.11.2 isolated target missing"
+    args = [shlex.split(command) for command in commands]
+    assert args[0] == [
+        "uv",
+        "venv",
+        "--allow-existing",
+        "--python",
+        "3.14.2",
+        ".venv-ha-2026-11",
+    ]
+    assert args[1][:5] == [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        ".venv-ha-2026-11/bin/python",
+    ]
+    assert args[1][5:7] == ["--override", "tests/ha-2026-11-override.txt"]
+    assert "homeassistant==2026.11.2" in args[1]
+    assert "pytest-homeassistant-custom-component==0.13.375" in args[1]
+    assert "home-assistant-intents==2026.10.27" in args[1]
+    assert args[2] == [
+        ".venv-ha-2026-11/bin/python",
+        "-m",
+        "pytest",
+        "-p",
+        "tools.ha_2026_11_pytest",
+        "tests/",
+        "-q",
+    ]
+
+
+def test_completion_requires_ha_2026_11_output():
+    from tools.check_ci import REQUIRED_JOBS, results_pass
+
+    needs = {job: {"result": "success"} for job in REQUIRED_JOBS - {"ci-complete"}}
+    needs["ha"]["outputs"] = {"minimum": "success", "current": "success"}
+    assert not results_pass(needs), "HA 2026.11.2 result is mandatory"
+    needs["ha"]["outputs"]["compatibility"] = "success"
+    assert results_pass(needs)
+
+
+@pytest.mark.parametrize(
+    "mutation,failure",
+    [
+        ("bootstrap", "HA component requirements command"),
+        ("override-command", "HA component requirements command"),
+        ("intents", "HA component requirements command"),
+        ("matrix", "HA matrix"),
+        ("output", "HA member outputs"),
+        ("local-command", "HA 2026.11.2 Taskfile.yml"),
+        ("override-file", "HA 2026.11.2 override"),
+    ],
+)
+def test_ci_rejects_weakened_ha_2026_11_member(
+    tmp_path, monkeypatch, mutation, failure
+):
+    import shutil
+
+    from tools.check_ci import check_jobs
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
+        ".github/workflows/ci.yml",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    path = tmp_path / ".github/workflows/ci.yml"
+    assert check_jobs(path)
+    workflow = yaml.safe_load(path.read_text())
+    ha = workflow["jobs"]["ha"]
+    step = next(
+        step
+        for step in ha["steps"]
+        if step.get("name") == "Test all contracts on the exact HA version"
+    )
+    if mutation == "bootstrap":
+        step["run"] = step["run"].replace("-p tools.ha_2026_11_pytest ", "")
+    elif mutation == "override-command":
+        step["run"] = step["run"].replace(
+            "--override tests/ha-2026-11-override.txt ", ""
+        )
+    elif mutation == "intents":
+        step["run"] = step["run"].replace("2026.10.27", "2026.10.6")
+    elif mutation == "matrix":
+        ha["strategy"]["matrix"]["include"].pop()
+    elif mutation == "output":
+        del ha["outputs"]["compatibility"]
+    elif mutation == "local-command":
+        target = tmp_path / "Taskfile.yml"
+        taskfile = yaml.safe_load(target.read_text())
+        taskfile["tasks"]["ha-2026-11"]["cmds"][-1] += " --disable-warnings"
+        target.write_text(yaml.safe_dump(taskfile))
+    else:
+        (tmp_path / "tests/ha-2026-11-override.txt").write_text(
+            "homeassistant==2026.10.4\n"
+        )
+    path.write_text(yaml.safe_dump(workflow))
+    with pytest.raises(ValueError, match=failure):
+        check_jobs(path)
 
 
 def test_ci_rejects_previous_current_member(tmp_path):
@@ -116,6 +227,7 @@ def test_ci_records_guard_wiring_has_named_failures(
         "pyproject.toml",
         "uv.lock",
         "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
     ):
         target = tmp_path / name
@@ -162,6 +274,7 @@ def test_ci_rejects_stale_current_carriers(tmp_path, monkeypatch, carrier):
         "pyproject.toml",
         "uv.lock",
         "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
     ):
         target = tmp_path / name
@@ -223,6 +336,7 @@ def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeyp
         "pyproject.toml",
         "uv.lock",
         "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
     ):
         target = tmp_path / name
@@ -257,6 +371,7 @@ def test_client_pin_uses_project_revision(tmp_path, monkeypatch):
         "pyproject.toml",
         "uv.lock",
         "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
     ):
         target = tmp_path / name
@@ -287,6 +402,18 @@ def test_ci_commands_match_taskfile():
             if step_key in exemptions:
                 continue
             parts = [part.strip() for part in run.split("&&") if part.strip()]
+            if (
+                job_name == "ha"
+                and step_key == "Test all contracts on the exact HA version"
+            ):
+                lines = [line.strip() for line in run.splitlines() if line.strip()]
+                assert lines[0] == 'if [ "$HA_VERSION" = "2026.11.2" ]; then'
+                assert [shlex.split(line) for line in lines[1:4]] == [
+                    shlex.split(command)
+                    for command in taskfile["tasks"]["ha-2026-11"]["cmds"]
+                ]
+                assert lines[4] == "else" and lines[6:] == ["fi"]
+                parts = [lines[5]]
             assert parts, f"CI {job_name} has an empty run step: {step_key}"
             for part in parts:
                 try:
@@ -415,13 +542,13 @@ def test_completion_requires_each_success(result):
 
     jobs = check_jobs(ROOT / ".github/workflows/ci.yml") - {"ci-complete"}
     needs: dict[str, dict[str, object]] = {job: {"result": "success"} for job in jobs}
-    outputs = {"minimum": "success", "current": "success"}
+    outputs = {"minimum": "success", "current": "success", "compatibility": "success"}
     needs["ha"]["outputs"] = outputs
     assert results_pass(needs)
     for job in jobs:
         changed = {**needs, job: {**needs[job], "result": result}}
         assert results_pass(changed) is (result == "success")
-    for member in ("minimum", "current"):
+    for member in ("minimum", "current", "compatibility"):
         changed = {
             **needs,
             "ha": {

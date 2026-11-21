@@ -4205,3 +4205,44 @@ The test `test_device_child_conversion_refreshes_hints` changes a device with an
 Before this repair, `tests/test_stt_hints.py` gave `1 failed, 23 passed` on HA 2026.10.4 and on HA 2026.11.2, with the assertion `device_conversion_one_send_per_satellite`.
 After the repair, it gave `24 passed` on the two versions.
 A scratch mutation that removed `parent_device_id` from the device filter gave the same failure on HA 2026.10.4.
+
+## HA 2026.11.2 compatibility
+
+Date: 2026-11-21 (UTC).
+
+The first HA `2026.11.2` run gave `1 failed, 2030 passed`.
+The test called `async_get_chat_session` without the new `context` argument.
+The test checks the helper signature and supplies `context=None` when the helper accepts it.
+The locked development environment stays on HA `2026.10.4`.
+
+The HA `2026.11.2` target uses Python `3.14.2` and test plugin `0.13.375`.
+It installs HA through a dependency override in an isolated virtual environment.
+It uses `home-assistant-intents==2026.10.27` and keeps the other component pins.
+The pytest bootstrap installs the HA HTTP client alias before test plugin `0.13.375` imports `respx`.
+It supplies the logger helper at the import path that test plugin `0.13.375` uses.
+Remove this adapter when a new test plugin release uses the HA helper import paths.
+
+The new native-pipeline test uses the assist-live STT entity and ledger.
+It checks the last transcript, voice turn, timing event, and HA internal STT dispatch.
+A scratch mutation that removed the `stt_final_received` timing mark gave `1 failed` in this test.
+The CI tests first gave `3 failed` for the missing version, target, and result requirement.
+A scratch mutation that omitted the new result requirement also gave `1 failed`.
+The two scratch mutations gave exit code 0 for the Python syntax check before the tests ran.
+
+Commands and results:
+
+```text
+task check
+2041 passed in 119.27s (0:01:59)
+PASS integration bootstrap
+PASS CI
+PASS public data matches=0
+task ha-minimum
+2041 passed in 125.44s (0:02:05)
+task ha-2026-11
+2041 passed in 123.52s (0:02:03)
+```
+
+The three commands used the idle-CPU wrapper and gave exit code 0.
+No integration runtime code, device, or household service changed.
+Hardware acceptance stays `NOT RUN`.
