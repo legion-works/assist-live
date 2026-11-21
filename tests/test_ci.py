@@ -6,11 +6,6 @@ import yaml
 from test_public_tree import denylist, repository  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
-FFMPEG_INSTALL_COMMAND = (
-    "sudo apt-get update\n"
-    "sudo apt-get install --yes --no-install-recommends ffmpeg\n"
-    "ffmpeg -version | head -1\n"
-)
 CI_RUN_EXEMPTIONS = {
     "lint": {"Install actionlint", "Check source build compilers"},
     "typecheck": {"Check source build compilers"},
@@ -480,6 +475,8 @@ def test_gitleaks_install_precedes_pytest(job_name):
 
 @pytest.mark.parametrize("job_name", ["unit", "ha"])
 def test_ffmpeg_install_precedes_audio_tests(job_name):
+    from tools.check_ci import ffmpeg_install
+
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"][job_name]["steps"]
     installs = [
@@ -489,7 +486,7 @@ def test_ffmpeg_install_precedes_audio_tests(job_name):
     ]
     assert len(installs) == 1, "FFMPEG_INSTALL_STEP_MISSING"
     index, step = installs[0]
-    assert step["run"] == FFMPEG_INSTALL_COMMAND
+    assert step["run"] == ffmpeg_install()
     assert index < next(
         i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
     )
@@ -501,15 +498,6 @@ def test_ci_requires_ffmpeg_install_for_audio_tests(tmp_path, job_name, mutation
     from tools.check_ci import check_jobs
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    for name in ("unit", "ha"):
-        steps = workflow["jobs"][name]["steps"]
-        if not any(step.get("name") == "Install FFmpeg" for step in steps):
-            index = next(
-                i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
-            )
-            steps.insert(
-                index, {"name": "Install FFmpeg", "run": FFMPEG_INSTALL_COMMAND}
-            )
     path = tmp_path / "ci.yml"
     path.write_text(yaml.safe_dump(workflow))
     assert check_jobs(path)

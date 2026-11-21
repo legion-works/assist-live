@@ -4293,3 +4293,11 @@ After the guard, the CI and conversion tests gave `79 passed in 16.06s`.
 The local test checks for `ffmpeg` on `PATH` without an install command or skip.
 With no binary on `PATH`, it gave `1 failed in 0.30s` at `FFMPEG_REQUIRED_FOR_HA_TTS_CONVERSION`.
 No local packages changed.
+
+The WAV test checks mono output and stereo output.
+For HA `2026.11.2`, it checks no FFmpeg subprocess for mono and one FFmpeg subprocess with raw-PCM input for stereo.
+The CI tests use `ffmpeg_install()` without the previous setup loop.
+Stereo PCM follows FFmpeg's `-3 dB` pan law, with equal outputs and a `1 LSB` tolerance.
+
+The conversion tests give `2 passed` on each of HA `2026.10.1`, `2026.10.4`, and `2026.11.2`. The CI tests give `78 passed`.
+A scratch change that writes the stereo WAV without FFmpeg gives a failure at `HA_WAV_FFMPEG_NOT_USED`.
