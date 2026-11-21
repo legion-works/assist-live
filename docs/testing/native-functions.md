@@ -168,7 +168,10 @@ An unavailable expectation or missing operation test records cause an unsatisfac
 
 The fault file contains `trials`, with ten entries for each `stage`: `before`, `speech`, `pause`, and `after-final`.
 Each trial must have `turn_id`, `recognized_transcript`, `evaluated_intent`, `action_trace`, and `action_trace_complete: true`.
-The fault gate compares the transcript with the labelled text and compares the operation log with `expected_operations`.
+The fault gate compares the transcript with the same engine's no-fault baseline, not the labelled text.
+It checks the corpus intent and operations through `intent_matches` and `expected_operations`.
+See the [baseline rules](fault-runner.md#same-engine-baselines).
+
 It does not use `correct_transcript`, `operations_correct`, or `empty_transcript` flags as proof.
 The empty-safe alternative has a recorded `stt-no-text-recognized` error from the same pipeline run and a complete empty operation log.
 It has a recorded turn ID, empty `operations`, no agent record, and an end time at or before the fallback deadline.
@@ -206,7 +209,7 @@ This option keeps the same STT and TTS engines and does not set the copy as a sa
 It records the pipeline list and select states before and after the test, deletes the copy at exit, and checks equality.
 The temporary path uses the virtual timer receiver and a new turn ID from the STT device's public sensor.
 
-If the pipeline list has `assist-live f11-smoke`, the runner refuses to start and prints its ID. It does not delete that pipeline.
+The runner refuses a known obsolete smoke pipeline and prints its ID. It does not delete that pipeline.
 Cleanup waits through cancellation. Each delete call has a different 30-second timeout, with a maximum of two calls.
 
 Each delete call opens a new authenticated WebSocket connection, also when the control connection has closed.
@@ -219,13 +222,12 @@ The message removes authentication tokens, URLs, and addresses.
 If deletion is unsatisfactory, `TEMPORARY_PIPELINE_DELETE_FAILED` identifies the pipeline for operator cleanup, and the command exits with an error.
 
 Without that record, the trial is unsatisfactory unless the same-run empty-safe error gives the necessary proof.
-The output uses the M14 fields with `scope: simulated` and `mode: smoke`.
+The output uses the trial fields with `scope: simulated` and `mode: smoke`.
 Missing device events stay `null`. Simulated trials cannot satisfy the hardware fault gate.
 
 Native device rows and virtual rows have different lists for the two server states.
-Do not put simulated output in `docs/reports/`.
-Only a non-simulated command with `--check` can write JSON in `docs/reports/`.
-Other repository output paths are not permitted.
+Keep simulated and hardware fault output external to the repository.
+The runner refuses repository output paths in these modes, also with `--check`.
 Two-satellite concurrency runs in the HA test harness, not on a second physical device.
 
 Hardware replay, calibration, native-device observations, and P1 acceptance stay `NOT RUN` without observation records.

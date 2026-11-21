@@ -7,6 +7,8 @@
 | `custom_components/assist_live/stt_fallback.py` | Bounded turn audio, replay, and local voice detection |
 | `custom_components/assist_live/tts_fallback.py` | WAV format checks and PCM extraction |
 | `custom_components/assist_live/diagnostics.py` | Content-free failure counts and fallback mode |
+| `custom_components/assist_live/stt_hints.py`, `tests/test_stt_hints.py`, `test_stt_hints_contract.py` | HA Assist names, change subscriptions, and HA interface contracts |
+| `custom_components/assist_live/llm.py`, `tests/test_llm.py` | Spoken-reply rules for the HA Assist API |
 | `custom_components/assist_live/sensor.py` | Last-turn latency, quality, source, and uncertainty for each satellite |
 | `docs/configuration.md`, `docs/privacy.md` | Modes, local-only limits, transcript policy, and diagnostics |
 | `tests/test_modes.py`, `test_diagnostics.py`, `test_sensor.py` | Destination policy, metadata, redaction, and timing tests |
@@ -16,6 +18,8 @@
 | `tests/test_stt_forward.py`, `test_tts_forward.py`, `test_ledger.py` | Forwarding, cancellation, playback separation, and turn rules |
 | `tests/test_stt_fallback.py` | Server-message timers, failover, replay, and deadline checks |
 | `tests/test_tts_stream.py`, `test_tts_fallback.py` | Stream order, text replay, format agreement, and failure notifications |
+| `tests/test_tts_stream_conversion.py` | Streamed WAV conversion through HA and FFmpeg |
+| `tests/test_fallback_lifecycle.py`, `test_options_fallback.py` | Engine reloads, stored metadata, and fallback selection changes |
 | `docs/troubleshooting/tts.md` | TTS fallback rules and notification settings |
 | `docs/troubleshooting/stt.md` | STT fallback limits and failure checks |
 | `tests/test_config_flow.py`, `test_repairs.py`, `test_tts_lookup_contract.py` | HA runtime setup, repair issues, and TTS lookup contract |
@@ -34,6 +38,12 @@
 | `tests/fixtures/ha-virtual.yaml`, `tests/fixtures/intents.json` | Isolated virtual entities and intent inventory |
 | `docs/testing/virtual-intents.md` | Virtual test installation, records, and limits |
 | `docs/testing/corpus.md`, `docs/testing/recording-kit.md` | Corpus contract, boundary procedure, and volunteer recording kit |
+| `tools/correct_transcripts.py`, `tools/timer_selection.py` | Correct transcripts, listening review, and held-out recording replacements |
+| `tools/device_replay.py`, `tools/calibrate_playback.py` | Device replay and acoustic playback calibration |
+| `tools/fault_runner.py`, `tools/fault_hardware.py` | Simulated and hardware fault trials with same-engine baselines |
+| `tools/report.py`, `tools/measurement.py`, `tools/metrics.py`, `tools/result_text.py` | Acceptance reports, timing, and text rules |
+| `tools/native_matrix.py`, `docs/testing/native-functions.md` | Native-function observations and report procedures |
+| `docs/testing/fault-runner.md`, `docs/testing/measurement-rules.md` | Fault qualification, timing, missing events, and uncertainty rules |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Python metadata and test dependencies |
 | Root Markdown files | Project status, architecture, contribution rules, and vulnerability reports |
 | `LICENSE` | Full Apache-2.0 license |

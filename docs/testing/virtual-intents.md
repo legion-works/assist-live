@@ -67,7 +67,7 @@ The tool sorts replay recording IDs in the selected partition.
 The first half uses short replies. The second half uses long replies.
 Each group must contain a minimum of 50 commands.
 A group with fewer commands stops the run.
-The current held-out replay set supplies 100 commands for each group.
+The current held-out replay set supplies 100 short-reply commands and 101 long-reply commands.
 
 The tool sends each labelled transcript through the usual conversation API in the two phase runs.
 These runs check constant response words, intent selection, and operation records.

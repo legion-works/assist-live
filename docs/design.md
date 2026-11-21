@@ -23,9 +23,17 @@ Each satellite must keep these functions:
 
 All device control uses the HA agent and HA exposure rules.
 The integration must not patch private HA classes.
-The only non-public interface in the design is `tts.helper.get_engine_instance`.
+The TTS fallback uses the non-public interface `tts.helper.get_engine_instance`.
 A contract test examines that function on each selected HA version.
 P4 proposes a public replacement.
+
+STT name hints also use three non-public HA functions:
+
+- `homeassistant.components.homeassistant.exposed_entities.async_should_expose`
+- `homeassistant.components.homeassistant.exposed_entities.async_listen_entity_updates`
+- `homeassistant.helpers.intent.async_get_entity_aliases`
+
+Contract tests examine their signatures and behavior on each HA version in CI.
 
 HA developer documentation also gives two public entity-interface types that their component modules do not export through `__all__`:
 
@@ -44,7 +52,7 @@ Contract tests pin their import paths and the fields that assist-live uses on ea
 
 The HA app must not go into the HACS repository.
 The project selects `2026.10.1` as the HA minimum.
-The CI matrix tests HA `2026.10.1` and `2026.10.4`.
+The CI matrix tests HA `2026.10.1`, `2026.10.4`, and `2026.11.2`.
 The baseline runtime is stock HA `2026.10.3`.
 These versions are design targets, not a compatibility claim.
 
@@ -262,6 +270,7 @@ Thus the `final` transcript does not change when the client divides the same aud
 The server setting `ASSIST_LIVE_END_RULE` selects the end rule of the turn detector.
 The value `partial` is the default and keeps the current rule.
 Before the maximum time without voice, the end conditions use the newest `partial` transcript that is available.
+
 The value `checkpoint` is available only with the Parakeet STT provider.
 A cloud provider cannot stop a decode at a given position in the turn audio.
 With a different STT provider, the server does not start, and the error message names `ASSIST_LIVE_END_RULE`.

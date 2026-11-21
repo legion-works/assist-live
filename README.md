@@ -4,6 +4,7 @@ Realtime voice work on the native Home Assistant Assist pipeline.
 
 **Experimental. No release is available.** The integration supplies STT, TTS, and latency sensor entities for each satellite.
 It forwards voice through the server and uses standard HA engines for fallback.
+It sends Assist names as STT hints and gives spoken-reply rules to agents that use the Assist API.
 A published client package is necessary for installation through HA. See [setup](docs/setup.md).
 
 ## Purpose
@@ -15,7 +16,9 @@ These are design goals, not compatibility or performance claims.
 ## Development
 
 Use Python `3.14.2` or a subsequent version and `uv`.
-The test matrix uses HA `2026.10.1` (minimum) and `2026.10.4` (current).
+Install FFmpeg and make sure that `ffmpeg` is on `PATH` for the local tests.
+The test matrix uses HA `2026.10.1` (minimum), `2026.10.4`, and `2026.11.2`.
+The locked development environment uses HA `2026.10.4`.
 Run these commands from the repository root:
 
 ```sh
