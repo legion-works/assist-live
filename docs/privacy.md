@@ -97,7 +97,10 @@ HA keeps no runtime audio or transcript in its saved turn state.
 Audio buffers are in memory only for the current request and its fallback.
 
 The background timing sender keeps at most 512 pending events in memory, with a request in flight.
-These events contain timing and service metadata, not audio, transcripts, or reply text.
+These events contain timing and service metadata, not audio or reply text.
+A turn that uses the fallback STT engine is different when the turn lets the server store transcripts.
+Its `stt_final` event then also contains the transcript. The server stores it only when its own setting also lets it.
+
 After a send failure, pending events wait for a satisfactory maintenance health check and can outlive their local turn records.
 Integration shutdown cancels the sender and discards pending events without a last send or disk write.
 Diagnostics count queue overflow and refused-event removals in `timing_events_dropped`. This counter contains no event content.

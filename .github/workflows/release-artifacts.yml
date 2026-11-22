@@ -24,7 +24,7 @@ jobs:
         run: uv run --locked python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version "$CLIENT_VERSION" --require-published
       - name: Build and check the archive without publication
         run: |
-          git archive --format=zip --output="$RUNNER_TEMP/assist-live.zip" HEAD custom_components/assist_live hacs.json LICENSE
+          git archive --format=zip --output="$RUNNER_TEMP/assist-live.zip" HEAD custom_components/assist_live hacs.json LICENSE uv.lock
           unzip -t "$RUNNER_TEMP/assist-live.zip"
           mkdir "$RUNNER_TEMP/package"
           unzip -q "$RUNNER_TEMP/assist-live.zip" -d "$RUNNER_TEMP/package"

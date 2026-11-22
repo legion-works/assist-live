@@ -4362,3 +4362,68 @@ The installed client dependency versions are:
 
 These results use the pinned HA and test-plugin versions, with `tests/ha-2026-11-override.txt` for HA 2026.11.2.
 They do not prove live hardware acceptance.
+
+## Fallback transcripts and tool checks
+
+Date: 2026-11-22 (UTC).
+
+The measurement table gives the integration ownership of `stt_final` when HA uses its STT fallback.
+The ledger sends this event to the server after the `fallback_used` event for `stt`.
+The fallback supplies `data.transcript` only when the turn requests transcript storage.
+The permission comes from the turn-open request, not a subsequent option change.
+The server must also let the turn store transcripts.
+The replay tool reads this field from the exported `stt_final` event.
+
+The fallback tests first gave `2 failed, 34 passed` because the transcript field was missing.
+After the repair, they gave `36 passed`.
+A scratch mutation removed the permission check and gave `2 failed, 34 passed`.
+The two failures identified transcript disclosure on turns without permission.
+
+The release workflow check refuses a null, list, or string `env` value with `release pin environment`.
+These tests first gave `3 failed, 85 passed` with `AttributeError`.
+After the repair, the CI tests gave `88 passed`.
+A scratch mutation removed the guard and reproduced all three failures.
+The release-pin and CI tools share the client-version pattern from `check_release_pin.py`.
+No new module is necessary.
+
+The archive test runs the workflow's archive, extraction, and package-check commands locally without publication.
+The first run gave `release_archive_packaging_failed` and `['manifest requirements']` because `uv.lock` was missing.
+The archive includes `uv.lock` and keeps the client-pin check.
+The package tests then gave `2 passed`.
+A scratch mutation omitted `uv.lock` and reproduced the named failure.
+
+The P1 device `ProfileSelector` is unavailable, as `docs/testing/device-replay.md` states.
+P1 cannot run without an adapter that applies `safe` and `fast` and checks the selected device setting.
+The documentation gives no adapter selection for a CLI selector.
+The selector code did not change.
+
+### Hint length sample on HA 2026.11.2
+
+A synthetic sample used 12 device names with four entity names each in the HA registries.
+The HA alias helper supplied each complete name with its device prefix.
+Five of the 48 names had more than 64 characters, and the hint builder kept 43 names.
+One of 40 names was longer than the limit in the group with ten ordinary device names.
+Four of eight names were longer than the limit in the group with two deliberately long device names.
+The five long names had 67, 68, 70, 85, and 88 characters.
+
+This purpose-selected sample is not a measurement of name frequency in installations.
+Keep the server limit unchanged, and continue to reject long names.
+Use a short explicit Assist alias when a complete name is longer than the limit.
+Truncation can change a device name or make two names the same.
+
+### Complete check results
+
+The serialized checks gave these results:
+
+| Command | Result |
+|---|---|
+| `task check` with the private denylist | Exit 0, `2072 passed in 72.03s` |
+| `task ha-minimum` | Exit 0, `2072 passed in 71.11s` |
+| `task ha-2026-11` | Exit 0, `2072 passed in 418.88s` |
+
+Each command used the idle-CPU wrapper and a 40-minute limit.
+The main check included the formatter, linter, workflow check, type check, bootstrap, CI, append-only record check, and public-data checks.
+The type check found no issues in 37 source files.
+Gitleaks found no leaks, and the public-data check gave `matches=0`.
+The local package check and the script-mode CI check also gave `PASS`.
+These checks do not prove hardware acceptance or supply the missing P1 adapter.

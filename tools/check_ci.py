@@ -6,8 +6,14 @@ import re
 import shlex
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING or __package__:
+    from .check_release_pin import CLIENT_VERSION_PATTERN
+else:
+    from check_release_pin import CLIENT_VERSION_PATTERN
 
 REQUIRED_JOBS = {
     "lint",
@@ -105,7 +111,7 @@ def check_jobs(path: str | Path) -> set[str]:
         or len(requirements) != 1
         or not isinstance(requirements[0], str)
         or not re.fullmatch(
-            r"assist-live-client==[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?",
+            rf"assist-live-client=={CLIENT_VERSION_PATTERN}",
             requirements[0],
         )
     ):
@@ -126,11 +132,17 @@ def check_jobs(path: str | Path) -> set[str]:
     release = yaml.safe_load(
         (root / ".github/workflows/release-artifacts.yml").read_text(encoding="utf-8")
     )
-    if [
-        (step.get("env", {}).get("CLIENT_VERSION"), shlex.split(step.get("run", "")))
+    release_steps = [
+        step
         for job in release["jobs"].values()
         for step in job["steps"]
         if "tools/check_release_pin.py" in step.get("run", "")
+    ]
+    if any(not isinstance(step.get("env"), dict) for step in release_steps):
+        raise ValueError("release pin environment")
+    if [
+        (step["env"].get("CLIENT_VERSION"), shlex.split(step.get("run", "")))
+        for step in release_steps
     ] != [(client_version, shlex.split(RELEASE_PIN_COMMAND))]:
         failures.append("client pin .github/workflows/release-artifacts.yml")
     current = next(member for member in HA_MATRIX if member["member"] == "current")

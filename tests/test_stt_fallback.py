@@ -34,6 +34,65 @@ def stages(ledger):
     return next(iter(ledger.records.values())).stages
 
 
+@pytest.mark.parametrize("record_transcripts", [False, True])
+async def test_fallback_final_sends_opted_in_transcript_after_its_owner_marker(
+    client, ledger, drain_timing_events, record_transcripts
+):
+    from assist_live_client.models import STAGE_OWNERS
+
+    ledger.record_transcripts = record_transcripts
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+
+    async def lost(*args):
+        raise ProtocolError("closed")
+        yield
+
+    client.stt = lost
+    result = await entity(client, ledger, Fallback()).async_process_audio_stream(
+        metadata(), audio([bytes(320)])
+    )
+    assert result.text == "test command"
+    await drain_timing_events(ledger)
+    events = [call.args[0] for call in client.event.call_args_list]
+    final = next(event for event in events if event.stage == "stt_final")
+    marker = next(event for event in events if event.stage == "fallback_used")
+    assert marker.data["part"] == "stt"
+    assert events.index(marker) < events.index(final), "fallback_owner_marker_first"
+    assert final.source == STAGE_OWNERS["stt_final"]["fallback"]
+    assert final.turn_id == marker.turn_id
+    assert client.open_turn.call_args.args[0].record_transcripts is record_transcripts
+    assert final.data == (
+        {"transcript": "test command"} if record_transcripts else {}
+    ), "fallback_transcript_requires_turn_permission"
+
+
+@pytest.mark.parametrize("initial_permission", [False, True])
+async def test_fallback_transcript_uses_turn_permission_not_later_option(
+    client, ledger, drain_timing_events, initial_permission
+):
+    ledger.record_transcripts = initial_permission
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+
+    async def lost(*args):
+        ledger.record_transcripts = not initial_permission
+        raise ProtocolError("closed")
+        yield
+
+    client.stt = lost
+    await entity(client, ledger, Fallback()).async_process_audio_stream(
+        metadata(), audio([bytes(320)])
+    )
+    await drain_timing_events(ledger)
+    final = next(
+        call.args[0]
+        for call in client.event.call_args_list
+        if call.args[0].stage == "stt_final"
+    )
+    assert final.data == (
+        {"transcript": "test command"} if initial_permission else {}
+    ), "fallback_transcript_uses_immutable_turn_permission"
+
+
 @pytest.mark.parametrize("delay,expected", [(0.199, "server"), (0.201, "test command")])
 async def test_health_has_its_own_deadline(client, ledger, clock, delay, expected):
     entered, release = asyncio.Event(), asyncio.Event()

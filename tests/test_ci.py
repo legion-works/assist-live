@@ -328,6 +328,43 @@ def test_ci_has_required_jobs():
     }
 
 
+@pytest.mark.parametrize("environment", [None, [], "invalid"])
+def test_release_step_invalid_environment_has_named_failure(
+    tmp_path, monkeypatch, capsys, environment
+):
+    import shutil
+
+    from tools import check_ci
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    monkeypatch.setattr(check_ci, "__file__", str(tmp_path / "tools/check_ci.py"))
+    release = tmp_path / ".github/workflows/release-artifacts.yml"
+    workflow = yaml.safe_load(release.read_text())
+    step = next(
+        step
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        if "tools/check_release_pin.py" in step.get("run", "")
+    )
+    step["env"] = environment
+    release.write_text(yaml.safe_dump(workflow))
+    assert (
+        check_ci.main(["--workflow", str(tmp_path / ".github/workflows/ci.yml")]) == 1
+    )
+    assert capsys.readouterr().out == "FAIL CI release pin environment\n"
+
+
 def test_client_pin_manifest_mismatch_has_named_failure(tmp_path, monkeypatch):
     import json
     import shutil

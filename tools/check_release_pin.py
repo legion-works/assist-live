@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+CLIENT_VERSION_PATTERN = r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?"
+
 
 def published(version: str) -> bool:
     try:
@@ -28,9 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         requirements = json.loads(args.manifest.read_text())["requirements"]
-        if not re.fullmatch(
-            r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?", args.pypi_version
-        ):
+        if not re.fullmatch(CLIENT_VERSION_PATTERN, args.pypi_version):
             raise ValueError("invalid client version")
         pins = [item for item in requirements if item.startswith("assist-live-client")]
         if pins != [f"assist-live-client=={args.pypi_version}"]:

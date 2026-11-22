@@ -369,6 +369,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
                     "stt_final"
                     if result.result == stt.SpeechResultState.SUCCESS
                     else "stt_failed",
+                    transcript=result.text,
                 )
                 return (
                     result if result.result == stt.SpeechResultState.SUCCESS else failed

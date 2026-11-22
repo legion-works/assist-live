@@ -464,6 +464,7 @@ class TurnLedger:
         *,
         decision_source: str | None = None,
         reason: FallbackReason | None = None,
+        transcript: str | None = None,
     ) -> None:
         record = self.records.get(turn_id)
         if record is None or self._events_stopped:
@@ -490,6 +491,12 @@ class TurnLedger:
                 self.changed()
                 return
         data: dict[str, object] = {}
+        if (
+            stage == "stt_final"
+            and record.turn.record_transcripts
+            and transcript is not None
+        ):
+            data["transcript"] = transcript
         if decision_source is not None:
             data["decision_source"] = decision_source
         if reason is not None:
