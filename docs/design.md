@@ -235,6 +235,10 @@ The server ends a turn before the maximum time only with all three conditions:
   A transcript that is only an opening verb or a particle does not complete a command, also after "please" or an initial filler.
   The words "next", "skip", and "replay" are complete media commands in the templates.
   Thus they can end a turn alone or after "please" or a filler.
+  A transcript of only start words, such as "please", a filler, or "could you", does not complete a command.
+  The opening verbs are first words of the HA English sentence templates. No template of three words or fewer ends with an opening verb.
+  The words "cancel" and "continue" are not opening verbs, because a person frequently says them alone as a reply.
+  Thus a scene or a script with a start-word name ends at the maximum time without voice.
 
 If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
 The `safe` and `fast` settings keep all three conditions.
@@ -454,6 +458,19 @@ A measurement on the development host selected it from five engine configuration
 The `assist-live-server` record `docs/research/q7t-local-tts.md` gives the results.
 Full-file engines are fallback only.
 
+A TTS server on a private address can be the local TTS provider when it has an OpenAI-compatible `POST /v1/audio/speech` route.
+An example is a voice-clone server on a GPU host on the local network.
+The server sends one request for each sentence, in sequence, and sends the audio of each WAV to HA when it gets it.
+
+The provider reads the rate from each WAV header. It sends 16000 Hz and 22050 Hz audio without change and changes other rates to 22050 Hz mono, the format of the local Piper fallback.
+Thus a 22050 Hz reply can continue with the fallback after audio starts.
+The TTS server gives the voice list, and the configuration can make the list smaller.
+
+The destination is `local` only for a private address, so local-only mode refuses a public address.
+An optional key comes from a file. The key does not go to logs, health, metrics, or the turn record.
+The first audio can come some seconds after the request.
+A request failure starts the HA fallback.
+
 A license does not stop the selection of a model, voice, runtime, or library.
 Each component has a record with its pinned source, SHA-256, license, and attribution.
 The integration and server code have the Apache-2.0 license.
@@ -589,6 +606,9 @@ The guarantee does not include the selected conversation agent. Diagnostics show
 Local-only mode is not a network firewall.
 
 The first speaker-ID plug-in uses the Murdock HTTP API.
+The plug-in gets the same audio as the last transcript. The audio stops at the end sample in the two end rules.
+If cancellation stops a provider push, the plug-in audio can be one push shorter than the `final` audio. The gateway does not send that push again.
+
 In local-only mode, the server checks for local addresses at configuration and at each connection.
 The speaker result goes only to the turn record and `assist_live_speaker`. It does not go into the agent transcript.
 Cloud audio uses explicit selection of cloud STT, fallback STT, or speaker-ID service.
