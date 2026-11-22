@@ -164,6 +164,8 @@ def test_ci_rejects_weakened_ha_2026_11_member(
         "Taskfile.yml",
         "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -235,6 +237,8 @@ def test_ci_records_guard_wiring_has_named_failures(
         "Taskfile.yml",
         "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -282,6 +286,8 @@ def test_ci_rejects_stale_current_carriers(tmp_path, monkeypatch, carrier):
         "Taskfile.yml",
         "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -322,19 +328,66 @@ def test_ci_has_required_jobs():
     }
 
 
+def test_client_pin_manifest_mismatch_has_named_failure(tmp_path, monkeypatch):
+    import json
+    import shutil
+
+    from tools.check_ci import check_jobs
+
+    for name in (
+        "pyproject.toml",
+        "uv.lock",
+        "Taskfile.yml",
+        "tests/ha-2026-11-override.txt",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / name, target)
+    target = tmp_path / "custom_components/assist_live/manifest.json"
+    manifest = json.loads(target.read_text())
+    manifest["requirements"] = ["assist-live-client==1.2.3"]
+    target.write_text(json.dumps(manifest))
+    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
+    with pytest.raises(ValueError, match="client pin pyproject.toml"):
+        check_jobs(tmp_path / ".github/workflows/ci.yml")
+
+
+def test_package_refuses_git_client_source(packaged_root):
+    import re
+
+    from tools.check_packaging import check_packaging
+
+    path = packaged_root / "uv.lock"
+    content = path.read_text()
+    content = re.sub(
+        r'(name = "assist-live-client"\nversion = "[^"]+"\n)source = [^\n]+',
+        r'\1source = { git = "https://example.com/client" }',
+        content,
+    )
+    path.write_text(content)
+    assert "manifest requirements" in check_packaging(packaged_root)
+
+
 @pytest.mark.parametrize(
     "carrier,field",
     [
         ("uv.lock", "all"),
         ("uv.lock", "resolved"),
         ("uv.lock", "declared"),
+        ("uv.lock", "source"),
+        ("pyproject.toml", "all"),
+        ("pyproject.toml", "source"),
         ("Taskfile.yml", "all"),
         (".github/workflows/ci.yml", "all"),
+        (".github/workflows/release-artifacts.yml", "all"),
+        (".github/workflows/release-artifacts.yml", "command"),
     ],
 )
 def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeypatch):
     import shutil
-    import tomllib
 
     from tools.check_ci import check_jobs
 
@@ -344,45 +397,60 @@ def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeyp
         "Taskfile.yml",
         "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / name, target)
-    revision = tomllib.loads((tmp_path / "pyproject.toml").read_text())["tool"]["uv"][
-        "sources"
-    ]["assist-live-client"]["rev"]
     target = tmp_path / carrier
     content = target.read_text()
     if field == "resolved":
-        content = content.replace(f"#{revision}", f"#{'0' * 40}")
+        content = content.replace(
+            'name = "assist-live-client"\nversion = "0.1.0a1"',
+            'name = "assist-live-client"\nversion = "0.0.0"',
+        )
     elif field == "declared":
-        content = content.replace(f'rev={revision}"', f'rev={"0" * 40}"')
+        content = content.replace('specifier = "==0.1.0a1"', 'specifier = "==0.0.0"')
+    elif field == "command":
+        content = content.replace('"$CLIENT_VERSION"', '"0.0.0"')
+    elif field == "source":
+        if carrier == "pyproject.toml":
+            content += (
+                "\n[tool.uv.sources]\nassist-live-client = "
+                '{ git = "https://example.com/client" }\n'
+            )
+        else:
+            content = content.replace(
+                'name = "assist-live-client"\nversion = "0.1.0a1"\n'
+                'source = { registry = "https://pypi.org/simple" }',
+                'name = "assist-live-client"\nversion = "0.1.0a1"\n'
+                'source = { git = "https://example.com/client" }',
+            )
     else:
-        content = content.replace(revision, "0" * 40)
+        content = content.replace("0.1.0a1", "0.0.0")
+    assert content != target.read_text()
     target.write_text(content)
     monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
     with pytest.raises(ValueError, match=f"client pin {carrier}"):
         check_jobs(tmp_path / ".github/workflows/ci.yml")
 
 
-def test_client_pin_uses_project_revision(tmp_path, monkeypatch):
-    import tomllib
-
+def test_client_pin_uses_manifest_version(tmp_path, monkeypatch):
     from tools.check_ci import check_jobs
 
-    revision = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"][
-        "sources"
-    ]["assist-live-client"]["rev"]
     for name in (
         "pyproject.toml",
         "uv.lock",
         "Taskfile.yml",
         "tests/ha-2026-11-override.txt",
         ".github/workflows/ci.yml",
+        ".github/workflows/release-artifacts.yml",
+        "custom_components/assist_live/manifest.json",
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text((ROOT / name).read_text().replace(revision, "1" * 40))
+        target.write_text((ROOT / name).read_text().replace("0.1.0a1", "1.2.3"))
     monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
     assert check_jobs(tmp_path / ".github/workflows/ci.yml")
 
@@ -812,6 +880,7 @@ def test_client_requirement_tracks_lock_version(tmp_path):
 
     (tmp_path / "uv.lock").write_text(
         '[[package]]\nname="assist-live-client"\nversion="1.2.3"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
     )
     assert valid_client_requirement(tmp_path, ["assist-live-client==1.2.3"])
     assert not valid_client_requirement(tmp_path, ["assist-live-client==0.0.0"])
@@ -867,7 +936,7 @@ def test_release_archive_checks_published_client_before_build(tmp_path):
         f"#!{sys.executable}\nimport sys\n"
         "assert sys.argv[1:4] == ['run', '--locked', 'python']\n"
         "assert '--require-published' in sys.argv\n"
-        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.0.0'\n"
+        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.1.0a1'\n"
         "raise SystemExit(19)\n"
     )
     uv.chmod(0o755)

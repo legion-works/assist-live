@@ -22,10 +22,9 @@ Use no more than five satellites with one token.
 The server has 16 audio and event connection slots for each token.
 Each satellite can use one event connection and two audio connections.
 
-The manifest pins `assist-live-client==0.0.0`.
-That client is not on PyPI at this time.
-Local tests and CI use the Git source and commit in `uv.lock`.
-The approved client release is necessary for installation through HA.
+The manifest pins the published pre-release `assist-live-client==0.1.0a1` from PyPI.
+HA, local tests, and CI install that same client version.
+The integration itself has no release.
 Do not replace the manifest requirement with a local path or Git URL.
 
 ## Pipelines and voices

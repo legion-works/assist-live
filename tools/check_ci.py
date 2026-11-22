@@ -21,6 +21,11 @@ REQUIRED_JOBS = {
 }
 RESULT_COMMAND = 'uv run --locked python tools/check_ci.py --results "$NEEDS_JSON"'
 RECORDS_COMMAND = "uv run --locked python tools/check_records.py"
+RELEASE_PIN_COMMAND = (
+    "uv run --locked python tools/check_release_pin.py"
+    " --manifest custom_components/assist_live/manifest.json"
+    ' --pypi-version "$CLIENT_VERSION" --require-published'
+)
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
     {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
@@ -89,18 +94,45 @@ def ha_2026_11_commands(client_requirement: str) -> list[list[str]]:
 def check_jobs(path: str | Path) -> set[str]:
     root = Path(__file__).resolve().parents[1]
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    source = project["tool"]["uv"]["sources"]["assist-live-client"]
-    repository, revision, subdirectory = (
-        source["git"],
-        source["rev"],
-        source["subdirectory"],
+    manifest = json.loads(
+        (root / "custom_components/assist_live/manifest.json").read_text(
+            encoding="utf-8"
+        )
     )
-    client_requirement = (
-        f"assist-live-client @ git+{repository}@{revision}#subdirectory={subdirectory}"
-    )
+    requirements = manifest["requirements"]
+    if (
+        not isinstance(requirements, list)
+        or len(requirements) != 1
+        or not isinstance(requirements[0], str)
+        or not re.fullmatch(
+            r"assist-live-client==[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?",
+            requirements[0],
+        )
+    ):
+        raise ValueError("client pin manifest.json")
+    client_requirement = requirements[0]
+    client_version = client_requirement.split("==")[1]
     workflow = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     failures = []
+    if [
+        requirement
+        for requirement in project["dependency-groups"]["dev"]
+        if requirement.startswith("assist-live-client")
+    ] != [client_requirement] or "assist-live-client" in project.get("tool", {}).get(
+        "uv", {}
+    ).get("sources", {}):
+        failures.append("client pin pyproject.toml")
+    release = yaml.safe_load(
+        (root / ".github/workflows/release-artifacts.yml").read_text(encoding="utf-8")
+    )
+    if [
+        (step.get("env", {}).get("CLIENT_VERSION"), shlex.split(step.get("run", "")))
+        for job in release["jobs"].values()
+        for step in job["steps"]
+        if "tools/check_release_pin.py" in step.get("run", "")
+    ] != [(client_version, shlex.split(RELEASE_PIN_COMMAND))]:
+        failures.append("client pin .github/workflows/release-artifacts.yml")
     current = next(member for member in HA_MATRIX if member["member"] == "current")
     plugin_pins = [
         requirement
@@ -268,20 +300,23 @@ def check_jobs(path: str | Path) -> set[str]:
     if task_pins != [client_requirement, client_requirement]:
         failures.append("client pin Taskfile.yml")
     locked = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
-    lock_url = f"{repository}?subdirectory={subdirectory}&rev={revision}"
     resolved_pins = [
-        package["source"].get("git")
+        (package["version"], package["source"])
         for package in locked["package"]
         if package["name"] == "assist-live-client"
     ]
     declared_pins = [
-        dependency.get("git")
+        dependency
         for package in locked["package"]
         for group in package.get("metadata", {}).get("requires-dev", {}).values()
         for dependency in group
         if dependency["name"] == "assist-live-client"
     ]
-    if resolved_pins != [f"{lock_url}#{revision}"] or declared_pins != [lock_url]:
+    if resolved_pins != [
+        (client_version, {"registry": "https://pypi.org/simple"})
+    ] or declared_pins != [
+        {"name": "assist-live-client", "specifier": f"=={client_version}"}
+    ]:
         failures.append("client pin uv.lock")
     if ha.get("strategy") != {"fail-fast": False, "matrix": {"include": HA_MATRIX}}:
         failures.append("HA matrix")

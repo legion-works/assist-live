@@ -278,7 +278,7 @@ def test_bootstrap_accepts_exact_release_requirement(tmp_path):
     )
     path = root / "custom_components/assist_live/manifest.json"
     manifest = json.loads(path.read_text())
-    manifest["requirements"] = ["assist-live-client==0.0.0"]
+    manifest["requirements"] = ["assist-live-client==0.1.0a1"]
     path.write_text(json.dumps(manifest))
     assert check_bootstrap(root) == []
 

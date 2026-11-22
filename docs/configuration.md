@@ -94,7 +94,7 @@ The [server text rules](design.md#spoken-text) apply to all agents.
 
 ## Server providers
 
-The [server configuration](https://github.com/legion-works/assist-live-server/blob/d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3/docs/configuration.md) gives the provider selection rules.
+The [server configuration](https://github.com/legion-works/assist-live-server/blob/f3c1341749e78589b8d65785c95ce9268b225775/docs/configuration.md) gives the provider selection rules.
 Parakeet and Piper are local providers. Deepgram and ElevenLabs are cloud providers.
 The local Piper voice is `en_US-lessac-medium`, with PCM audio at 22050 Hz.
 
@@ -227,12 +227,12 @@ The server stores a `final` transcript only when its policy and the turn option 
 Speaker names go to the turn record and `assist_live_speaker` event only.
 They do not change transcript bytes.
 
-The manifest pins `assist-live-client==0.0.0`, the version at the pinned client revision.
-No client release is available on PyPI at this time.
+The manifest pins the published pre-release `assist-live-client==0.1.0a1` from PyPI.
+The integration itself has no release.
 Before an approved integration release, run:
 
 ```sh
-uv run python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version 0.0.0 --require-published
+uv run python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version 0.1.0a1 --require-published
 ```
 
 The check refuses a different manifest pin or client package version.

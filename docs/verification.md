@@ -4319,3 +4319,46 @@ The changed test files and the STT and TTS deadline files give `423 passed` in i
 A scratch mutation that changes the production health limit to 10 s gives a failure in the real-client health-timeout test.
 It records `stream_closed`, not the necessary `health_timeout`.
 No production timing value changes.
+
+## Published client pre-release pin
+
+Date: 2026-11-22 (UTC).
+
+The manifest, development environment, Taskfile, and CI use the published PyPI pre-release `assist-live-client==0.1.0a1`.
+The integration itself has no release.
+`uv lock` changed only the client requirement metadata and client package record.
+No HA or test package changed in the lock.
+
+The first guard tests gave `2 failed`: CI accepted a different manifest pin, and the package guard accepted a Git client source.
+One more test gave `1 failed` because CI accepted `0.0.0` in the release command.
+The corrected guards give named failures for stale project, lock, task, CI, and release-workflow pins.
+They also refuse a client source override.
+
+The guard and public-tree test set then gave `163 passed`.
+The local package check and `check_release_pin.py --pypi-version 0.1.0a1 --require-published` gave `PASS`.
+The formatter, linter, workflow check, and type check also gave `PASS`.
+
+The checked server revisions are `d314aa4` and `f3c1341`.
+Only the package version changed, from `0.0.0` to `0.1.0a1`.
+The four Python source files have the same bytes at these revisions and in the installed PyPI wheel.
+Public functions, signatures, model fields, `ProtocolError`, `ConversationIdError`, `STAGE_OWNERS`, and protocol constants did not change.
+The client dependency stays at `aiohttp>=3.14.4,<4`.
+Its Python minimum stays at `>=3.14.2`.
+
+The installed client dependency versions are:
+
+| Package | HA 2026.10.1 | HA 2026.10.4 | HA 2026.11.2 |
+|---|---|---|---|
+| `assist-live-client` | `0.1.0a1` | `0.1.0a1` | `0.1.0a1` |
+| `aiohttp` | `3.14.4` | `3.14.5` | `3.14.5` |
+| `aiohappyeyeballs` | `2.7.1` | `2.7.1` | `2.7.1` |
+| `aiosignal` | `1.4.0` | `1.4.0` | `1.4.0` |
+| `attrs` | `26.1.0` | `26.1.0` | `26.1.0` |
+| `frozenlist` | `1.8.0` | `1.8.0` | `1.8.0` |
+| `idna` | `3.20` | `3.20` | `3.20` |
+| `multidict` | `6.9.1` | `7.2.0` | `7.2.1` |
+| `propcache` | `0.5.4` | `0.5.4` | `0.5.4` |
+| `yarl` | `1.25.1` | `1.25.1` | `1.25.1` |
+
+These results use the pinned HA and test-plugin versions, with `tests/ha-2026-11-override.txt` for HA 2026.11.2.
+They do not prove live hardware acceptance.

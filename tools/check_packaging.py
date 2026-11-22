@@ -40,9 +40,11 @@ def valid_client_requirement(root: Path, requirements: object) -> bool:
     try:
         locked = tomllib.loads((root / "uv.lock").read_text())
         clients = [p for p in locked["package"] if p["name"] == "assist-live-client"]
-        return len(clients) == 1 and requirements == [
-            f"assist-live-client=={clients[0]['version']}"
-        ]
+        return (
+            len(clients) == 1
+            and clients[0].get("source") == {"registry": "https://pypi.org/simple"}
+            and requirements == [f"assist-live-client=={clients[0]['version']}"]
+        )
     except OSError, ValueError, KeyError, TypeError:
         return False
 

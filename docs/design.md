@@ -59,11 +59,12 @@ These versions are design targets, not a compatibility claim.
 The domain is `assist_live`.
 The project selects `integration_type: service` and `iot_class: local_push` for the manifest.
 The HA minimum and those manifest values are project design decisions.
-The manifest pins `assist-live-client==0.0.0`. That client has no PyPI release.
+The manifest pins the published pre-release `assist-live-client==0.1.0a1` from PyPI.
+The integration itself has no release.
 
 The release manifest must pin `assist-live-client==<exact version>`.
 That version must be on PyPI before the integration release.
-Local tests and CI install the client from the Git revision in `uv.lock`.
+Local tests and CI install the same client version from PyPI through `uv.lock`.
 
 ## Components and turn flow
 

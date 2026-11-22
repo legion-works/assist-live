@@ -9,7 +9,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "assist-live-client==0.0.0",
+    "assist-live-client==0.1.0a1",
     "gazetteer-matcher==1.1.0",
     "ha-ffmpeg==3.2.2",
     "hassil==3.12.1",
@@ -23,9 +23,6 @@ dev = [
     "PyYAML==6.0.3",
     "types-PyYAML==6.0.12.20260906",
 ]
-
-[tool.uv.sources]
-assist-live-client = { git = "https://github.com/legion-works/assist-live-server", rev = "d314aa4f128bfdc12ccb9e6e0ff3f7d8c1a10cd3", subdirectory = "client" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
