@@ -10,6 +10,8 @@
 | `custom_components/assist_live/stt_hints.py`, `tests/test_stt_hints.py`, `test_stt_hints_contract.py` | HA Assist names, change subscriptions, and HA interface contracts |
 | `custom_components/assist_live/llm.py`, `tests/test_llm.py` | Spoken-reply rules for the HA Assist API |
 | `custom_components/assist_live/sensor.py` | Last-turn latency, quality, source, and uncertainty for each satellite |
+| `custom_components/assist_live/entity.py` | Base entity: entity names and the satellite device connection |
+| `custom_components/assist_live/quality_scale.yaml`, `tests/test_quality_scale.py` | HA quality scale rules, their status, and the rule list check |
 | `docs/configuration.md`, `docs/privacy.md` | Modes, local-only limits, transcript policy, and diagnostics |
 | `tests/test_modes.py`, `test_diagnostics.py`, `test_sensor.py` | Destination policy, metadata, redaction, and timing tests |
 | `tools/check_release_pin.py`, `tests/test_release_pin.py` | Client version and PyPI publication check |

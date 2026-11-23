@@ -81,7 +81,7 @@ def issue(hass, entry, part):
 @pytest.mark.parametrize("read", ["property", "maintenance"])
 async def test_startup_reads_defer_missing_engine_repair(lifecycle_entry, part, read):
     hass, entry = lifecycle_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     forward = getattr(runtime, part)["device-a"]
     target = (
         "homeassistant.components.stt.async_get_speech_to_text_entity"
@@ -115,7 +115,7 @@ async def test_startup_reads_defer_missing_engine_repair(lifecycle_entry, part, 
 @pytest.mark.parametrize("part", ["stt", "tts"])
 async def test_startup_turn_creates_missing_engine_repair(lifecycle_entry, part):
     hass, entry = lifecycle_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     forward = getattr(runtime, part)["device-a"]
     target = (
         "homeassistant.components.stt.async_get_speech_to_text_entity"
@@ -158,7 +158,7 @@ async def test_loaded_unavailable_engine_is_selectable_but_not_used(
         if part == "stt"
         else get_engine_instance(hass, "tts.contract_tts")
     )
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     with patch.object(engine, "_attr_available", False, create=True):
         assert fallback_errors(hass, effective_settings(entry)) == {}, (
             "LOADED_UNAVAILABLE_ENGINE_NOT_SELECTABLE"
@@ -181,7 +181,7 @@ async def test_loaded_unavailable_engine_is_selectable_but_not_used(
 @pytest.mark.parametrize("part", ["stt", "tts"])
 async def test_missing_fallback_turn_and_recovery(lifecycle_entry, part):
     hass, entry = lifecycle_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     forward = getattr(runtime, part)["device-a"]
     target = (
         "homeassistant.components.stt.async_get_speech_to_text_entity"
@@ -236,7 +236,7 @@ async def test_missing_fallback_turn_and_recovery(lifecycle_entry, part):
 @pytest.mark.parametrize("part", ["stt", "tts"])
 async def test_reloaded_fallback_object_used(lifecycle_entry, part):
     hass, entry = lifecycle_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     forward = getattr(runtime, part)["device-a"]
     replacement = SttFallback() if part == "stt" else TtsFallback()
     replacement.entity_id = f"{part}.contract_{part}"
@@ -288,7 +288,7 @@ async def test_setup_succeeds_with_both_fallbacks_absent(
             "ABSENT_FALLBACK_BLOCKS_SETUP"
         )
         try:
-            runtime = hass.data["assist_live"][entry.entry_id]
+            runtime = entry.runtime_data
             runtime._health_due = 0
             await runtime.refresh_health()
             for part in ("stt", "tts"):
@@ -403,7 +403,7 @@ async def test_stored_metadata_edges(
             "STORED_METADATA_BLOCKED_SETUP"
         )
         try:
-            runtime = hass.data["assist_live"][entry.entry_id]
+            runtime = entry.runtime_data
             expected = ["en"] if case == "unknown_part" else []
             for part in ("stt", "tts"):
                 forward = getattr(runtime, part)["device-a"]
@@ -432,7 +432,7 @@ async def test_reload_clears_old_fallback_repair_before_new_setup(fallback_entry
     import custom_components.assist_live as integration
 
     hass, entry = fallback_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     with (
         patch(
             "homeassistant.components.stt.async_get_speech_to_text_entity",
@@ -469,7 +469,7 @@ async def test_reload_clears_old_fallback_repair_before_new_setup(fallback_entry
     assert all(value is None for value in before_setup[0].values()), (
         "UNLOAD_RETAINED_OLD_FALLBACK_REPAIR"
     )
-    reloaded = hass.data["assist_live"][entry.entry_id]
+    reloaded = entry.runtime_data
     assert reloaded is not runtime
     for part in ("stt", "tts"):
         assert issue(hass, entry, part) is None, "HEALTHY_ENGINE_RECREATED_REPAIR"
@@ -519,7 +519,7 @@ async def test_setup_error_unloads_platforms_and_next_setup_succeeds(
             Runtime, "_maintenance", side_effect=RuntimeError("test failure")
         ):
             assert not await hass.config_entries.async_setup(entry.entry_id)
-        assert entry.entry_id not in hass.data["assist_live"], "FAILED_RUNTIME_RETAINED"
+        assert not hasattr(entry, "runtime_data"), "FAILED_RUNTIME_RETAINED"
         registered = er.async_entries_for_config_entry(
             er.async_get(hass), entry.entry_id
         )
@@ -537,7 +537,7 @@ async def test_setup_error_unloads_platforms_and_next_setup_succeeds(
 @pytest.mark.parametrize("part", ["stt", "tts"])
 async def test_maintenance_repairs_fallback_recovery(fallback_entry, part):  # noqa: F811
     hass, entry = fallback_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     target = (
         "homeassistant.components.stt.async_get_speech_to_text_entity"
         if part == "stt"
@@ -613,7 +613,7 @@ async def test_stored_metadata_allows_server_turn_before_engines_start(
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
         assert await hass.config_entries.async_setup(entry.entry_id)
         try:
-            runtime = hass.data["assist_live"][entry.entry_id]
+            runtime = entry.runtime_data
             forward_stt = runtime.stt["device-a"]
             forward_tts = runtime.tts["device-a"]
             assert forward_stt.supported_languages == ["en"], "STORED_STT_METADATA_LOST"

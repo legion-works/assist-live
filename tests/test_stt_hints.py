@@ -172,7 +172,7 @@ async def hint_runtime(hass, socket_enabled, relaxed_health_timeout):
         AssistLiveClient(str(server.make_url("")), "test-only") as client,
     ):
         runtime = Runtime(hass, entry, client)
-        hass.data["assist_live"] = {entry.entry_id: runtime}
+        entry.runtime_data = runtime
         with patch.object(runtime, "_events"), patch.object(runtime, "_maintenance"):
             await runtime.start()
         try:

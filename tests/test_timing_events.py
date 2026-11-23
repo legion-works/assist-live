@@ -300,7 +300,7 @@ async def test_diagnostics_count_timing_queue_overflow(hass, client):
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     turn = runtime.ledger.open_voice("satellite-a")
     for _ in range(513):
         runtime.ledger.mark(turn.turn_id, "stt_final")

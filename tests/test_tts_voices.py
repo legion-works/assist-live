@@ -388,7 +388,7 @@ async def test_diagnostics_report_server_voice_metadata(hass, client):
         ("server-us", "US", "en-US"), default="server-us"
     )
     await runtime.refresh_health()
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["server_last_known"]["tts_voice_count"] == 1
     assert result["server_last_known"]["tts_default_voice"] == "server-us"

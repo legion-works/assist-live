@@ -18,6 +18,15 @@
 - Add turn records with parent turns, fallback causes, server-audio sample counts, and HA receipt times.
 - Add corpus import, voice-boundary marks, correct-transcript review, device replay, playback calibration, and native-function reports.
 - Add simulated and hardware fault runners with recording qualification, same-engine baselines, bounded replacements, and cleanup checks.
+- Add the HA quality scale file, field descriptions in the config and options steps, and installation and removal steps.
+
+### Changes
+
+- The config flow stops a second entry with the same server URL and token. Different tokens on one server stay different entries.
+- Entity names are in the context of the satellite device. The entity IDs in the registry do not change. The displayed names change:
+  - STT: `assist-live <key>` becomes `<device name> assist-live STT`.
+  - TTS: `assist-live <key>` becomes `<device name> assist-live TTS`.
+  - Latency sensor: `assist-live <key> last turn latency` becomes `<device name> assist-live last turn latency`.
 
 ### Corrections
 

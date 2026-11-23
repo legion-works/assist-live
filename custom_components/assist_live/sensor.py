@@ -1,36 +1,35 @@
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from . import AssistLiveConfigEntry
+from .entity import AssistLiveEntity
 from .ledger import TurnLedger
+
+# No limit. The ledger pushes the state, and the sensor has no update call.
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: AssistLiveConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    ledger = hass.data[DOMAIN][entry.entry_id].ledger
+    ledger = entry.runtime_data.ledger
     entities = []
     for device, satellite in entry.data["satellites"].items():
         entity = TurnLatencySensor(satellite, device, ledger)
-        if registered := dr.async_get(hass).async_get(device):
-            entity._attr_device_info = dr.DeviceInfo(
-                identifiers=registered.identifiers,
-                connections=registered.connections
-                if isinstance(registered, dr.DeviceEntry)
-                else set(),
-            )
+        entity._attach_device(hass, device)
         entities.append(entity)
     async_add_entities(entities)
 
 
-class TurnLatencySensor(SensorEntity):
+class TurnLatencySensor(AssistLiveEntity, SensorEntity):
     _attr_should_poll = False
+    _attr_translation_key = "last_turn_latency"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
     _unrecorded_attributes = frozenset({"turn_id", "turn_type"})
@@ -39,8 +38,7 @@ class TurnLatencySensor(SensorEntity):
         self.satellite = satellite
         self.ledger = ledger
         self._attr_unique_id = f"{satellite}_last_turn_latency"
-        self._attr_name = f"assist-live {satellite} last turn latency"
-        self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
+        self._set_device(device, satellite)
 
     def measurement(self) -> tuple[float | None, str, float | None]:
         record = self.ledger.latest.get(self.satellite)

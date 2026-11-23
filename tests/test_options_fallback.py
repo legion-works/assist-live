@@ -68,7 +68,7 @@ def voice_options(form):
 
 async def test_options_change_stt_next_turn_uses_selected_entity(fallback_entry):
     hass, entry = fallback_entry
-    old_runtime = hass.data["assist_live"][entry.entry_id]
+    old_runtime = entry.runtime_data
     form = await start(hass, entry)
     defaults = form["data_schema"]({})
     assert defaults["fallback_stt"] == "stt.contract_stt", "current STT selector"
@@ -76,7 +76,7 @@ async def test_options_change_stt_next_turn_uses_selected_entity(fallback_entry)
     result = await submit(hass, form, values(fallback_stt="stt.alternate_stt"))
     assert result["type"] == "create_entry", "STT change stays one step"
     await hass.async_block_till_done()
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     assert runtime is not old_runtime, "options update reloads the entry"
     assert entry.options["fallback_stt"] == "stt.alternate_stt", "STT saved in options"
     selected = stt.async_get_speech_to_text_entity(hass, "stt.alternate_stt")
@@ -130,7 +130,7 @@ async def test_options_tts_change_lists_new_voices_and_revalidates(fallback_entr
         result = await submit(hass, form, {"fallback_tts_voice": "replacement"})
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
-    forward = hass.data["assist_live"][entry.entry_id].tts["device-a"]
+    forward = entry.runtime_data.tts["device-a"]
 
     async def reply():
         yield "Synthetic reply."
@@ -165,7 +165,7 @@ async def test_options_tts_change_lists_new_voices_and_revalidates(fallback_entr
 )
 async def test_options_refuse_assist_live_entity(fallback_entry, field, part):
     hass, entry = fallback_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     entity_id = getattr(runtime, part)["device-a"].entity_id
     form = await start(hass, entry)
     result = await submit(hass, form, values(**{field: entity_id}))
@@ -251,7 +251,7 @@ async def test_options_local_only_checks_selected_entities_and_prunes_decisions(
 
 async def test_options_unchanged_entities_keep_one_step(fallback_entry):
     hass, entry = fallback_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     turn = runtime.ledger.open_voice("satellite-a")
     form = await start(hass, entry)
     assert {item["value"] for item in voice_options(form)} == {
@@ -263,9 +263,7 @@ async def test_options_unchanged_entities_keep_one_step(fallback_entry):
     assert result["type"] == "create_entry", "unchanged TTS keeps one-step options"
     assert entry.options["fallback_tts_voice"] == "voice-two"
     await hass.async_block_till_done()
-    assert hass.data["assist_live"][entry.entry_id] is runtime, (
-        "voice-only change does not reload"
-    )
+    assert entry.runtime_data is runtime, "voice-only change does not reload"
     assert runtime.ledger.current("satellite-a") is turn, (
         "voice-only change keeps running turn"
     )
@@ -280,9 +278,7 @@ async def test_options_unchanged_entities_keep_one_step(fallback_entry):
         )
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
-    assert hass.data["assist_live"][entry.entry_id] is runtime, (
-        "mode-only change does not reload"
-    )
+    assert entry.runtime_data is runtime, "mode-only change does not reload"
     assert runtime.ledger.local_only, "mode change applies in place"
     assert runtime.ledger.current("satellite-a") is turn, (
         "mode-only change keeps running turn"
@@ -296,7 +292,7 @@ async def test_setup_and_options_share_missing_and_loop_checks(
     fallback_entry, field, part
 ):
     hass, entry = fallback_entry
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     for entity_id, error in (
         (f"{part}.missing", "invalid_fallback_entity"),
         (getattr(runtime, part)["device-a"].entity_id, "fallback_loop"),
@@ -308,7 +304,8 @@ async def test_setup_and_options_share_missing_and_loop_checks(
             form["flow_id"],
             {
                 "url": "https://server.example",
-                "token": "test-only",
+                # The same server and token abort before the fallback checks.
+                "token": "second-test-only",
                 "fallback_stt": "stt.contract_stt",
                 "fallback_tts": "tts.contract_tts",
                 field: entity_id,

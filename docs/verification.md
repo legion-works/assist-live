@@ -4441,3 +4441,44 @@ The tests also check that the probe authenticates when the server does not redir
 The test tools use the same redirect check for WebSocket connections and HTTP requests that send credentials to the test instance.
 The fault runner accepts only sessions that have this check.
 The tests include the fault runner, the test environment, and the device recorder.
+
+## HA quality scale: Bronze rules
+
+The integration has a quality scale file at `custom_components/assist_live/quality_scale.yaml`.
+The file has the 54 rules: 19 `done`, 30 `todo`, and 5 `exempt`.
+Three Bronze rules stay `todo`: `brands`, `config-flow-test-coverage`, and `test-before-setup`.
+Thus the integration does not have the Bronze tier.
+
+| Change | Before the change | After the change |
+|---|---|---|
+| Runtime data in `ConfigEntry.runtime_data` | `AttributeError` on `entry.runtime_data` | Satisfactory test |
+| Abort for the same server URL and token | The flow did not abort | Satisfactory test |
+| Entity names in the context of the device | `has_entity_name` was `False` | Satisfactory test |
+
+The entity IDs in the registry do not change. The displayed names change:
+
+| Entity | Before | After |
+|---|---|---|
+| STT | `assist-live <key>` | `<device name> assist-live STT` |
+| TTS | `assist-live <key>` | `<device name> assist-live TTS` |
+| Latency sensor | `assist-live <key> last turn latency` | `<device name> assist-live last turn latency` |
+
+The local hassfest image (`ghcr.io/home-assistant/hassfest:latest`, image `e5d933ccc7c5`) accepted the file.
+It also accepted three bad copies: a file without one rule, the manifest value `custom`, and the manifest value `bronze` with `todo` rules.
+Thus hassfest does not examine the file for a custom integration.
+`tests/test_quality_scale.py` examines the rule list, the status values, and the comments.
+The manifest has no `quality_scale` key, because hassfest ignores it and no local HACS image can examine it.
+
+The branch coverage of `config_flow.py` is 91 %.
+No test completes a flow to a new entry.
+
+| Command | Result |
+|---|---|
+| `task check` without the private denylist | Exit 0, `2076 passed in 71.06s` |
+| `task ha-minimum` | Exit 0, `2076 passed in 71.36s` |
+| `task ha-2026-11` | Exit 0, `2076 passed in 156.74s` |
+| hassfest with the local image | Exit 0, `Invalid integrations: 0` |
+
+The type check found no issues in 38 source files.
+Gitleaks found no leaks, and the public-data check gave `matches=0`.
+The private denylist check did not run.

@@ -14,6 +14,17 @@
           "record_transcripts": "Permit transcript storage on the server",
           "fallback_stt_local": "Record an unknown fallback STT destination as local",
           "fallback_tts_local": "Record an unknown fallback TTS destination as local"
+        },
+        "data_description": {
+          "url": "The HTTP or HTTPS address of the assist-live server. Use TLS or an isolated network.",
+          "token": "The integration token from the server. The token must have access to the satellite keys.",
+          "fallback_stt": "The standard STT entity that HA uses when it cannot use the server. An assist-live entity cannot be a fallback.",
+          "fallback_tts": "The standard TTS entity that HA uses when it cannot use the server. An assist-live entity cannot be a fallback.",
+          "notify_tts_failure": "If on, HA shows the full reply text in a notification after a TTS failure.",
+          "local_only": "If on, HA uses the server only when server health reports local destinations. HA also refuses a cloud fallback. Set local_only on the server too.",
+          "record_transcripts": "If on, the server can store the last transcript of a turn. The server policy must also let the server store it. The default is off.",
+          "fallback_stt_local": "If on, HA records the fallback STT entity as local when HA cannot find its destination. Do this only after you examine that integration.",
+          "fallback_tts_local": "If on, HA records the fallback TTS entity as local when HA cannot find its destination. Do this only after you examine that integration."
         }
       },
       "http_warning": {
@@ -28,6 +39,12 @@
           "satellite": "Provisioned satellite key",
           "pipeline_select": "Satellite pipeline selector",
           "add_another": "Add another satellite"
+        },
+        "data_description": {
+          "device": "The HA device of the voice satellite.",
+          "satellite": "The anonymous key that the server provisioned for this device.",
+          "pipeline_select": "The pipeline selector entity of the same device.",
+          "add_another": "If on, the next step adds one more satellite. Use no more than five satellites with one token."
         }
       }
     },
@@ -41,6 +58,9 @@
       "invalid_satellite": "Select a provisioned key and the pipeline selector of a satellite device.",
       "binding_used": "This device or key is already in use.",
       "connection_limit": "Use no more than five satellites for each server token."
+    },
+    "abort": {
+      "already_configured": "An entry for this server and token is configured."
     }
   },
   "options": {
@@ -56,6 +76,15 @@
           "fallback_stt_local": "Record an unknown fallback STT destination as local",
           "fallback_tts_local": "Record an unknown fallback TTS destination as local",
           "fallback_tts_voice": "Fallback TTS voice (empty uses its default)"
+        },
+        "data_description": {
+          "fallback_stt": "The standard STT entity that HA uses when it cannot use the server. An assist-live entity cannot be a fallback.",
+          "fallback_tts": "The standard TTS entity that HA uses when it cannot use the server. An assist-live entity cannot be a fallback.",
+          "local_only": "If on, HA uses the server only when server health reports local destinations. HA also refuses a cloud fallback. Set local_only on the server too.",
+          "record_transcripts": "If on, the server can store the last transcript of a turn. The server policy must also let the server store it. The default is off.",
+          "fallback_stt_local": "If on, HA records the fallback STT entity as local when HA cannot find its destination. Do this only after you examine that integration.",
+          "fallback_tts_local": "If on, HA records the fallback TTS entity as local when HA cannot find its destination. Do this only after you examine that integration.",
+          "fallback_tts_voice": "A voice of the fallback TTS engine. The empty selection uses the default voice of that engine. HA does not send this voice to the server."
         }
       },
       "fallback_voice": {
@@ -63,6 +92,9 @@
         "description": "Select a voice from the new fallback engine. Default uses that engine's default voice. No changes are saved before this step is complete.",
         "data": {
           "fallback_tts_voice": "Fallback TTS voice (empty uses its default)"
+        },
+        "data_description": {
+          "fallback_tts_voice": "A voice of the fallback TTS engine. The empty selection uses the default voice of that engine. HA does not send this voice to the server."
         }
       }
     },
@@ -106,6 +138,23 @@
     "shared_pipeline": {
       "title": "Satellites share an assist-live pipeline",
       "description": "Select a different assist-live pipeline for each satellite. Shared pipelines cannot identify the correct satellite for each turn. See the setup instructions."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "last_turn_latency": {
+        "name": "assist-live last turn latency"
+      }
+    },
+    "stt": {
+      "speech_to_text": {
+        "name": "assist-live STT"
+      }
+    },
+    "tts": {
+      "text_to_speech": {
+        "name": "assist-live TTS"
+      }
     }
   }
 }

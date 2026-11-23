@@ -178,6 +178,12 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     ) -> config_entries.ConfigFlowResult:
         errors = {}
         if user_input:
+            # The connection slots of one server token are sufficient for five
+            # satellites. Thus two entries can use one server with different
+            # tokens. An entry with the same server and token is a duplicate.
+            self._async_abort_entries_match(
+                {"url": user_input["url"], "token": user_input["token"]}
+            )
             if errors := fallback_errors(self.hass, user_input):
                 pass
             elif errors := await mode_errors(self.hass, user_input):

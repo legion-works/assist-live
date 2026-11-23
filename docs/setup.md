@@ -3,6 +3,22 @@
 The integration is experimental and has no release.
 Do not use it for safety-critical controls.
 
+## Installation
+
+Before you install the integration, make sure that you have these items:
+
+- HA 2026.10.1 or a subsequent version.
+- An assist-live server, its URL, and an integration token. The server is in the `assist-live-server` repository.
+- A standard HA STT entity and a standard TTS entity for fallback.
+- For each satellite, an HA device with an `assist_satellite` entity and a pipeline selector entity.
+
+No release is available. To install the integration from the repository:
+
+1. Copy `custom_components/assist_live/` to the `custom_components/` folder of the HA configuration folder.
+2. Restart HA.
+3. Open **Settings > Devices & services > Add integration** and select **assist-live**.
+4. Do the steps in the next sections.
+
 ## Server and standard engines
 
 1. Configure a standard HA STT entity and TTS entity.
@@ -155,3 +171,18 @@ The integration also removes the connected IDs and pending markers of those reco
 The server, not the local cache, keeps the historical records.
 
 No P0 or P1 acceptance result is available in this repository. These procedures are not device-trial results.
+
+## Removal
+
+1. Open **Settings > Devices & services > assist-live**.
+2. Open the menu of the entry and select **Delete**.
+3. Remove the `custom_components/assist_live/` folder, then restart HA.
+
+HA removes the STT, TTS, and latency sensor entities of the entry.
+The integration stops its event subscriptions and closes its server connections.
+
+These items stay after removal:
+
+- The pipelines that the integration made. They keep the IDs of the removed engines. Delete them in the voice assistant settings, or select different engines. Select a different pipeline on each satellite that uses one of them.
+- The turn store file `.storage/assist_live.<entry ID>.turns` in the HA configuration folder. It contains open turn IDs and event cursors. You can delete it after removal.
+- The server records and the integration token. If no other HA entry uses the token, remove it from the server configuration.

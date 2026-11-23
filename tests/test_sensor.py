@@ -50,10 +50,16 @@ def test_latency_has_separate_quality_and_uncertainty(ledger, quality, want):
 async def test_turn_identity_is_public_before_conversation_and_not_recorded(
     hass, ledger
 ):
+    from homeassistant.helpers.entity_platform import PlatformData
+
     from custom_components.assist_live.sensor import TurnLatencySensor
 
     sensor = TurnLatencySensor("satellite-a", "device-a", ledger)
     sensor.hass = hass
+    # The test adds the sensor without an entity platform.
+    sensor.platform_data = PlatformData(
+        hass, domain="sensor", platform_name="assist_live"
+    )
     sensor.entity_id = "sensor.test_turn_latency"
     await sensor.async_added_to_hass()
     assert sensor.extra_state_attributes["turn_id"] is None
@@ -105,3 +111,27 @@ async def test_fallback_end_decision_keeps_ha_audio_source(client, ledger):
     )
     assert sensor.extra_state_attributes["end_decision_source"] == "ha_audio_end"
     assert sensor.native_value == 125
+
+
+def test_entities_have_device_context_names(client, ledger):
+    from custom_components.assist_live.sensor import TurnLatencySensor
+    from custom_components.assist_live.stt import AssistLiveSTT
+    from custom_components.assist_live.tts import AssistLiveTTS
+
+    entities = {
+        "last_turn_latency": TurnLatencySensor("satellite-a", "device-a", ledger),
+        "speech_to_text": AssistLiveSTT(
+            "satellite-a", "device-a", client, ledger, "stt.standard", "entry"
+        ),
+        "text_to_speech": AssistLiveTTS(
+            "satellite-a", "device-a", client, ledger, "tts.standard", "entry"
+        ),
+    }
+    for key, entity in entities.items():
+        assert entity.has_entity_name, key
+        assert entity.translation_key == key
+        # An unregistered satellite device keeps a different name for each key.
+        assert entity.device_info == {
+            "identifiers": {("assist_live", "device-a")},
+            "name": "satellite-a",
+        }, key

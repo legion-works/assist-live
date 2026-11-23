@@ -26,6 +26,7 @@ async def test_native_timer_uses_only_virtual_receiver(
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
     from homeassistant.helpers import intent
+    from homeassistant.helpers.entity_platform import PlatformData
     from homeassistant.setup import async_setup_component
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -104,6 +105,10 @@ async def test_native_timer_uses_only_virtual_receiver(
     ledger = TurnLedger(None)
     sensor = TurnLatencySensor("input", devices[input_device].id, ledger)
     sensor.hass = hass
+    # The test adds the sensor without an entity platform.
+    sensor.platform_data = PlatformData(
+        hass, domain="sensor", platform_name="assist_live"
+    )
     sensor.entity_id = registered.entity_id
     await sensor.async_added_to_hass()
     context = Context()

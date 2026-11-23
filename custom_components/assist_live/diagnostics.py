@@ -3,11 +3,10 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.components import assist_pipeline
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from . import AssistLiveConfigEntry
 from .config_flow import destination, entity_iot_class
-from .const import DOMAIN
 from .settings import effective_settings
 from .tts import AssistLiveTTS
 
@@ -40,9 +39,9 @@ def safe_format(value: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry
+    hass: HomeAssistant, entry: AssistLiveConfigEntry
 ) -> dict[str, Any]:
-    runtime = hass.data[DOMAIN][entry.entry_id]
+    runtime = entry.runtime_data
     streaming = full_file = 0
     for entity in runtime.tts.values():
         if isinstance(entity, AssistLiveTTS):

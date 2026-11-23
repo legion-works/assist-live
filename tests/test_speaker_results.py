@@ -220,7 +220,7 @@ async def wire(
             harness.runtime = Runtime(hass, harness.entry, client)
             harness.runtime.ledger.clock = hass.loop.time
             harness.runtime.ledger.save = None
-            hass.data["assist_live"] = {harness.entry.entry_id: harness.runtime}
+            harness.entry.runtime_data = harness.runtime
             try:
                 yield harness
             finally:

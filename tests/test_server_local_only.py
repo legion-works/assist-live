@@ -151,7 +151,7 @@ async def test_selection_through_pinned_health_decoder(
         )
         runtime = Runtime(hass, entry, client)
         await runtime.refresh_health()
-        hass.data["assist_live"] = {entry.entry_id: runtime}
+        entry.runtime_data = runtime
         runtime.ledger.save = None
 
         async def fallback_policy(entity_id):
@@ -210,7 +210,7 @@ async def test_selection_through_pinned_health_decoder(
 async def test_health_not_reported_before_first_request(hass, client):
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert diagnostics["server_last_known"] is None
     assert diagnostics["server_last_healthy"] is None

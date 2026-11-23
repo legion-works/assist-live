@@ -491,6 +491,7 @@ async def test_public_sensor_links_actual_agent_context_and_timed_operations(
     from homeassistant.core import Context
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
+    from homeassistant.helpers.entity_platform import PlatformData
     from homeassistant.setup import async_setup_component
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -527,6 +528,10 @@ async def test_public_sensor_links_actual_agent_context_and_timed_operations(
     ledger = TurnLedger(None)
     sensor = TurnLatencySensor("virtual", device.id, ledger)
     sensor.hass = hass
+    # The test adds the sensor without an entity platform.
+    sensor.platform_data = PlatformData(
+        hass, domain="sensor", platform_name="assist_live"
+    )
     sensor.entity_id = registered.entity_id
     await sensor.async_added_to_hass()
     register_timer(hass, device.id)

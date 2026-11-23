@@ -496,7 +496,7 @@ async def test_refused_late_open_still_sends_each_queued_event(
     async with AssistLiveClient(str(server.make_url("")), "test-token") as real:
         entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
         runtime = Runtime(hass, entry, real)
-        hass.data["assist_live"] = {entry.entry_id: runtime}
+        entry.runtime_data = runtime
         ledger = runtime.ledger
         turn = ledger.open_voice("satellite-a")
         ledger.mark(turn.turn_id, "tts_first_text")

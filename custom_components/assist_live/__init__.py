@@ -438,7 +438,10 @@ class Runtime:
             await self.client.close()
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+type AssistLiveConfigEntry = ConfigEntry[Runtime]
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -> bool:
     from .config_flow import is_forwarder
     from .stt import AssistLiveSTT
     from .tts import AssistLiveTTS
@@ -452,7 +455,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data["url"], entry.data["token"], session=async_get_clientsession(hass)
     )
     runtime = Runtime(hass, entry, client)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+    entry.runtime_data = runtime
     forwarding_started = False
     try:
         await runtime.start()
@@ -512,16 +515,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await runtime.stop()
         except BaseException:
             _LOGGER.debug("Runtime setup cleanup failed")
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        # HA removes runtime_data after an unload, but not after a setup error.
+        with suppress(AttributeError):
+            del entry.runtime_data
         raise
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -> bool:
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
-    runtime = hass.data[DOMAIN].pop(entry.entry_id)
-    await runtime.stop()
+    await entry.runtime_data.stop()
     settings = effective_settings(entry)
     for part in ("stt", "tts"):
         fallback_issue(

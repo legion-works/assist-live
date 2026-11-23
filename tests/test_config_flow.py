@@ -94,6 +94,80 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
     client.close.assert_awaited_once()
 
 
+async def test_same_server_and_token_aborts_without_change(hass, available_fallbacks):
+    from homeassistant.data_entry_flow import AbortFlow
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    data = {
+        "url": "https://server.example",
+        "token": "test-only",
+        "fallback_stt": "stt.standard",
+        "fallback_tts": "tts.standard",
+        "satellites": {"device-a": "satellite-a"},
+    }
+    existing = MockConfigEntry(domain="assist_live", data=data)
+    existing.add_to_hass(hass)
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    with (
+        patch("custom_components.assist_live.config_flow.AssistLiveClient") as client,
+        pytest.raises(AbortFlow) as aborted,
+    ):
+        await flow.async_step_user(
+            {
+                "url": "https://server.example",
+                "token": "test-only",
+                "fallback_stt": "stt.standard",
+                "fallback_tts": "tts.standard",
+            }
+        )
+    assert aborted.value.reason == "already_configured"
+    client.assert_not_called()
+    assert existing.data == data, "the existing entry does not change"
+    assert len(hass.config_entries.async_entries("assist_live")) == 1
+
+
+async def test_same_server_with_different_token_continues(hass, available_fallbacks):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    MockConfigEntry(
+        domain="assist_live",
+        data={
+            "url": "https://server.example",
+            "token": "test-only",
+            "satellites": {"device-a": "satellite-a"},
+        },
+    ).add_to_hass(hass)
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    client = AsyncMock()
+    client.bindings.return_value = [{"satellite": "satellite-b"}]
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.is_forwarder", return_value=False
+        ),
+        patch(
+            "custom_components.assist_live.config_flow.AssistLiveClient",
+            return_value=client,
+        ),
+    ):
+        result = await flow.async_step_user(
+            {
+                "url": "https://server.example",
+                "token": "second-test-only",
+                "fallback_stt": "stt.standard",
+                "fallback_tts": "tts.standard",
+            }
+        )
+    assert result["step_id"] == "satellite"
+
+
 async def test_malformed_url_has_its_own_error(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
@@ -257,7 +331,9 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     )
     entry.add_to_hass(hass)
     device = dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id, identifiers={("test", "satellite-a")}
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "satellite-a")},
+        name="Synthetic satellite",
     )
     hass.config_entries.async_update_entry(
         entry,
@@ -269,7 +345,8 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     )
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
         assert await hass.config_entries.async_setup(entry.entry_id)
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
+    assert "assist_live" not in hass.data, "runtime state is in runtime_data only"
     assert runtime.tts[device.id].default_options == {"voice": "voice-two"}
     assert (
         runtime.tts[device.id].async_get_supported_voices("en")[0].name
@@ -280,6 +357,14 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     tts_id = runtime.tts[device.id].entity_id
     assert hass.states.get(stt_id) is not None
     assert hass.states.get(tts_id) is not None
+    assert (
+        hass.states.get(stt_id).attributes["friendly_name"]
+        == "Synthetic satellite assist-live STT"
+    ), "STT name is in the context of its device"
+    assert (
+        hass.states.get(tts_id).attributes["friendly_name"]
+        == "Synthetic satellite assist-live TTS"
+    ), "TTS name is in the context of its device"
     assert er.async_get(hass).async_get(stt_id).device_id == device.id
     assert er.async_get(hass).async_get(tts_id).device_id == device.id
     saved = entry.data["pipelines"][device.id]
@@ -317,6 +402,10 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     ]
     assert len(sensors) == 1
     assert sensors[0].attributes["quality"] == "missing"
+    assert (
+        sensors[0].attributes["friendly_name"]
+        == "Synthetic satellite assist-live last turn latency"
+    ), "sensor name is in the context of its device"
     sending, cancelled = asyncio.Event(), asyncio.Event()
 
     async def hanging_event(event):
@@ -636,12 +725,12 @@ async def test_start_failure_cancels_tasks_and_removes_runtime(hass, client):
         ):
             with pytest.raises(RuntimeError, match="test start failure"):
                 await async_setup_entry(hass, entry)
-        assert entry.entry_id not in hass.data["assist_live"]
+        assert not hasattr(entry, "runtime_data")
         assert all(task.done() for task in captured[0].tasks)
         client.close.assert_awaited_once()
     finally:
-        if entry.entry_id in hass.data.get("assist_live", {}):
-            hass.data["assist_live"].pop(entry.entry_id)
+        if hasattr(entry, "runtime_data"):
+            del entry.runtime_data
             await captured[0].stop()
 
 

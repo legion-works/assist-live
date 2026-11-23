@@ -21,7 +21,7 @@ def runtime_for(hass, client):
     runtime = Runtime(hass, entry, client)
     runtime.ledger.save = None
     runtime.ledger.fallback_policy = None
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     return entry, runtime.ledger
 
 

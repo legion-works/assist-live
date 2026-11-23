@@ -122,7 +122,7 @@ async def test_loss_capture_reads_public_sources_and_does_not_guess_reset(
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     runtime.ledger.timing_events_dropped = 4
     data = await async_get_config_entry_diagnostics(hass, entry)
     epoch = data.get("counters_since_utc_ns")
@@ -282,7 +282,7 @@ async def test_real_diagnostics_counter_lifetime(
         setup_started = time.time_ns()
         assert await hass.config_entries.async_setup(entry.entry_id)
         try:
-            runtime = hass.data["assist_live"][entry.entry_id]
+            runtime = entry.runtime_data
             assert runtime.ledger.timing_events_dropped == 0
             assert runtime.ledger.turn_opens_dropped == 0
             setup_finished = time.time_ns()
@@ -290,7 +290,7 @@ async def test_real_diagnostics_counter_lifetime(
             before = await read()
             if case == "reload":
                 assert await hass.config_entries.async_reload(entry.entry_id)
-                runtime = hass.data["assist_live"][entry.entry_id]
+                runtime = entry.runtime_data
                 assert runtime.ledger.timing_events_dropped == 0
                 assert runtime.ledger.turn_opens_dropped == 0
             else:

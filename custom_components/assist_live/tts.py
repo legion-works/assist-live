@@ -16,25 +16,28 @@ from assist_live_client.protocol import ProtocolError
 from homeassistant.components import tts
 from homeassistant.components.tts.entity import TTSAudioRequest
 from homeassistant.components.tts.helper import get_engine_instance
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import AssistLiveConfigEntry
 from .const import (
     CONF_FALLBACK_TTS_VOICE,
     CONF_NOTIFY_TTS_FAILURE,
     DOMAIN,
     HEALTH_TIMEOUT,
 )
+from .entity import AssistLiveEntity
 from .ledger import FallbackReason, TurnLedger, stream_failure_reason
 from .repairs import fallback_issue
 from .settings import FallbackMetadata, effective_settings
 from .tts_fallback import compatible_pcm
 
 _LOGGER = logging.getLogger(__name__)
+
+# No limit. Each reply uses its own server stream, not a shared device connection.
+PARALLEL_UPDATES = 0
 
 
 def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEntity:
@@ -57,9 +60,11 @@ def language_matches(language: str, supported: str) -> bool:
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: AssistLiveConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    runtime = hass.data[DOMAIN][entry.entry_id]
+    runtime = entry.runtime_data
     settings = effective_settings(entry)
     cached = runtime.fallback_metadata.setdefault(
         "tts", {"entity_id": settings["fallback_tts"], "languages": []}
@@ -77,20 +82,15 @@ async def async_setup_entry(
         )
         entity.notify_tts_failure = entry.data.get(CONF_NOTIFY_TTS_FAILURE, False)
         entity.fallback_voice = settings.get(CONF_FALLBACK_TTS_VOICE) or None
-        if registered := dr.async_get(hass).async_get(device):
-            entity._attr_device_info = dr.DeviceInfo(
-                identifiers=registered.identifiers,
-                connections=registered.connections
-                if isinstance(registered, dr.DeviceEntry)
-                else set(),
-            )
+        entity._attach_device(hass, device)
         runtime.tts[device] = entity
         entities.append(entity)
     async_add_entities(entities)
 
 
-class AssistLiveTTS(tts.TextToSpeechEntity):
+class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
     _attr_supported_options = ["voice"]
+    _attr_translation_key = "text_to_speech"
 
     def __init__(
         self,
@@ -114,8 +114,7 @@ class AssistLiveTTS(tts.TextToSpeechEntity):
         ) = None
         self.notify_tts_failure = False
         self._attr_unique_id = f"{satellite}_tts"
-        self._attr_name = f"assist-live {satellite}"
-        self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
+        self._set_device(device, satellite)
         self._fallback_metadata: FallbackMetadata = (
             fallback_metadata
             if fallback_metadata is not None

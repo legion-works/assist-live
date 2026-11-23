@@ -8,19 +8,18 @@ from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import stt
 from homeassistant.components.stt.models import SpeechAudioProcessing
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pymicro_vad import MicroVad
 
+from . import AssistLiveConfigEntry
 from .const import (
-    DOMAIN,
     HEALTH_TIMEOUT,
     MAX_SPEAKER_DISTANCE,
     MESSAGE_DEADLINE,
     SPEAKER_RESULT_DEADLINE,
 )
+from .entity import AssistLiveEntity
 from .ledger import FallbackReason, SpeakerRead, TurnLedger, stream_failure_reason
 from .repairs import fallback_issue
 from .settings import FallbackMetadata, effective_settings
@@ -28,11 +27,16 @@ from .stt_fallback import FallbackAudio
 
 _LOGGER = logging.getLogger(__name__)
 
+# No limit. Each turn uses its own server stream, not a shared device connection.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: AssistLiveConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    runtime = hass.data[DOMAIN][entry.entry_id]
+    runtime = entry.runtime_data
     fallback_id = effective_settings(entry)["fallback_stt"]
     cached = runtime.fallback_metadata.setdefault(
         "stt", {"entity_id": fallback_id, "languages": []}
@@ -48,19 +52,15 @@ async def async_setup_entry(
             entry.entry_id,
             cached,
         )
-        if registered := dr.async_get(hass).async_get(device):
-            entity._attr_device_info = dr.DeviceInfo(
-                identifiers=registered.identifiers,
-                connections=registered.connections
-                if isinstance(registered, dr.DeviceEntry)
-                else set(),
-            )
+        entity._attach_device(hass, device)
         entities.append(entity)
         runtime.stt[device] = entity
     async_add_entities(entities)
 
 
-class AssistLiveSTT(stt.SpeechToTextEntity):
+class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
+    _attr_translation_key = "speech_to_text"
+
     def __init__(
         self,
         satellite: str,
@@ -82,8 +82,7 @@ class AssistLiveSTT(stt.SpeechToTextEntity):
             else {"entity_id": fallback_entity_id, "languages": []}
         )
         self._attr_unique_id = f"{satellite}_stt"
-        self._attr_name = f"assist-live {satellite}"
-        self._attr_device_info = {"identifiers": {(DOMAIN, device)}}
+        self._set_device(device, satellite)
         self._speaker_tasks: set[asyncio.Task[None]] = set()
         self._speaker_cleanup_tasks: set[asyncio.Task[None]] = set()
 

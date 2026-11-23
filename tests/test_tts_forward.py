@@ -91,11 +91,9 @@ async def test_unusable_tts_fallback_does_not_block_platform_setup(
             "satellites": {"device-a": "satellite-a"},
         },
     )
-    hass.data["assist_live"] = {
-        entry.entry_id: SimpleNamespace(
-            client=client, ledger=ledger, tts={}, fallback_metadata={}
-        )
-    }
+    entry.runtime_data = SimpleNamespace(
+        client=client, ledger=ledger, tts={}, fallback_metadata={}
+    )
     added = []
     with patch(
         "custom_components.assist_live.tts.get_engine_instance", return_value=object()

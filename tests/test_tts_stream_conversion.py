@@ -55,6 +55,10 @@ async def test_ha_tts_stream_conversion_keeps_streaming_wav_pcm(
         "tts.contract_tts",
         "conversion-entry",
     )
+    # The tts component adds the entity without the assist_live platform, so
+    # the entity name translation is not available. HA refuses an engine
+    # without a name.
+    forward._attr_name = "Conversion TTS"
     await hass.data[DATA_COMPONENT].async_add_entities([forward])
     emitted = []
     stream_tts = forward.async_stream_tts_audio

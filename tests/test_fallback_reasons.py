@@ -66,7 +66,7 @@ async def test_each_fallback_has_reason_event_count_and_safe_log(
     ledger = runtime.ledger
     ledger.save = None
     ledger.fallback_policy = None
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     health = HealthCapabilities(
         True,
         True,

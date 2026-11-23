@@ -19,7 +19,7 @@ async def test_diagnostics_health_outage_and_recovery(hass, client, failure):
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     now = [100.0]
     runtime.clock = lambda: now[0]
     first = datetime(2026, 1, 1, tzinfo=UTC)
@@ -90,7 +90,7 @@ async def test_diagnostics_never_healthy_has_no_last_known_values(
 
     entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
     runtime = Runtime(hass, entry, client)
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     for checked in (False, True):
         if checked:
             client.health_capabilities.side_effect = [
@@ -143,7 +143,7 @@ async def test_diagnostics_exclude_all_content_and_private_configuration(hass, c
         "channels": 1,
         "width": 2,
     }
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     with (
         patch(
             "custom_components.assist_live.diagnostics.assist_pipeline.async_get_pipelines",
@@ -231,7 +231,7 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
         "channels": 1,
         "width": 2,
     }
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
 
     async def iot(hass, entity_id):
         return "cloud_push" if entity_id == "conversation.agent" else None
@@ -303,7 +303,7 @@ async def test_health_destination_keys_do_not_disclose_content(
         entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
         runtime = Runtime(hass, entry, client)
         await runtime.refresh_health()
-        hass.data["assist_live"] = {entry.entry_id: runtime}
+        entry.runtime_data = runtime
         result = await async_get_config_entry_diagnostics(hass, entry)
     serialized = json.dumps(result)
     for value in planted:
@@ -334,7 +334,7 @@ async def test_diagnostics_drop_unrecognized_health_destination_values(
         },
     )
     await runtime.refresh_health()
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["server_last_known"]["destinations"] == {}, (
         "destination_value_allowlist"
@@ -367,7 +367,7 @@ async def test_fallback_reason_is_visible_per_turn_and_allowlisted(
     runtime.ledger.records[turn.turn_id].fallback_reasons["stt"] = reason
     runtime.ledger.used(turn.turn_id, "stt_fallback", "stt.standard", "local")
     runtime.ledger.mark(turn.turn_id, "fallback_used", reason="server_unhealthy")
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["turns"][0]["destinations"][0]["fallback_reason"] == expected
     assert "synthetic-secret-content" not in json.dumps(result)
@@ -384,7 +384,7 @@ async def test_diagnostic_turn_ids_match_latency_sensor_correlation_ids(hass, cl
     runtime = Runtime(hass, entry, client)
     first = runtime.ledger.open_voice("satellite-a")
     second = runtime.ledger.open_voice("satellite-b")
-    hass.data["assist_live"] = {entry.entry_id: runtime}
+    entry.runtime_data = runtime
     result = await async_get_config_entry_diagnostics(hass, entry)
     by_satellite = {row["satellite"]: row for row in result["turns"]}
     assert first.turn_id != second.turn_id

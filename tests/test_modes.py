@@ -674,7 +674,7 @@ async def test_options_listener_updates_ledger_local_only(hass, client):
         ),
     ):
         assert await async_setup_entry(hass, entry)
-    runtime = hass.data["assist_live"][entry.entry_id]
+    runtime = entry.runtime_data
     try:
         turn = runtime.ledger.open_voice("satellite-a")
         health = HealthCapabilities(True, True, True, False, False, {"stt": "local"})

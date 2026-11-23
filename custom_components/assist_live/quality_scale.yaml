@@ -1,0 +1,198 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration has no HA `actions`.
+  appropriate-polling:
+    status: done
+    comment: >-
+      No entity polls. The runtime reads server health at 30 s intervals,
+      and at 5 s intervals after an unsatisfactory result. The 1 s tick
+      examines only local turn deadlines.
+  brands:
+    status: todo
+    comment: >-
+      HA 2026.3 and subsequent versions read brand images from a brand
+      folder of a custom integration. The public tree check refuses binary
+      files, and the operator has not selected an assist-live icon.
+  common-modules:
+    status: done
+    comment: >-
+      entity.py has the base entity. The integration has no coordinator,
+      because the server pushes events and the turn ledger keeps the state.
+  config-flow:
+    status: done
+    comment: Each field of each config and options step has a data_description.
+  config-flow-test-coverage:
+    status: todo
+    comment: >-
+      The tests include 91 % of config_flow.py with branches. No test completes
+      a flow to a new entry, and some error paths have no test.
+  dependency-transparency:
+    status: done
+    comment: >-
+      assist-live-client has the Apache-2.0 license. A public GitHub workflow
+      of assist-live-server builds it and publishes it to PyPI.
+  docs-actions:
+    status: exempt
+    comment: The integration has no HA `actions`.
+  docs-conditions:
+    status: exempt
+    comment: The integration has no HA `conditions`.
+  docs-high-level-description:
+    status: done
+    comment: README.md and docs/design.md give a description of the server and the HA parts.
+  docs-installation-instructions:
+    status: done
+    comment: docs/setup.md gives the prerequisites and the installation steps.
+  docs-removal-instructions:
+    status: done
+    comment: docs/setup.md gives the removal steps and the items that stay.
+  docs-triggers:
+    status: exempt
+    comment: The integration has no HA `triggers`. It fires only HA events.
+  entity-event-setup:
+    status: done
+    comment: >-
+      The sensor adds its ledger listener in async_added_to_hass and removes
+      it with async_on_remove. The STT and TTS entities have no subscriptions.
+  entity-unique-id:
+    status: done
+    comment: Each entity has a unique ID from its satellite key.
+  has-entity-name:
+    status: done
+    comment: The base entity sets has_entity_name. Names come from translation keys.
+  runtime-data:
+    status: done
+    comment: The runtime is in ConfigEntry.runtime_data with a typed config entry.
+  test-before-configure:
+    status: done
+    comment: The config flow reads the server bindings before it makes the entry.
+  test-before-setup:
+    status: todo
+    comment: >-
+      Setup continues when the server is unavailable, because the fallback
+      engines must answer turns. The pinned client gives one refused error
+      for each HTTP error status, so setup cannot find an incorrect token.
+      The Silver reauthentication flow must have the same client change.
+  unique-config-entry:
+    status: done
+    comment: >-
+      The config flow aborts when an entry has the same server URL and token.
+      Different tokens on one server are different entries.
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: The integration has no HA `actions`.
+  config-entry-unloading:
+    status: done
+    comment: async_unload_entry releases the platforms and stops the runtime.
+  docs-configuration-parameters:
+    status: todo
+    comment: Not examined.
+  docs-installation-parameters:
+    status: todo
+    comment: Not examined.
+  entity-unavailable:
+    status: todo
+    comment: >-
+      The STT and TTS entities stay available when the server is unavailable,
+      because the fallback engines answer the turn. Not examined against the rule.
+  integration-owner:
+    status: todo
+    comment: The manifest has no code owner.
+  log-when-unavailable:
+    status: todo
+    comment: Not examined.
+  parallel-updates:
+    status: done
+    comment: Each entity platform sets PARALLEL_UPDATES to 0.
+  reauthentication-flow:
+    status: todo
+    comment: The integration has no reauthentication flow.
+  test-coverage:
+    status: todo
+    comment: Not measured.
+
+  # Gold
+  devices:
+    status: todo
+    comment: >-
+      The entities connect to the satellite devices of other integrations. Not
+      examined against the rule.
+  diagnostics:
+    status: done
+    comment: diagnostics.py gives redacted config entry diagnostics.
+  discovery:
+    status: todo
+    comment: Not examined.
+  discovery-update-info:
+    status: todo
+    comment: Not examined.
+  docs-data-update:
+    status: todo
+    comment: Not examined.
+  docs-examples:
+    status: todo
+    comment: Not examined.
+  docs-known-limitations:
+    status: todo
+    comment: Not examined.
+  docs-supported-devices:
+    status: todo
+    comment: Not examined.
+  docs-supported-functions:
+    status: todo
+    comment: Not examined.
+  docs-troubleshooting:
+    status: todo
+    comment: Not examined.
+  docs-use-cases:
+    status: todo
+    comment: Not examined.
+  dynamic-devices:
+    status: todo
+    comment: Not examined.
+  entity-category:
+    status: todo
+    comment: Not examined.
+  entity-device-class:
+    status: done
+    comment: The latency sensor uses the `duration` device class.
+  entity-disabled-by-default:
+    status: todo
+    comment: Not examined.
+  entity-translations:
+    status: done
+    comment: The entity names come from strings.json.
+  exception-translations:
+    status: todo
+    comment: The integration gives HomeAssistantError errors without translation keys.
+  icon-translations:
+    status: todo
+    comment: Not examined.
+  reconfiguration-flow:
+    status: todo
+    comment: The integration has no reconfiguration flow.
+  repair-issues:
+    status: todo
+    comment: repairs.py makes repair issues. Not examined against the rule.
+  stale-devices:
+    status: todo
+    comment: Not examined.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: assist-live-client uses asyncio and aiohttp.
+  inject-websession:
+    status: todo
+    comment: >-
+      Setup gives the HA client session to the client. The config flow
+      makes its client without that session.
+  strict-typing:
+    status: todo
+    comment: >-
+      Strict mypy examines the integration. The client package has no
+      py.typed marker.
