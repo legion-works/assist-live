@@ -465,6 +465,7 @@ The server sends one request for each sentence, in sequence, and sends the audio
 The provider reads the rate from each WAV header. It sends 16000 Hz and 22050 Hz audio without change and changes other rates to 22050 Hz mono, the format of the local Piper fallback.
 Thus a 22050 Hz reply can continue with the fallback after audio starts.
 The TTS server gives the voice list, and the configuration can make the list smaller.
+The list has no language data, so the configuration gives one language tag for all voices, with `en` as the default. HA uses that tag to select a voice for the pipeline language.
 
 The destination is `local` only for a private address, so local-only mode refuses a public address.
 An optional key comes from a file. The key does not go to logs, health, metrics, or the turn record.
