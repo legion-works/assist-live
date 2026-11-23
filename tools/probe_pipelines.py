@@ -4,7 +4,8 @@ import argparse
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -137,6 +138,34 @@ async def probe_cycle(
     return errors
 
 
+async def _refuse_redirects(
+    request: aiohttp.ClientRequest, handler: aiohttp.ClientHandlerType
+) -> aiohttp.ClientResponse:
+    response = await handler(request)
+    if 300 <= response.status < 400:
+        response.close()
+        raise ValueError("WebSocket redirect refused")
+    return response
+
+
+@asynccontextmanager
+async def connect_authenticated(
+    url: str, token: str
+) -> AsyncIterator[aiohttp.ClientWebSocketResponse]:
+    async with (
+        aiohttp.ClientSession(middlewares=(_refuse_redirects,)) as session,
+        session.ws_connect(url) as ws,
+    ):
+        async with asyncio.timeout(15):
+            greeting = await ws.receive_json()
+            if greeting.get("ha_version") != "2026.10.3":
+                raise ValueError("live probe requires HA 2026.10.3")
+            await ws.send_json({"type": "auth", "access_token": token})
+            if (await ws.receive_json()).get("type") != "auth_ok":
+                raise ValueError("WebSocket authentication failed")
+        yield ws
+
+
 async def run_live(
     url: str, token_file: Path, stt_engine: str, tts_engine: str, tts_voice: str
 ) -> list[str]:
@@ -155,30 +184,23 @@ async def run_live(
     token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("token file requires a token string")
-    async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(url.rstrip("/") + "/api/websocket") as ws:
+    websocket_url = f"http://{parsed.hostname}:{parsed.port}/api/websocket"
+    async with connect_authenticated(websocket_url, token) as ws:
+        counter = 0
+
+        async def command(kind: str, **fields: Any) -> Any:
+            nonlocal counter
+            counter += 1
             async with asyncio.timeout(15):
-                greeting = await ws.receive_json()
-                if greeting.get("ha_version") != "2026.10.3":
-                    raise ValueError("live probe requires HA 2026.10.3")
-                await ws.send_json({"type": "auth", "access_token": token})
-                if (await ws.receive_json()).get("type") != "auth_ok":
-                    raise ValueError("WebSocket authentication failed")
-            counter = 0
+                await ws.send_json({"id": counter, "type": kind, **fields})
+                while True:
+                    response = await ws.receive_json()
+                    if response.get("id") == counter:
+                        if not response.get("success"):
+                            raise ValueError(f"WebSocket command failed: {kind}")
+                        return response.get("result")
 
-            async def command(kind: str, **fields: Any) -> Any:
-                nonlocal counter
-                counter += 1
-                async with asyncio.timeout(15):
-                    await ws.send_json({"id": counter, "type": kind, **fields})
-                    while True:
-                        response = await ws.receive_json()
-                        if response.get("id") == counter:
-                            if not response.get("success"):
-                                raise ValueError(f"WebSocket command failed: {kind}")
-                            return response.get("result")
-
-            return await probe_cycle(command, stt_engine, tts_engine, tts_voice)
+        return await probe_cycle(command, stt_engine, tts_engine, tts_voice)
 
 
 def main(argv: list[str] | None = None) -> int:

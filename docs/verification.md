@@ -4427,3 +4427,11 @@ The type check found no issues in 37 source files.
 Gitleaks found no leaks, and the public-data check gave `matches=0`.
 The local package check and the script-mode CI check also gave `PASS`.
 These checks do not prove hardware acceptance or supply the missing P1 adapter.
+
+## Pipeline probe connection checks
+
+The probe refuses WebSocket redirects and sends credentials only to the checked address.
+The tests use loopback servers with ports that the operating system selects.
+They check two redirect cases: a different path on the same server and a path on a different server.
+In each case, the probe refuses the redirect before it connects to the second address.
+The tests also check that the probe authenticates when the server does not redirect the connection.
