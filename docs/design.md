@@ -384,6 +384,20 @@ If the formats do not agree, the entity ends audio, records `tts_failed`, and fi
 An optional `notify` service receives the full reply.
 The integration does not run the conversation or device control again.
 
+### Reply start before the first server audio
+
+Some satellites end the reply turn when no reply audio starts in a set time. The stock Voice PE firmware waits 2 s, and the firmware configuration cannot change this time.
+HA sends audio to the satellite only after the TTS entity gives its audio stream to HA. The HA conversion sends nothing before it has one full audio frame.
+Thus, if a TTS provider uses more than about 2 s for its first sentence, the satellite ends the turn before the reply plays.
+
+The TTS entity can give its audio stream to HA before the server audio starts.
+It does this when the server format is 22050 Hz and the server audio does not start in less than 1 s.
+The stream starts with 250 ms of silent audio, and the server audio follows when the entity gets it. Thus the satellite starts the reply and keeps the turn open.
+A fast provider starts audio before 1 s, so its replies do not change.
+
+If the server stops before audio after this start, the fallback continues in the same stream from the start of the reply.
+This uses the rules for a fallback after audio starts, so the fallback must give the same audio format.
+
 ### Spoken replies
 
 The integration has an `llm` platform.
@@ -462,8 +476,9 @@ A TTS server on a private address can be the local TTS provider when it has an O
 An example is a voice-clone server on a GPU host on the local network.
 The server sends one request for each sentence, in sequence, and sends the audio of each WAV to HA when it gets it.
 
-The provider reads the rate from each WAV header. It sends 16000 Hz and 22050 Hz audio without change and changes other rates to 22050 Hz mono, the format of the local Piper fallback.
-Thus a 22050 Hz reply can continue with the fallback after audio starts.
+The provider reads the rate from each WAV header and sends 22050 Hz mono audio, the format of the local Piper fallback. It changes other rates to 22050 Hz.
+Thus the provider can send its format before its first audio. A reply can continue with the fallback after audio starts.
+
 The TTS server gives the voice list, and the configuration can make the list smaller.
 The list has no language data, so the configuration gives one language tag for all voices, with `en` as the default. HA uses that tag to select a voice for the pipeline language.
 
