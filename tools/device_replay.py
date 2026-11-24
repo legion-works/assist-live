@@ -20,8 +20,6 @@ from pathlib import Path
 from typing import Any, Protocol, TypeGuard, cast
 from urllib.parse import urlsplit
 
-import aiohttp
-
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -37,6 +35,7 @@ from tools.corpus import (
     resolve_audio,
     text,
 )
+from tools.ha_websocket import ha_session
 from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
 from tools.test_environment import (
     validate_intent_action_evidence,
@@ -1029,7 +1028,7 @@ async def run(
         "server_token": token,
     }
     async with (
-        aiohttp.ClientSession() as loss_session,
+        ha_session() as loss_session,
         AssistLiveClient(os.environ["ASSIST_LIVE_URL"], token) as client,
     ):
         loss_start = await capture_loss(loss_session, **loss_options)

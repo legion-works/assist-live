@@ -13,6 +13,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.corpus import load_corpus
+from tools.ha_websocket import checked_ha_url, ha_session
 from tools.test_environment import URL, run_live
 
 CONTRACT = {
@@ -197,8 +198,7 @@ def run_native_matrix() -> list[dict[str, Any]]:
 
 
 async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
-    if URL != "http://127.0.0.1:18123":
-        raise ValueError("virtual checks require the isolated loopback test instance")
+    origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text())["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("test authentication unavailable")
@@ -207,14 +207,12 @@ async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
     ]
     if not timers:
         raise ValueError("timer label unavailable")
-    async with aiohttp.ClientSession(
-        headers={"Authorization": "Bearer " + token}
-    ) as session:
-        async with session.get(URL + "/api/config") as response:
+    async with ha_session(headers={"Authorization": "Bearer " + token}) as session:
+        async with session.get(origin + "/api/config") as response:
             config = await response.json()
             if response.status != 200 or config.get("version") != "2026.10.3":
                 raise ValueError("isolated test instance requires HA 2026.10.3")
-        async with session.get(URL + "/api/states") as response:
+        async with session.get(origin + "/api/states") as response:
             states = await response.json()
         targets = {
             "light.virtual_light",
@@ -238,7 +236,7 @@ async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
             )
         finally:
             async with session.post(
-                URL + "/api/conversation/process",
+                origin + "/api/conversation/process",
                 json={
                     "text": "cancel all timers",
                     "language": "en",
@@ -248,7 +246,7 @@ async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
             ) as response:
                 cleanup_status = response.status
                 await response.read()
-            async with session.get(URL + "/api/states") as response:
+            async with session.get(origin + "/api/states") as response:
                 states = await response.json()
             after = {
                 state["entity_id"]: state["state"]

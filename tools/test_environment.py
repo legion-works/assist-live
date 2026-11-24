@@ -15,10 +15,12 @@ import yaml
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tools.ha_websocket import HA_URL, checked_ha_url, ha_session, require_ha_session
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures"
 CONTAINER = "assist-live-ha-test"
-URL = "http://127.0.0.1:18123"
+URL = HA_URL
 DEVICE_ID = "assist_live_virtual"
 
 
@@ -466,9 +468,11 @@ def install_virtual() -> None:
 async def configure_agent(
     session: aiohttp.ClientSession, token: str, *, remove: bool = False
 ) -> None:
+    require_ha_session(session)
+    origin = checked_ha_url(URL)
     headers = {"Authorization": f"Bearer {token}"}
     async with session.get(
-        URL + "/api/config/config_entries/entry", headers=headers
+        origin + "/api/config/config_entries/entry", headers=headers
     ) as response:
         response.raise_for_status()
         entries = [
@@ -481,7 +485,7 @@ async def configure_agent(
     if remove:
         for entry in entries:
             async with session.delete(
-                URL + "/api/config/config_entries/entry/" + entry["entry_id"],
+                origin + "/api/config/config_entries/entry/" + entry["entry_id"],
                 headers=headers,
             ) as response:
                 response.raise_for_status()
@@ -489,7 +493,7 @@ async def configure_agent(
     if entries:
         return
     async with session.post(
-        URL + "/api/config/config_entries/flow",
+        origin + "/api/config/config_entries/flow",
         headers=headers,
         json={"handler": "assist_live_test_agent", "show_advanced_options": False},
     ) as response:
@@ -506,15 +510,16 @@ async def run_live(
     *,
     remove: bool = False,
 ) -> list[str]:
+    origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("token file requires a token string")
     failures: list[str] = []
     records: list[dict[str, Any]] = []
-    async with aiohttp.ClientSession() as session:
+    async with ha_session() as session:
         for attempt in range(90):
             try:
-                ws = await session.ws_connect(URL + "/api/websocket")
+                ws = await session.ws_connect(origin + "/api/websocket")
                 break
             except aiohttp.ClientError:
                 if attempt == 89:
@@ -668,10 +673,11 @@ async def record_device(
         )
     if output.resolve().is_relative_to(ROOT):
         raise ValueError("test records must stay external to the repository")
+    origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text())["token"]
     records: list[dict[str, Any]] = []
-    async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(URL + "/api/websocket") as ws:
+    async with ha_session() as session:
+        async with session.ws_connect(origin + "/api/websocket") as ws:
             async with asyncio.timeout(30):
                 if (await ws.receive_json()).get("ha_version") != "2026.10.3":
                     raise ValueError("isolated test instance requires HA 2026.10.3")

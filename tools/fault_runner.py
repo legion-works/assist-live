@@ -22,6 +22,7 @@ if __package__ in (None, ""):
 
 from tools.corpus import load_corpus, resolve_audio
 from tools.device_replay import BRIDGE_OPERATION_MAP, RUN_FIELDS
+from tools.ha_websocket import checked_ha_url, ha_session, require_ha_session
 from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
 from tools.metrics import rate
 from tools.native_matrix import (
@@ -501,10 +502,12 @@ class TestServer:
 async def connect(
     session: aiohttp.ClientSession, token_file: Path
 ) -> aiohttp.ClientWebSocketResponse:
+    require_ha_session(session)
+    origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text())["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("test authentication unavailable")
-    ws = await session.ws_connect(URL + "/api/websocket", heartbeat=20)
+    ws = await session.ws_connect(origin + "/api/websocket", heartbeat=20)
     try:
         async with asyncio.timeout(15):
             if (await ws.receive_json()).get("ha_version") != "2026.10.3":
@@ -1367,7 +1370,7 @@ async def run(args: argparse.Namespace) -> Row:
 
     hardware = Hardware(args) if getattr(args, "hardware", False) else None
     if hardware is not None:
-        async with aiohttp.ClientSession() as session:
+        async with ha_session() as session:
             async with control_command(session, args.token_file) as command:
                 await hardware.preflight(command)
     labels = load_corpus(args.labels)
@@ -1454,7 +1457,7 @@ async def run(args: argparse.Namespace) -> Row:
         await server.restore()
         if not hardware:
             await calibrate_stop()
-        async with aiohttp.ClientSession() as session:
+        async with ha_session() as session:
 
             async def trials(
                 pipeline: str, device_id: str | None = None, sensor: str | None = None
@@ -1841,7 +1844,7 @@ async def run(args: argparse.Namespace) -> Row:
 
                 async def cleanup_timers() -> None:
                     try:
-                        async with aiohttp.ClientSession() as cleanup_session:
+                        async with ha_session() as cleanup_session:
                             async with control_command(
                                 cleanup_session, args.token_file
                             ) as command:

@@ -4,14 +4,19 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import aiohttp
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.ha_websocket import checked_ha_url, ha_session
 
 Command = Callable[..., Awaitable[Any]]
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,22 +143,12 @@ async def probe_cycle(
     return errors
 
 
-async def _refuse_redirects(
-    request: aiohttp.ClientRequest, handler: aiohttp.ClientHandlerType
-) -> aiohttp.ClientResponse:
-    response = await handler(request)
-    if 300 <= response.status < 400:
-        response.close()
-        raise ValueError("WebSocket redirect refused")
-    return response
-
-
 @asynccontextmanager
 async def connect_authenticated(
     url: str, token: str
 ) -> AsyncIterator[aiohttp.ClientWebSocketResponse]:
     async with (
-        aiohttp.ClientSession(middlewares=(_refuse_redirects,)) as session,
+        ha_session() as session,
         session.ws_connect(url) as ws,
     ):
         async with asyncio.timeout(15):
@@ -169,23 +164,11 @@ async def connect_authenticated(
 async def run_live(
     url: str, token_file: Path, stt_engine: str, tts_engine: str, tts_voice: str
 ) -> list[str]:
-    parsed = urlsplit(url)
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname != "127.0.0.1"
-        or parsed.port != 18123
-        or parsed.path not in ("", "/")
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("live probe requires the isolated loopback test instance")
+    origin = checked_ha_url(url)
     token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
     if not isinstance(token, str) or not token:
         raise ValueError("token file requires a token string")
-    websocket_url = f"http://{parsed.hostname}:{parsed.port}/api/websocket"
-    async with connect_authenticated(websocket_url, token) as ws:
+    async with connect_authenticated(origin + "/api/websocket", token) as ws:
         counter = 0
 
         async def command(kind: str, **fields: Any) -> Any:

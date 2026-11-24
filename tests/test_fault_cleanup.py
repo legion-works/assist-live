@@ -8,13 +8,11 @@ from aiohttp import web
 from test_pipeline_contract import pipeline_hass as configured_hass  # noqa: F401
 
 from tests.test_fault_runner import cleanup_bench as cleanup_bench
-from tools import fault_runner
+from tools import fault_runner, ha_websocket
 
 
 @pytest.fixture
-async def ha_socket(
-    tmp_path, socket_enabled, unused_tcp_port, monkeypatch, cleanup_bench
-):
+async def ha_socket(tmp_path, socket_enabled, monkeypatch, cleanup_bench):
     sockets = []
     deletes = []
     rejected = []
@@ -54,14 +52,15 @@ async def ha_socket(
 
     app = web.Application()
     app.router.add_get("/api/websocket", handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "localhost", unused_tcp_port)
-    await site.start()
-    monkeypatch.setattr(fault_runner, "URL", f"http://localhost:{unused_tcp_port}")
     token_file = tmp_path / "authentication.json"
     token_file.write_text(json.dumps({"token": "synthetic"}))
+    runner = web.AppRunner(app, handler_cancellation=False)
+    await runner.setup()
     try:
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        _, port = runner.addresses[0]
+        monkeypatch.setattr(ha_websocket, "HA_PORT", port)
+        monkeypatch.setattr(fault_runner, "URL", f"http://127.0.0.1:{port}")
         yield token_file, sockets, deletes, rejected, closed
     finally:
         for ws in sockets:
@@ -71,7 +70,7 @@ async def ha_socket(
 
 async def test_idle_control_reader_answers_ha_heartbeat(ha_socket):
     token_file, sockets, _, _, _ = ha_socket
-    async with aiohttp.ClientSession() as session:
+    async with ha_websocket.ha_session() as session:
         async with fault_runner.control_command(session, token_file) as command:
             await command("get_states")
             await asyncio.sleep(0.15)
@@ -84,7 +83,7 @@ async def test_cleanup_uses_fresh_authenticated_socket_after_idle_close(
 ):
     token_file, sockets, deletes, _, closed = ha_socket
     result = {}
-    async with aiohttp.ClientSession() as session:
+    async with ha_websocket.ha_session() as session:
         async with await fault_runner.connect(session, token_file) as old:
             counter = 0
 
@@ -113,7 +112,7 @@ async def test_each_failed_delete_records_scrubbed_error(ha_socket, failures):
     token_file, sockets, deletes, rejected, _ = ha_socket
     rejected.extend(["synthetic denial"] * failures)
     result = {}
-    async with aiohttp.ClientSession() as session:
+    async with ha_websocket.ha_session() as session:
         async with fault_runner.control_command(session, token_file) as command:
 
             async def fresh(kind, **fields):

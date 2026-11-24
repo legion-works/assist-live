@@ -26,5 +26,6 @@
 - Show current server health apart from last known values, and bound speaker-result reads. Transcripts do not wait for these reads.
 - Refresh STT name hints after changes to device names, areas, or parent devices, and after server restarts.
 - Refuse WebSocket redirects in the pipeline probe and send credentials only to the checked address.
+- Refuse redirects in the test tools that send credentials to the isolated HA instance.
 
 No release is available. Version `0.0.0` is a metadata placeholder.

@@ -4435,3 +4435,9 @@ The tests use loopback servers with ports that the operating system selects.
 They check two redirect cases: a different path on the same server and a path on a different server.
 In each case, the probe refuses the redirect before it connects to the second address.
 The tests also check that the probe authenticates when the server does not redirect the connection.
+
+## Shared connection checks for test tools
+
+The test tools use the same redirect check for WebSocket connections and HTTP requests that send credentials to the test instance.
+The fault runner accepts only sessions that have this check.
+The tests include the fault runner, the test environment, and the device recorder.
