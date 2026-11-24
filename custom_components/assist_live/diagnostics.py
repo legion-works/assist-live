@@ -3,12 +3,28 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.components import assist_pipeline
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import AssistLiveConfigEntry
 from .config_flow import destination, entity_iot_class
 from .settings import effective_settings
 from .tts import AssistLiveTTS
+
+# The loaded output also has no address, token, entity ID, or device ID.
+# The voices and pipelines keys use device IDs.
+ENTRY_REDACT = {
+    "fallback_stt",
+    "fallback_tts",
+    "fallback_tts_voice",
+    "local_decisions",
+    "pipeline_selects",
+    "pipelines",
+    "satellites",
+    "token",
+    "url",
+    "voices",
+}
 
 
 def safe_label(value: object) -> str:
@@ -41,7 +57,17 @@ def safe_format(value: dict[str, Any] | None) -> dict[str, Any] | None:
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: AssistLiveConfigEntry
 ) -> dict[str, Any]:
-    runtime = entry.runtime_data
+    # HA calls this handler also for an entry that is not loaded. A release
+    # of the entry or a setup error removes runtime_data.
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None:
+        return {
+            "loaded": False,
+            "entry": {
+                "data": async_redact_data(dict(entry.data), ENTRY_REDACT),
+                "options": async_redact_data(dict(entry.options), ENTRY_REDACT),
+            },
+        }
     streaming = full_file = 0
     for entity in runtime.tts.values():
         if isinstance(entity, AssistLiveTTS):

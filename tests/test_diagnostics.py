@@ -6,6 +6,92 @@ from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.diagnostics import (
+    get_diagnostics_for_config_entry,
+)
+from test_pipeline_contract import pipeline_hass  # noqa: F401
+
+UNLOADED_ENTRY_DATA = {
+    "url": "https://server.example",
+    "token": "planted-sensitive-token",
+    "fallback_stt": "stt.contract_stt",
+    "fallback_tts": "tts.contract_tts",
+    "satellites": {"device-a": "satellite-a"},
+    "pipeline_selects": {},
+    "record_transcripts": True,
+}
+
+
+def assert_entry_state_only(result):
+    assert result["loaded"] is False
+    assert result["entry"]["data"]["record_transcripts"] is True
+    for key in ("url", "token", "fallback_stt", "fallback_tts", "satellites"):
+        assert result["entry"]["data"][key] == "**REDACTED**", key
+    assert result["entry"]["options"] == {}
+    assert "turns" not in result and "failures" not in result
+    serialized = json.dumps(result)
+    for value in ("server.example", "planted-sensitive-token", "device-a"):
+        assert value not in serialized, value
+
+
+# HA 2026.10.4 http/const.py:76 stores a request value with a string key.
+# Then aiohttp gives a warning. The pytest filter makes that warning an
+# HTTP 500. This mark applies only to the tests that send an HTTP request.
+HTTP_REQUEST_KEY_WARNING = pytest.mark.filterwarnings(
+    "ignore:It is recommended to use web.RequestKey"
+    ":aiohttp.web_exceptions.NotAppKeyWarning"
+)
+
+
+async def hanging_events(*args, **kwargs):
+    import asyncio
+
+    await asyncio.Event().wait()
+    yield
+
+
+@HTTP_REQUEST_KEY_WARNING
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_diagnostics_after_unload_give_entry_state_only(
+    pipeline_hass,  # noqa: F811
+    hass_client,
+    client,
+):
+    hass = pipeline_hass
+    client.events = hanging_events
+    entry = MockConfigEntry(domain="assist_live", data=UNLOADED_ENTRY_DATA)
+    entry.add_to_hass(hass)
+    with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        loaded = await get_diagnostics_for_config_entry(hass, hass_client, entry)
+        assert "loaded" not in loaded and "failures" in loaded
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    assert_entry_state_only(
+        await get_diagnostics_for_config_entry(hass, hass_client, entry)
+    )
+
+
+@HTTP_REQUEST_KEY_WARNING
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_diagnostics_after_setup_error_give_entry_state_only(
+    pipeline_hass,  # noqa: F811
+    hass_client,
+    client,
+):
+    from custom_components.assist_live import Runtime
+
+    hass = pipeline_hass
+    client.events = hanging_events
+    entry = MockConfigEntry(domain="assist_live", data=UNLOADED_ENTRY_DATA)
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.assist_live.AssistLiveClient", return_value=client),
+        patch.object(Runtime, "_maintenance", side_effect=RuntimeError("test")),
+    ):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert_entry_state_only(
+        await get_diagnostics_for_config_entry(hass, hass_client, entry)
+    )
 
 
 @pytest.mark.parametrize("failure", [TimeoutError(), OSError(), "unhealthy"])

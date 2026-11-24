@@ -7,13 +7,37 @@ from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.loader import async_get_integration
+from yarl import URL
 
 from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .settings import effective_settings
+
+
+def server_url(url: str) -> str:
+    """Give the server URL that the duplicate check compares.
+
+    The pinned client parses the URL with yarl and removes a trailing "/".
+    This URL also has a lowercase scheme and host and no default port. The
+    path case does not change.
+    """
+    try:
+        parsed = URL(url)
+    except ValueError:
+        return url.rstrip("/")
+    host = parsed.raw_host
+    if not parsed.absolute or not host or not parsed.scheme:
+        return url.rstrip("/")
+    host = host.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    if not parsed.is_default_port() and parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return f"{parsed.scheme.lower()}://{host}{parsed.raw_path.rstrip('/')}"
 
 
 def destination(iot_class: str | None) -> str:
@@ -173,17 +197,29 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         self.selects: dict[str, str] = {}
         self._http_confirmed: str | None = None
 
+    def _abort_if_configured(self, url: object, token: object) -> None:
+        # The connection slots of one server token are sufficient for five
+        # satellites. Thus two entries can use one server with different
+        # tokens. An entry with the same server and token is a duplicate.
+        # Entries from before this check keep the URL as the user wrote it.
+        if not isinstance(url, str) or not isinstance(token, str):
+            return
+        key = server_url(url)
+        for entry in self._async_current_entries(include_ignore=False):
+            stored = entry.data.get("url")
+            if (
+                isinstance(stored, str)
+                and entry.data.get("token") == token
+                and server_url(stored) == key
+            ):
+                raise AbortFlow("already_configured")
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         errors = {}
         if user_input:
-            # The connection slots of one server token are sufficient for five
-            # satellites. Thus two entries can use one server with different
-            # tokens. An entry with the same server and token is a duplicate.
-            self._async_abort_entries_match(
-                {"url": user_input["url"], "token": user_input["token"]}
-            )
+            self._abort_if_configured(user_input["url"], user_input["token"])
             if errors := fallback_errors(self.hass, user_input):
                 pass
             elif errors := await mode_errors(self.hass, user_input):
@@ -251,6 +287,12 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     ) -> config_entries.ConfigFlowResult:
         errors = {}
         if user_input:
+            # A different flow can make an entry for the same server and token
+            # after the user step. No await occurs between this check and
+            # async_create_entry, so a second flow cannot get through it.
+            self._abort_if_configured(
+                self.settings.get("url"), self.settings.get("token")
+            )
             device, satellite = user_input["device"], user_input["satellite"]
             existing_bindings = [
                 entry.data.get("satellites", {})
@@ -279,6 +321,7 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                         title="assist-live",
                         data={
                             **self.settings,
+                            "url": server_url(self.settings["url"]),
                             "satellites": self.satellites,
                             "pipeline_selects": self.selects,
                         },

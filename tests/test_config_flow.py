@@ -94,14 +94,48 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
     client.close.assert_awaited_once()
 
 
-async def test_same_server_and_token_aborts_without_change(hass, available_fallbacks):
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://server.example", "https://server.example"),
+        ("https://server.example/", "https://server.example"),
+        ("HTTPS://SERVER.Example:443/", "https://server.example"),
+        ("http://server.example:80", "http://server.example"),
+        ("http://server.example:8080/", "http://server.example:8080"),
+        ("https://server.example:80", "https://server.example:80"),
+        ("https://Server.example/API/", "https://server.example/API"),
+        ("http://[2001:DB8::1]:80/", "http://[2001:db8::1]"),
+        ("not-a-server/", "not-a-server"),
+    ],
+)
+def test_server_url_normalizes_scheme_host_default_port_and_slash(url, expected):
+    from custom_components.assist_live.config_flow import server_url
+
+    assert server_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("stored", "submitted"),
+    [
+        ("https://server.example", "https://server.example"),
+        ("https://server.example", "https://server.example/"),
+        ("https://server.example", "https://SERVER.Example"),
+        ("https://server.example", "https://server.example:443"),
+        ("https://Server.example:443/", "https://server.example"),
+        ("https://server.example/api", "HTTPS://server.example:443/api/"),
+    ],
+    ids=["same", "slash", "host_case", "default_port", "legacy_raw", "path"],
+)
+async def test_same_server_and_token_aborts_without_change(
+    hass, available_fallbacks, stored, submitted
+):
     from homeassistant.data_entry_flow import AbortFlow
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     data = {
-        "url": "https://server.example",
+        "url": stored,
         "token": "test-only",
         "fallback_stt": "stt.standard",
         "fallback_tts": "tts.standard",
@@ -118,7 +152,7 @@ async def test_same_server_and_token_aborts_without_change(hass, available_fallb
     ):
         await flow.async_step_user(
             {
-                "url": "https://server.example",
+                "url": submitted,
                 "token": "test-only",
                 "fallback_stt": "stt.standard",
                 "fallback_tts": "tts.standard",
@@ -128,6 +162,75 @@ async def test_same_server_and_token_aborts_without_change(hass, available_fallb
     client.assert_not_called()
     assert existing.data == data, "the existing entry does not change"
     assert len(hass.config_entries.async_entries("assist_live")) == 1
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_second_open_flow_aborts_after_first_creates_entry(
+    configured_hass,  # noqa: F811
+    client,
+):
+    import custom_components.assist_live as integration
+
+    hass = configured_hass
+    client.bindings.return_value = [
+        {"satellite": "satellite-a"},
+        {"satellite": "satellite-b"},
+    ]
+    user = {
+        "url": "https://SERVER.example/",
+        "token": "test-only",
+        "fallback_stt": "stt.contract_stt",
+        "fallback_tts": "tts.contract_tts",
+    }
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.AssistLiveClient",
+            return_value=client,
+        ),
+        patch(
+            "custom_components.assist_live.config_flow.valid_satellite",
+            return_value=True,
+        ),
+        # Entry setup is not part of this flow test.
+        patch.object(integration, "async_setup_entry", AsyncMock(return_value=True)),
+        patch.object(integration, "async_unload_entry", AsyncMock(return_value=True)),
+    ):
+        flows = []
+        for _ in range(2):
+            form = await hass.config_entries.flow.async_init(
+                "assist_live", context={"source": "user"}
+            )
+            result = await hass.config_entries.flow.async_configure(
+                form["flow_id"], user
+            )
+            assert result["step_id"] == "satellite", "both flows pass the user step"
+            flows.append(result["flow_id"])
+        first = await hass.config_entries.flow.async_configure(
+            flows[0],
+            {
+                "device": "device-a",
+                "satellite": "satellite-a",
+                "pipeline_select": "select.pipeline_a",
+                "add_another": False,
+            },
+        )
+        assert first["type"] == "create_entry"
+        assert first["data"]["url"] == "https://server.example", "normalized URL"
+        second = await hass.config_entries.flow.async_configure(
+            flows[1],
+            {
+                "device": "device-b",
+                "satellite": "satellite-b",
+                "pipeline_select": "select.pipeline_b",
+                "add_another": False,
+            },
+        )
+        assert second["type"] == "abort"
+        assert second["reason"] == "already_configured"
+        entries = hass.config_entries.async_entries("assist_live")
+        assert len(entries) == 1
+        assert entries[0].data["satellites"] == {"device-a": "satellite-a"}
+        assert await hass.config_entries.async_unload(entries[0].entry_id)
 
 
 async def test_same_server_with_different_token_continues(hass, available_fallbacks):
@@ -235,6 +338,156 @@ async def test_binding_cannot_be_reused_by_another_entry(hass):
             }
         )
     assert result["errors"] == {"base": "binding_used"}
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_upgrade_keeps_ids_and_pipeline_and_names_tts_in_other_language(
+    configured_hass,  # noqa: F811
+    client,
+):
+    import asyncio
+
+    from assist_live_client.models import (
+        HealthCapabilities,
+        TTSAudio,
+        TTSFormat,
+        TTSSentenceEnd,
+        TTSVoice,
+    )
+    from homeassistant.components import assist_pipeline, tts
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    hass = configured_hass
+
+    async def events(*args, **kwargs):
+        await asyncio.Event().wait()
+        yield
+
+    async def synth(turn_id, parts, voice, **kwargs):
+        assert "".join([part async for part in parts]) == "Synthetic reply."
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(bytes(640))
+        yield TTSSentenceEnd(0)
+
+    client.events = events
+    client.tts_stream = synth
+    client.health_capabilities.return_value = HealthCapabilities(
+        True,
+        True,
+        True,
+        tts_voices=(TTSVoice("voice-two", "Server voice", "en-US"),),
+        tts_default_voice="voice-two",
+    )
+    entry = MockConfigEntry(
+        domain="assist_live",
+        data={
+            "url": "https://server.example",
+            "token": "test-only",
+            "fallback_stt": "stt.contract_stt",
+            "fallback_tts": "tts.contract_tts",
+            "satellites": {},
+            "pipeline_selects": {},
+        },
+    )
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "satellite-a")},
+        name="Synthetic satellite",
+    )
+    # Registry rows as the entities had them before has_entity_name.
+    registry = er.async_get(hass)
+    old = {
+        unique_id: registry.async_get_or_create(
+            domain,
+            "assist_live",
+            unique_id,
+            suggested_object_id=object_id,
+            config_entry=entry,
+            device_id=device.id,
+        ).entity_id
+        for domain, unique_id, object_id in (
+            ("stt", "satellite-a_stt", "assist_live_satellite_a"),
+            ("tts", "satellite-a_tts", "assist_live_satellite_a"),
+            (
+                "sensor",
+                "satellite-a_last_turn_latency",
+                "assist_live_satellite_a_last_turn_latency",
+            ),
+        )
+    }
+    assert old == {
+        "satellite-a_stt": "stt.assist_live_satellite_a",
+        "satellite-a_tts": "tts.assist_live_satellite_a",
+        "satellite-a_last_turn_latency": (
+            "sensor.assist_live_satellite_a_last_turn_latency"
+        ),
+    }
+    # The default pipeline settings must have the English of the probes.
+    pipeline = await assist_pipeline.async_create_default_pipeline(
+        hass, "stt.contract_stt", "tts.contract_tts", "assist-live satellite-a"
+    )
+    assert pipeline is not None
+    await assist_pipeline.async_update_pipeline(
+        hass,
+        pipeline,
+        stt_engine=old["satellite-a_stt"],
+        tts_engine=old["satellite-a_tts"],
+    )
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            "satellites": {device.id: "satellite-a"},
+            "pipelines": {device.id: pipeline.id},
+        },
+    )
+    before = {p.id for p in assist_pipeline.async_get_pipelines(hass)}
+    # The integration has only translations/en.json, so HA must use English.
+    hass.config.language = "de"
+    with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            runtime = entry.runtime_data
+            assert runtime.stt[device.id].entity_id == old["satellite-a_stt"]
+            assert runtime.tts[device.id].entity_id == old["satellite-a_tts"]
+            assert {
+                row.unique_id: row.entity_id
+                for row in er.async_entries_for_config_entry(registry, entry.entry_id)
+            } == old, "registry entity IDs do not change"
+            pipelines = {p.id: p for p in assist_pipeline.async_get_pipelines(hass)}
+            assert set(pipelines) == before, "no new pipeline"
+            assert pipelines[pipeline.id].stt_engine == old["satellite-a_stt"]
+            assert pipelines[pipeline.id].tts_engine == old["satellite-a_tts"]
+            assert entry.data["pipelines"] == {device.id: pipeline.id}
+            tts_id = old["satellite-a_tts"]
+            assert tts.async_resolve_engine(hass, tts_id) == tts_id
+            assert (
+                hass.states.get(tts_id).attributes["friendly_name"]
+                == "Synthetic satellite assist-live TTS"
+            )
+            stream = tts.async_create_stream(
+                hass,
+                tts_id,
+                language="en",
+                options={
+                    "preferred_format": "wav",
+                    "preferred_sample_rate": 16000,
+                    "preferred_sample_channels": 1,
+                    "preferred_sample_bytes": 2,
+                },
+            )
+
+            async def message():
+                yield "Synthetic reply."
+
+            stream.async_set_message_stream(message())
+            delivered = b"".join([c async for c in stream.async_stream_result()])
+            assert delivered.startswith(b"RIFF"), "HA found and named the engine"
+        finally:
+            assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")

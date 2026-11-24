@@ -29,10 +29,12 @@ rules:
       The tests include 91 % of config_flow.py with branches. No test completes
       a flow to a new entry, and some error paths have no test.
   dependency-transparency:
-    status: done
+    status: todo
     comment: >-
-      assist-live-client has the Apache-2.0 license. A public GitHub workflow
-      of assist-live-server builds it and publishes it to PyPI.
+      assist-live-client has the Apache-2.0 license, and a public GitHub
+      workflow of assist-live-server builds it and publishes it to PyPI.
+      The assist-live-server repository has no Git tag for the PyPI release
+      0.1.0a1, and the workflow does not make a tag necessary.
   docs-actions:
     status: exempt
     comment: The integration has no HA `actions`.
@@ -79,7 +81,8 @@ rules:
     status: done
     comment: >-
       The config flow aborts when an entry has the same server URL and token.
-      Different tokens on one server are different entries.
+      It compares normalized URLs at the first step and before it makes the
+      entry. Different tokens on one server are different entries.
 
   # Silver
   action-exceptions:

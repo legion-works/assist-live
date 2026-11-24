@@ -22,7 +22,8 @@
 
 ### Changes
 
-- The config flow stops a second entry with the same server URL and token. Different tokens on one server stay different entries.
+- The config flow stops a second entry with the same server URL and token. The check ignores the case of the scheme and host, a trailing slash, and a default port. It also stops a second flow that started before the first flow made its entry. Different tokens on one server stay different entries.
+- Diagnostics of an entry that is not loaded give the entry state with redacted data, not an error.
 - Entity names are in the context of the satellite device. The entity IDs in the registry do not change. The displayed names change:
   - STT: `assist-live <key>` becomes `<device name> assist-live STT`.
   - TTS: `assist-live <key>` becomes `<device name> assist-live TTS`.

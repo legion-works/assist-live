@@ -16,15 +16,14 @@ No release is available. To install the integration from the repository:
 
 1. Copy `custom_components/assist_live/` to the `custom_components/` folder of the HA configuration folder.
 2. Restart HA.
-3. Open **Settings > Devices & services > Add integration** and select **assist-live**.
-4. Do the steps in the next sections.
+3. Do the steps in [Server and standard engines](#server-and-standard-engines).
 
 ## Server and standard engines
 
 1. Configure a standard HA STT entity and TTS entity.
 2. Provision one anonymous server key for each satellite device.
 3. Give the integration token access to those keys.
-4. Add the assist-live integration. Record the server URL and integration token.
+4. Open **Settings > Devices & services > Add integration** and select **assist-live**. Record the server URL and integration token.
 5. Select the standard fallback engines. An assist-live engine cannot be a fallback.
 6. For each device, select its provisioned key and its pipeline selector.
 
@@ -174,15 +173,20 @@ No P0 or P1 acceptance result is available in this repository. These procedures 
 
 ## Removal
 
+To delete one entry:
+
 1. Open **Settings > Devices & services > assist-live**.
 2. Open the menu of the entry and select **Delete**.
-3. Remove the `custom_components/assist_live/` folder, then restart HA.
 
-HA removes the STT, TTS, and latency sensor entities of the entry.
-The integration stops its event subscriptions and closes its server connections.
+HA removes the STT, TTS, and latency sensor entities of that entry.
+The integration stops the event subscriptions and closes the server connections of that entry.
+The other entries continue to operate.
 
-These items stay after removal:
+To remove the integration files, first delete each assist-live entry.
+Then remove the `custom_components/assist_live/` folder and restart HA.
+
+These items stay after you delete an entry:
 
 - The pipelines that the integration made. They keep the IDs of the removed engines. Delete them in the voice assistant settings, or select different engines. Select a different pipeline on each satellite that uses one of them.
-- The turn store file `.storage/assist_live.<entry ID>.turns` in the HA configuration folder. It contains open turn IDs and event cursors. You can delete it after removal.
+- The turn store file `.storage/assist_live.<entry ID>.turns` in the HA configuration folder. It contains open turn IDs and event cursors. You can delete it after you delete the entry.
 - The server records and the integration token. If no other HA entry uses the token, remove it from the server configuration.
