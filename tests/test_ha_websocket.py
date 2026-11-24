@@ -125,6 +125,39 @@ async def test_ha_websocket_authenticates_directly(
     assert messages == expected
 
 
+@pytest.mark.usefixtures("socket_enabled")
+@pytest.mark.parametrize("status", [307, 308])
+async def test_ha_session_refuses_http_redirect_with_token(status):
+    requests = []
+
+    async def unexpected(request):
+        requests.append(request.headers.get("Authorization"))
+        return web.json_response([])
+
+    target = web.Application()
+    target.router.add_get("/target", unexpected)
+    async with TestServer(target, host="127.0.0.1", port=0) as destination:
+        location = destination.make_url("/target")
+
+        async def moved(_request):
+            return web.Response(status=status, headers={"Location": str(location)})
+
+        app = web.Application()
+        app.router.add_get("/api/config/config_entries/entry", moved)
+        async with (
+            TestServer(app, host="127.0.0.1", port=0) as origin,
+            ha_websocket.ha_session(
+                headers={"Authorization": f"Bearer {TOKEN}"}
+            ) as session,
+        ):
+            async with asyncio.timeout(5):
+                with pytest.raises(ValueError, match="redirect refused"):
+                    await session.get(
+                        origin.make_url("/api/config/config_entries/entry")
+                    )
+    assert requests == []
+
+
 async def test_fault_runner_refuses_session_without_redirect_guard(
     token_file, monkeypatch
 ):
