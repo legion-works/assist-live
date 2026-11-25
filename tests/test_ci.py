@@ -444,11 +444,11 @@ def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeyp
     content = target.read_text()
     if field == "resolved":
         content = content.replace(
-            'name = "assist-live-client"\nversion = "0.1.0a1"',
+            'name = "assist-live-client"\nversion = "0.1.0a2"',
             'name = "assist-live-client"\nversion = "0.0.0"',
         )
     elif field == "declared":
-        content = content.replace('specifier = "==0.1.0a1"', 'specifier = "==0.0.0"')
+        content = content.replace('specifier = "==0.1.0a2"', 'specifier = "==0.0.0"')
     elif field == "command":
         content = content.replace('"$CLIENT_VERSION"', '"0.0.0"')
     elif field == "source":
@@ -459,13 +459,13 @@ def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeyp
             )
         else:
             content = content.replace(
-                'name = "assist-live-client"\nversion = "0.1.0a1"\n'
+                'name = "assist-live-client"\nversion = "0.1.0a2"\n'
                 'source = { registry = "https://pypi.org/simple" }',
-                'name = "assist-live-client"\nversion = "0.1.0a1"\n'
+                'name = "assist-live-client"\nversion = "0.1.0a2"\n'
                 'source = { git = "https://example.com/client" }',
             )
     else:
-        content = content.replace("0.1.0a1", "0.0.0")
+        content = content.replace("0.1.0a2", "0.0.0")
     assert content != target.read_text()
     target.write_text(content)
     monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
@@ -487,7 +487,7 @@ def test_client_pin_uses_manifest_version(tmp_path, monkeypatch):
     ):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text((ROOT / name).read_text().replace("0.1.0a1", "1.2.3"))
+        target.write_text((ROOT / name).read_text().replace("0.1.0a2", "1.2.3"))
     monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
     assert check_jobs(tmp_path / ".github/workflows/ci.yml")
 
@@ -975,7 +975,7 @@ def test_release_archive_checks_published_client_before_build(tmp_path):
         f"#!{sys.executable}\nimport sys\n"
         "assert sys.argv[1:4] == ['run', '--locked', 'python']\n"
         "assert '--require-published' in sys.argv\n"
-        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.1.0a1'\n"
+        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.1.0a2'\n"
         "raise SystemExit(19)\n"
     )
     uv.chmod(0o755)

@@ -5,7 +5,7 @@ Realtime voice work on the native Home Assistant Assist pipeline.
 **Experimental. No release is available.** The integration supplies STT, TTS, and latency sensor entities for each satellite.
 It forwards voice through the server and uses standard HA engines for fallback.
 It sends Assist names as STT hints and gives spoken-reply rules to agents that use the Assist API.
-The manifest pins the published PyPI pre-release `assist-live-client==0.1.0a1`. See [setup](docs/setup.md).
+The manifest pins the published PyPI pre-release `assist-live-client==0.1.0a2`. See [setup](docs/setup.md).
 
 ## Purpose
 

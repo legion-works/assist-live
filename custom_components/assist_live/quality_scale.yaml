@@ -35,7 +35,7 @@ rules:
       assist-live-client has the Apache-2.0 license, and a public GitHub
       workflow of assist-live-server builds it and publishes it to PyPI.
       The assist-live-server repository has no Git tag for the PyPI release
-      0.1.0a1, and the workflow does not make a tag necessary.
+      0.1.0a2, and the workflow does not make a tag necessary.
   docs-actions:
     status: exempt
     comment: The integration has no HA `actions`.

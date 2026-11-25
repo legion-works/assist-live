@@ -6,7 +6,7 @@ def test_release_pin_refuses_missing_or_different_published_version(tmp_path):
     from tools import check_release_pin
 
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"requirements": ["assist-live-client==0.1.0a1"]}))
+    manifest.write_text(json.dumps({"requirements": ["assist-live-client==0.1.0a2"]}))
     with patch("tools.check_release_pin.published", return_value=False):
         assert (
             check_release_pin.main(
@@ -14,7 +14,7 @@ def test_release_pin_refuses_missing_or_different_published_version(tmp_path):
                     "--manifest",
                     str(manifest),
                     "--pypi-version",
-                    "0.1.0a1",
+                    "0.1.0a2",
                     "--require-published",
                 ]
             )
@@ -27,13 +27,13 @@ def test_release_pin_refuses_missing_or_different_published_version(tmp_path):
                     "--manifest",
                     str(manifest),
                     "--pypi-version",
-                    "0.1.0a1",
+                    "0.1.0a2",
                     "--require-published",
                 ]
             )
             == 0
         )
-        published.assert_called_once_with("0.1.0a1")
+        published.assert_called_once_with("0.1.0a2")
         assert (
             check_release_pin.main(
                 [

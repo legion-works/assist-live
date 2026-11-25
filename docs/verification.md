@@ -4564,3 +4564,28 @@ This check does not test question replies.
 |---|---|
 | New tests with the config flow of `cb16447` | `6 failed`. The flow aborts with `already_configured` for a URL with a query or fragment. |
 | `tests/test_config_flow.py` with the change | `61 passed` |
+
+## Client pin to `0.1.0a2` (2026-11-25 UTC)
+
+The manifest, development environment, Taskfile, and workflows use the published PyPI pre-release `assist-live-client==0.1.0a2`.
+The lock changes only the client requirement and package entry.
+The client release comes from server revision `477a594`.
+The installed `client.py` and the file at that revision have the same bytes.
+The client refuses HTTP redirects and WebSocket redirects, also when the WebSocket scheme, host, and port do not change.
+
+The first `task check` gave `1 failed, 2140 passed, 1 skipped`.
+The test supplied a session without `session.connector`. The client gave `AttributeError` before the WebSocket handshake.
+The corrected test uses a loopback WebSocket server.
+
+The integration does not compare the messages `redirect refused` and `session closed`.
+The integration uses `ProtocolError.kind` to select the `FallbackReason`.
+A redirect refusal at the WebSocket handshake gives `stream_refused`.
+A closed connector gives `stream_closed`.
+The shared HA session stays open after redirect refusal and after the client closes.
+
+| Check | Result for the pin change |
+|---|---|
+| Published pin check | Exit 0, `PASS release pin` |
+| `task check` | Exit 0, `2141 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2141 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2142 passed` |

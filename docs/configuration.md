@@ -227,12 +227,12 @@ The server stores a `final` transcript only when its policy and the turn option 
 Speaker names go to the turn record and `assist_live_speaker` event only.
 They do not change transcript bytes.
 
-The manifest pins the published pre-release `assist-live-client==0.1.0a1` from PyPI.
+The manifest pins the published pre-release `assist-live-client==0.1.0a2` from PyPI.
 The integration itself has no release.
 Before an approved integration release, run:
 
 ```sh
-uv run python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version 0.1.0a1 --require-published
+uv run python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version 0.1.0a2 --require-published
 ```
 
 The check refuses a different manifest pin or client package version.

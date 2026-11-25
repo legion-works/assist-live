@@ -174,91 +174,69 @@ async def test_missing_position_reports_full_text(client, ledger, hass, case):
     assert ledger.late_server_failures == 0
 
 
-async def test_oversized_position_from_client_reports_full_text(client, ledger, hass):
-    import asyncio
-    from types import SimpleNamespace
-
-    from aiohttp import ClientTimeout, WSMessage, WSMsgType
+async def test_oversized_position_from_client_reports_full_text(
+    client, ledger, hass, socket_enabled, relaxed_message_deadline, io_timeout
+):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
     from assist_live_client import AssistLiveClient
     from assist_live_client.protocol import encode_audio, encode_control
 
     capable(client)
-    sent = asyncio.Event()
     errors, requests = [], []
 
-    class Socket:
-        def __init__(self):
-            self.index = 0
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
+    async def audio(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        hello = await ws.receive_json(timeout=io_timeout)
+        assert hello["type"] == "negotiate"
+        requests.append(hello)
+        turn = hello["turn_id"]
+        await ws.send_json(encode_control("negotiated", turn, capabilities=["tts"]))
+        while (await ws.receive_json(timeout=io_timeout))["type"] != "end":
             pass
-
-        async def send_json(self, value):
-            if value["type"] == "negotiate":
-                self.turn = value["turn_id"]
-                requests.append(value)
-            elif value["type"] == "end":
-                sent.set()
-
-        async def send_str(self, value):
-            pass
-
-        async def receive(self, **kwargs):
-            if self.index:
-                await asyncio.wait_for(sent.wait(), 1)
-            messages = [
-                encode_control("negotiated", self.turn, capabilities=["tts"]),
-                encode_control(
-                    "format",
-                    self.turn,
-                    codec="pcm_s16le",
-                    rate=16000,
-                    channels=1,
-                    width=2,
-                ),
-                encode_audio(self.turn, 0, b"\x01\x00"),
-                encode_control("sentence_end", self.turn, sentence=0, text_end=33),
-                encode_control("end", self.turn),
-            ]
-            value = messages[self.index]
-            self.index += 1
-            kind = WSMsgType.BINARY if isinstance(value, bytes) else WSMsgType.TEXT
-            return WSMessage(
-                kind, value if isinstance(value, bytes) else json.dumps(value), ""
+        await ws.send_json(
+            encode_control(
+                "format", turn, codec="pcm_s16le", rate=16000, channels=1, width=2
             )
+        )
+        await ws.send_bytes(encode_audio(turn, 0, b"\x01\x00"))
+        await ws.send_json(
+            encode_control("sentence_end", turn, sentence=0, text_end=33)
+        )
+        await ws.send_json(encode_control("end", turn))
+        await ws.close()
+        return ws
 
-    wire = AssistLiveClient(
-        "https://server.invalid",
-        "test",
-        session=SimpleNamespace(
-            ws_connect=lambda *args, **kwargs: Socket(), timeout=ClientTimeout(total=20)
-        ),
-    )
+    app = web.Application()
+    app.router.add_get("/v1/audio", audio)
+    async with (
+        TestServer(app) as server,
+        AssistLiveClient(str(server.make_url("")), "test-only") as wire,
+    ):
 
-    async def stream(*args, **kwargs):
-        try:
-            async for item in wire.tts_stream(*args, **kwargs):
-                yield item
-        except ProtocolError as error:
-            errors.append(str(error))
-            raise
+        async def stream(*args, **kwargs):
+            try:
+                async for item in wire.tts_stream(*args, **kwargs):
+                    yield item
+            except ProtocolError as error:
+                errors.append(str(error))
+                raise
 
-    client.tts_stream = stream
-    fallback = StreamingFallback()
-    forward = entity(client, ledger, fallback)
-    forward.hass = hass
-    events = []
-    hass.bus.async_listen(
-        "assist_live_tts_failed", callback(lambda event: events.append(event.data))
-    )
-    response = await forward.async_stream_tts_audio(
-        TTSAudioRequest("en", {"voice": "voice-2"}, text())
-    )
-    assert b"".join([part async for part in response.data_gen])[44:] == b"\x01\x00"
+        client.tts_stream = stream
+        fallback = StreamingFallback()
+        forward = entity(client, ledger, fallback)
+        forward.hass = hass
+        events = []
+        hass.bus.async_listen(
+            "assist_live_tts_failed", callback(lambda event: events.append(event.data))
+        )
+        response = await forward.async_stream_tts_audio(
+            TTSAudioRequest("en", {"voice": "voice-2"}, text())
+        )
+        assert b"".join([part async for part in response.data_gen])[44:] == b"\x01\x00"
     await hass.async_block_till_done()
+    assert len(requests) == 1
     assert requests[0].get("text_positions") is True
     assert errors == ["TTS text position out of range"]
     assert fallback.received_text == []

@@ -9,7 +9,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "assist-live-client==0.1.0a1",
+    "assist-live-client==0.1.0a2",
     "gazetteer-matcher==1.1.0",
     "ha-ffmpeg==3.2.2",
     "hassil==3.12.1",

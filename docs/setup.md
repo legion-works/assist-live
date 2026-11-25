@@ -37,10 +37,14 @@ Use no more than five satellites with one token.
 The server has 16 audio and event connection slots for each token.
 Each satellite can use one event connection and two audio connections.
 
-The manifest pins the published pre-release `assist-live-client==0.1.0a1` from PyPI.
+The manifest pins the published pre-release `assist-live-client==0.1.0a2` from PyPI.
 HA, local tests, and CI install that same client version.
 The integration itself has no release.
 Do not replace the manifest requirement with a local path or Git URL.
+
+The client does not follow redirects for HTTP requests or WebSocket handshakes.
+The client also refuses a WebSocket redirect when the scheme, host, and port do not change.
+Use the server URL that does not give a redirect.
 
 ## Pipelines and voices
 
