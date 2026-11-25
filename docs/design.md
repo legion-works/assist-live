@@ -392,7 +392,11 @@ Thus, if a TTS provider uses more than about 2 s for its first sentence, the sat
 
 The TTS entity can give its audio stream to HA before the server audio starts.
 It does this when the server format is 22050 Hz and the server audio does not start in less than 1 s.
-The stream starts with 250 ms of silent audio, and the server audio follows when the entity gets it. Thus the satellite starts the reply and keeps the turn open.
+The stream starts with 250 ms of silent audio, and the server audio follows when the entity gets it.
+
+From HA 2026.11, the HA conversion can send FLAC to the satellite before the server audio. Then the satellite can start the reply in less than 2 s.
+The HA 2026.10 conversion keeps the silent audio until it gets more audio, so this start does not help on HA 2026.10.
+The tests show the bytes after the HA conversion. A test on a satellite must show that the reply turn stays open.
 A fast provider starts audio before 1 s, so its replies do not change.
 
 If the server stops before audio after this start, the fallback continues in the same stream from the start of the reply.

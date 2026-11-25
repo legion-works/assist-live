@@ -4528,3 +4528,14 @@ The satellite and a live HA installation are not part of these tests.
 | `task check` with the private denylist | Exit 0, `2129 passed, 1 skipped` |
 | `task ha-minimum` | Exit 0, `2129 passed, 1 skipped` |
 | `task ha-2026-11` | Exit 0, `2130 passed` |
+
+## Correction: quality-scale counts and checks after review (2026-11-25 UTC)
+
+The quality-scale record for the custom integration gave 19 `done`, 30 `todo`, and 5 `exempt` rules.
+After the review, `dependency-transparency` is `todo`, because no Git tag agrees with the client release.
+At this time, the file has 18 `done`, 31 `todo`, and 5 `exempt` rules.
+Four Bronze rules are `todo`: `brands`, `test-before-setup`, `config-flow-test-coverage`, and `dependency-transparency`.
+Thus the integration is not at the Bronze level.
+
+The duplicate check of the config flow compares only a URL that the client accepts.
+A URL with a query, a fragment, user information, or a scheme other than `http` and `https` gives `invalid_url`, not `already_configured`.

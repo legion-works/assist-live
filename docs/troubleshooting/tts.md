@@ -130,6 +130,7 @@ The HA 2026.10 converter buffers the silent audio, so it does not give FLAC befo
 The `early_reply_starts` counter starts at integration setup.
 For each turn, `reply_start` is `early` if the stream starts with silent audio and `null` if it does not.
 The `audio_format` field gives the format that the server declares, also if it sends no audio.
+These fields give the output that the integration selects. They do not show that HA or the satellite played it.
 The `tts_audio_output` field gives the output type:
 
 - `streamed`: The server sends audio before the integration starts the output.

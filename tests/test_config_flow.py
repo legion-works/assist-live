@@ -126,6 +126,22 @@ def test_request_key_is_equal_only_for_the_same_client_request(first, second, sa
     assert request_key("not-a-server/") is None
 
 
+@pytest.mark.parametrize(
+    "submitted",
+    [
+        "https://server.example/v1/bindings?value",
+        "https://server.example/v1/bindings#part",
+        "https://user@server.example",
+        "ftp://server.example",
+    ],
+)
+def test_request_key_refuses_urls_the_client_refuses(submitted):
+    from custom_components.assist_live.config_flow import request_key
+
+    assert request_key("https://server.example") is not None
+    assert request_key(submitted) is None
+
+
 def test_request_key_accepts_a_malformed_international_host():
     from custom_components.assist_live.config_flow import request_key
 

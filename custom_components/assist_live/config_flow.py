@@ -30,8 +30,18 @@ def request_key(url: str) -> tuple[str, str, int | None, str] | None:
     connection, so an explicit default port gives the same key.
     """
     try:
+        submitted = URL(url)
         request = URL(url.rstrip("/") + "/v1/bindings")
     except ValueError:
+        return None
+    # The client refuses these URLs (client.py:47-53), and the flow then
+    # reports invalid_url. Thus the duplicate check does not compare them.
+    if (
+        submitted.scheme not in {"http", "https"}
+        or submitted.user
+        or submitted.query
+        or submitted.fragment
+    ):
         return None
     # The key uses the encoded host, as the aiohttp connector does. Reading the
     # decoded host can raise UnicodeError for a malformed international name.

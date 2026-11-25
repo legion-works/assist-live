@@ -71,6 +71,8 @@ Supply `--ha-url`, `--ha-token-file`, `--integration-entry`, and
 `--device-loss-entity` to the replay runner for the HA counters.
 The HA token file uses the JSON `token` format of the fault runner.
 Get approval before you supply a credential that the runner does not hold.
+
+The replay runner sends the HA token to the `--ha-url` value. It does not check that this is the isolated loopback test instance, as the other test tools do. Supply only the URL of an HA instance that can get this token.
 The runner uses its server token for `/health`.
 It does not copy tokens into output.
 
