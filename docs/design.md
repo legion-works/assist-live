@@ -258,10 +258,22 @@ Thus the turn detector uses a start guard:
 - If the turn detector does not find a command start, the `final` transcript is empty.
   This rule applies to each type of turn end and to each STT provider.
   The server does not do a `final` decode for that turn, and it does not use a `partial` transcript as the `final` transcript.
-  Thus room noise in a turn without a command cannot become a transcript.
+  Thus room noise in a turn without a command start cannot become a transcript.
   A short word with less than 250 ms of continuous voice does not start a command, so its turn has no transcript.
   P1 sets the start rule with the volunteer recordings.
 - The guard applies to all turns, also to a follow-up turn.
+- Before the first audio of each turn, the turn detector runs its voice model on 256 ms of silent audio and keeps only the model state.
+  This silent audio is not turn audio, and it does not go to STT.
+  The turn detector does not count it in a sample count, the command start position, or the end sample.
+  The changed model state can move the command start and the end sample.
+  In the corpus and live command tests, the start moved a maximum of 448 ms earlier. The end moved a maximum of 148 ms earlier or 544 ms after its position without this step.
+  In the household test, a late start moved a maximum of 1.5 s earlier.
+  Without this step, the voice model starts each turn from an empty state.
+  Then, on a short command such as "what time is it", its voice values can stay too low for a command start.
+  In a household test, 4 such turns had no transcript. With this step, they start in 15 or 16 of 16 start offsets (0 to 30 ms, in 2 ms steps).
+  The step has a cost. In 39 wake-only recordings with room noise, 1 of 624 trials started a command, and its transcript was "Yeah.".
+  In 12 wake-only recordings of one speaker, cut 200 ms before an estimated wake-word end, 2 started a command, and each transcript was "Mm-hmm.".
+  These tests do not measure the rate of incorrect starts in use.
 
 P1 sets these three values with human recordings.
 
