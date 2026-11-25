@@ -169,12 +169,11 @@ async def async_get_config_entry_diagnostics(
                 ],
                 "voice": safe_label(record.voice) if record.voice else None,
                 "audio_format": safe_format(record.audio_format),
+                "reply_start": record.reply_start,
                 "tts_text_input": "sentence_buffered"
                 if any(row["provider"] == "piper" for row in record.destinations)
                 else "unknown",
-                "tts_audio_output": "streamed"
-                if record.audio_format is not None
-                else "unknown",
+                "tts_audio_output": record.tts_audio_output,
             }
         )
     health = runtime.last_healthy_health
@@ -208,6 +207,7 @@ async def async_get_config_entry_diagnostics(
         "stt_hints_failures": runtime.hints.failures,
         "failures": dict(runtime.ledger.failures),
         "late_server_failures": runtime.ledger.late_server_failures,
+        "early_reply_starts": runtime.ledger.early_reply_starts,
         "counters_since_utc_ns": runtime.ledger.counters_since_utc_ns,
         "timing_events_dropped": runtime.ledger.timing_events_dropped,
         "turn_opens_dropped": runtime.ledger.turn_opens_dropped,

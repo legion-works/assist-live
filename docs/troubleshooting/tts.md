@@ -122,6 +122,22 @@ The modes are `streaming` and `full_file`.
 The counts start at integration setup and include `fallback_used`, `stt_failed`, and `tts_failed`.
 The `late_server_failures` counter also starts at integration setup.
 
+If the server gives a 22050 Hz format but no audio in 1 s from the TTS request, the integration can start the stream.
+The stream gives 250 ms of silent audio before the server audio.
+From HA 2026.11, the converter can give FLAC before it gets the server audio.
+The HA 2026.10 converter buffers the silent audio, so it does not give FLAC before it gets server audio.
+
+The `early_reply_starts` counter starts at integration setup.
+For each turn, `reply_start` is `early` if the stream starts with silent audio and `null` if it does not.
+The `audio_format` field gives the format that the server declares, also if it sends no audio.
+The `tts_audio_output` field gives the output type:
+
+- `streamed`: The server sends audio before the integration starts the output.
+- `early_start`: The integration starts the output with silent audio.
+- `in_stream_fallback`: The fallback adds compatible PCM to the same stream.
+- `fallback`: The integration uses the complete response from the fallback engine.
+- `unknown`: The integration did not select an output.
+
 The field `server_healthy` shows the result of the last health check, not the cached server response.
 It is `false` before a satisfactory check and during a server outage.
 The field `server_last_healthy` gives the UTC ISO time of the last satisfactory check, or `null` before one succeeds.

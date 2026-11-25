@@ -4494,3 +4494,37 @@ The coverage is not measured again, and `config-flow-test-coverage` stays `todo`
 A new entry keeps the server URL that the flow validated, without a trailing "/".
 The pinned client makes the same change.
 The duplicate check compares the bindings request that the client makes from each URL.
+
+## Reply start before the first server audio
+
+The tests use a server that sends its audio format and waits for a signal before it sends audio.
+The 22050 Hz stream can give a WAV header and 11026 bytes of silent PCM before that signal.
+The 16000 Hz stream waits for server audio. A fast 22050 Hz stream adds no silent PCM.
+
+The tests also examine fallback before and after the stream gives silent PCM.
+They examine cleanup when HA closes the stream or cancels a read.
+
+If a stream for a reply with only spaces or tabs ends without server audio, it gives only silent PCM.
+Diagnostics count the start, not a failure or a fallback.
+
+Diagnostics show the server format and the audio output type in different fields.
+The tests examine the output type when the server refuses the reply after it gives the format.
+They also examine the output type when the fallback adds PCM in the same stream.
+
+The public HA TTS stream test uses WAV on all tested versions.
+The FLAC test uses the satellite format (48 kHz mono) on HA 2026.11.2.
+HA 2026.10.1 and 2026.10.4 do not run this FLAC test because their converter reads WAV input.
+
+With the HA 2026.10.4 converter command and FFmpeg 9.1, the test input was a WAV header and silent PCM at 22050 Hz.
+For 250 ms, 500 ms, and 1000 ms of silent PCM, FFmpeg gave no FLAC bytes in 2 s with the input pipe open.
+When the pipe closed, FFmpeg gave 8295, 8334, and 8399 bytes for those inputs.
+The satellite and a live HA installation are not part of these tests.
+
+| Check | Result |
+|---|---|
+| TTS tests on the base commit | The slow-server test timed out. The refusal tests gave the incorrect value `streamed`. |
+| TTS tests with the change | `16 passed, 1 skipped` |
+| TTS test without the deadline exit | `test_slow_22050_server_returns_before_first_audio` timed out. |
+| `task check` with the private denylist | Exit 0, `2129 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2129 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2130 passed` |

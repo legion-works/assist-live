@@ -66,6 +66,10 @@ class Record:
     speaker: dict[str, Any] | None = None
     voice: str | None = None
     audio_format: dict[str, Any] | None = None
+    tts_audio_output: Literal[
+        "streamed", "early_start", "in_stream_fallback", "fallback", "unknown"
+    ] = "unknown"
+    reply_start: Literal["early"] | None = None
     server_refusals: dict[str, str] = field(default_factory=dict)
     fallback_reasons: dict[str, FallbackReason] = field(default_factory=dict)
     server_audio_samples: int | None = None
@@ -111,6 +115,7 @@ class TurnLedger:
             reason: 0 for reason in get_args(FallbackReason.__value__)
         }
         self.late_server_failures = 0
+        self.early_reply_starts = 0
         self.save: Callable[[], Awaitable[None]] | None = None
         self.record_transcripts = False
         self.latest: dict[str, Record] = {}

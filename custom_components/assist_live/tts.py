@@ -38,6 +38,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # No limit. Each reply uses its own server stream, not a shared device connection.
 PARALLEL_UPDATES = 0
+EARLY_START_DELAY = 1.0
+EARLY_START_RATE = 22050
+EARLY_START_PCM = bytes(5513 * 2)
 
 
 def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEntity:
@@ -230,6 +233,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
     async def async_stream_tts_audio(
         self, request: TTSAudioRequest
     ) -> tts.TTSAudioResponse:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + EARLY_START_DELAY
         engine = self.resolve_fallback()
         if (
             engine is not None
@@ -247,7 +252,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
             raise HomeAssistantError("TTS language unavailable")
         turn = self.ledger.open_tts(self.satellite)
         voice = request.options.get("voice")
-        self.ledger.records[turn.turn_id].voice = voice
+        turn_record = self.ledger.records[turn.turn_id]
+        turn_record.voice = voice
         if self.ledger.save is not None:
             await self.ledger.save()
         reason: FallbackReason = "server_unhealthy"
@@ -400,13 +406,42 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
         )
         audio_format: TTSFormat | None = None
         first_audio: TTSAudio | None = None
+        pending: asyncio.Future[TTSAudio | TTSFormat | TTSSentenceEnd] | None = None
+        early_start = False
+        wav_header: bytes | None = None
         completed = 0
         text_end: int | None = None
+
+        async def close_server() -> None:
+            nonlocal pending
+            if pending is not None:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+                pending = None
+            if isinstance(server, AsyncGenerator):
+                await server.aclose()
+
         if server is not None:
             reason = "stream_closed"
             error_class = "None"
             try:
-                async for item in server:
+                while True:
+                    if (
+                        audio_format is not None
+                        and audio_format.rate == EARLY_START_RATE
+                    ):
+                        # Cancellation of anext also closes the server stream.
+                        pending = asyncio.ensure_future(anext(server))
+                        ready, _ = await asyncio.wait(
+                            (pending,), timeout=max(0, deadline - loop.time())
+                        )
+                        if not ready:
+                            early_start = True
+                            break
+                        step, pending = pending, None
+                        item = step.result()
+                    else:
+                        item = await anext(server)
                     if isinstance(item, TTSFormat):
                         if audio_format is not None:
                             raise ProtocolError("duplicate TTS format")
@@ -414,13 +449,13 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                             item.codec != "pcm_s16le"
                             or item.width != 2
                             or item.channels != 1
-                            or item.rate not in {16000, 22050}
+                            or item.rate not in {16000, EARLY_START_RATE}
                         ):
                             raise ProtocolError("unsupported TTS audio format")
                         byte_rate = item.rate * item.channels * item.width
                         block_align = item.channels * item.width
                         audio_format = item
-                        self.ledger.records[turn.turn_id].audio_format = {
+                        turn_record.audio_format = {
                             "codec": item.codec,
                             "rate": item.rate,
                             "channels": item.channels,
@@ -445,6 +480,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         text_end = item.text_end
                     else:
                         raise ProtocolError("invalid TTS stream item")
+            except StopAsyncIteration:
+                pass
             except (ProtocolError, TimeoutError) as error:
                 reason = stream_failure_reason(error)
                 error_class = type(error).__name__
@@ -462,11 +499,13 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
                 healthy = False
             except BaseException:
-                await cleanup()
+                try:
+                    await close_server()
+                finally:
+                    await cleanup()
                 raise
-            if first_audio is None:
+            if first_audio is None and not early_start:
                 healthy = False
-            wav_header: bytes | None = None
             if healthy and audio_format is not None:
                 try:
                     wav_header = struct.pack(
@@ -490,19 +529,50 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                     error_class = type(error).__name__
                     _LOGGER.warning("TTS header failed: %s", type(error).__name__)
                     healthy = False
-            if not healthy and isinstance(server, AsyncGenerator):
-                await server.aclose()
+            if not healthy:
+                try:
+                    await close_server()
+                except BaseException:
+                    await cleanup()
+                    raise
 
         async def output() -> AsyncGenerator[bytes]:
-            nonlocal completed, text_end, reason, error_class
+            nonlocal completed, text_end, reason, error_class, pending
             assert server is not None and wav_header is not None
             invalid = False
+            received_audio = first_audio is not None
+            full: str | None = None
             try:
+                if early_start:
+                    # The first read is internal.
+                    # Thus `aclose` can close an unread stream.
+                    yield b""
                 yield wav_header
-                if first_audio is not None:
+                if early_start:
+                    yield EARLY_START_PCM
+                elif first_audio is not None:
                     yield first_audio.data
-                async for item in server:
+                while True:
+                    try:
+                        if pending is None:
+                            item = await anext(server)
+                        else:
+                            step, pending = pending, None
+                            item = await step
+                    except StopAsyncIteration:
+                        if early_start and not received_audio:
+                            full = "".join([part async for part in fresh()])
+                            if full.strip():
+                                raise ProtocolError(
+                                    "TTS stream ended before audio", kind="closed"
+                                ) from None
+                        break
                     if isinstance(item, TTSAudio):
+                        if early_start and not received_audio:
+                            if not item.data:
+                                continue
+                            self.ledger.mark(turn.turn_id, "tts_audio_received")
+                            received_audio = True
                         yield item.data
                     elif isinstance(item, TTSSentenceEnd):
                         if item.sentence != completed:
@@ -528,10 +598,22 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 ):
                     self._voice_issue(voice, True)
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
-                full = "".join([part async for part in fresh()])
-                suffix = full[text_end:].lstrip() if text_end is not None else None
-                if not invalid and suffix is not None and audio_format is not None:
-                    if not suffix:
+                if full is None:
+                    full = "".join([part async for part in fresh()])
+                before_audio = early_start and not received_audio
+                if before_audio and not full.strip():
+                    return
+                suffix = (
+                    full
+                    if before_audio
+                    else (full[text_end:].lstrip() if text_end is not None else None)
+                )
+                if (
+                    (before_audio or not invalid)
+                    and suffix is not None
+                    and audio_format is not None
+                ):
+                    if not suffix and not before_audio:
                         self.ledger.late_server_failures += 1
                         return
 
@@ -543,6 +625,7 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         first = True
                         async for chunk in compatible_pcm(response, audio_format):
                             if first and chunk:
+                                turn_record.tts_audio_output = "in_stream_fallback"
                                 self.ledger.mark(turn.turn_id, "tts_first_byte")
                                 first = False
                             yield chunk
@@ -570,9 +653,10 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         )
                 return
             finally:
-                if isinstance(server, AsyncGenerator):
-                    await server.aclose()
-                await cleanup()
+                try:
+                    await close_server()
+                finally:
+                    await cleanup()
 
         if not healthy:
             try:
@@ -613,5 +697,14 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 finally:
                     await cleanup()
 
+            turn_record.tts_audio_output = "fallback"
             return tts.TTSAudioResponse(response.extension, fallback_output())
-        return tts.TTSAudioResponse("wav", output())
+        stream = output()
+        if early_start:
+            await anext(stream)
+            turn_record.reply_start = "early"
+            turn_record.tts_audio_output = "early_start"
+            self.ledger.early_reply_starts += 1
+        else:
+            turn_record.tts_audio_output = "streamed"
+        return tts.TTSAudioResponse("wav", stream)

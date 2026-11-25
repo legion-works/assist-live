@@ -31,6 +31,7 @@
 
 ### Corrections
 
+- Start slow 22050 Hz replies with 250 ms of silent audio. From HA 2026.11, the converter can give FLAC to the satellite before the server audio. The HA 2026.10 converter buffers the silent audio.
 - Find fallback engines again after reload and keep their last known metadata through outages and HA restarts.
 - Send timing events in the background so an unavailable record server does not make a voice result wait.
 - Show current server health apart from last known values, and bound speaker-result reads. Transcripts do not wait for these reads.
