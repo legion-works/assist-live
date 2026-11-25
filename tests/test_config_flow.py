@@ -95,23 +95,86 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
 
 
 @pytest.mark.parametrize(
-    ("url", "expected"),
+    ("first", "second", "same"),
     [
-        ("https://server.example", "https://server.example"),
-        ("https://server.example/", "https://server.example"),
-        ("HTTPS://SERVER.Example:443/", "https://server.example"),
-        ("http://server.example:80", "http://server.example"),
-        ("http://server.example:8080/", "http://server.example:8080"),
-        ("https://server.example:80", "https://server.example:80"),
-        ("https://Server.example/API/", "https://server.example/API"),
-        ("http://[2001:DB8::1]:80/", "http://[2001:db8::1]"),
-        ("not-a-server/", "not-a-server"),
+        ("https://server.example", "https://server.example/", True),
+        ("https://server.example", "HTTPS://SERVER.Example", True),
+        ("https://server.example", "https://server.example:443", True),
+        ("http://server.example", "http://server.example:80/", True),
+        ("http://[2001:db8::1]", "http://[2001:DB8::1]:80/", True),
+        ("https://server.example/API", "https://server.example/api", False),
+        ("https://server.example", "https://server.example:80", False),
+        ("http://server.example", "http://server.example:8080", False),
+        ("https://server.example/API", "https://server.example/API//.", False),
     ],
 )
-def test_server_url_normalizes_scheme_host_default_port_and_slash(url, expected):
-    from custom_components.assist_live.config_flow import server_url
+def test_request_key_is_equal_only_for_the_same_client_request(first, second, same):
+    from assist_live_client import AssistLiveClient
+    from yarl import URL
 
-    assert server_url(url) == expected
+    from custom_components.assist_live.config_flow import request_key
+
+    def request(url):
+        return URL(AssistLiveClient(url, "test-only").url + "/v1/bindings")
+
+    def target(url):
+        sent = request(url)
+        return (sent.scheme, sent.host, sent.port, sent.raw_path)
+
+    assert (request_key(first) == request_key(second)) is same
+    assert (target(first) == target(second)) is same, "the client agrees"
+    assert request_key("not-a-server/") is None
+
+
+async def test_stored_url_gives_the_validated_request(hass, available_fallbacks):
+    from assist_live_client import AssistLiveClient
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    submitted = "https://server.example/API//."
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    client = AsyncMock()
+    client.bindings.return_value = [{"satellite": "satellite-a"}]
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.is_forwarder", return_value=False
+        ),
+        patch(
+            "custom_components.assist_live.config_flow.AssistLiveClient",
+            return_value=client,
+        ) as validated,
+        patch(
+            "custom_components.assist_live.config_flow.valid_satellite",
+            return_value=True,
+        ),
+    ):
+        result = await flow.async_step_user(
+            {
+                "url": submitted,
+                "token": "test-only",
+                "fallback_stt": "stt.standard",
+                "fallback_tts": "tts.standard",
+            }
+        )
+        assert result["step_id"] == "satellite"
+        result = await flow.async_step_satellite(
+            {
+                "device": "device-a",
+                "satellite": "satellite-a",
+                "pipeline_select": "select.pipeline_a",
+                "add_another": False,
+            }
+        )
+    assert result["type"] == "create_entry"
+    assert validated.call_args.args == (submitted, "test-only")
+    stored = result["data"]["url"]
+    assert stored == submitted
+    assert (
+        AssistLiveClient(stored, "test-only").url
+        == AssistLiveClient(submitted, "test-only").url
+    ), "setup sends the request that the flow validated"
 
 
 @pytest.mark.parametrize(
@@ -215,7 +278,6 @@ async def test_second_open_flow_aborts_after_first_creates_entry(
             },
         )
         assert first["type"] == "create_entry"
-        assert first["data"]["url"] == "https://server.example", "normalized URL"
         second = await hass.config_entries.flow.async_configure(
             flows[1],
             {
@@ -227,6 +289,8 @@ async def test_second_open_flow_aborts_after_first_creates_entry(
         )
         assert second["type"] == "abort"
         assert second["reason"] == "already_configured"
+        # The client removes only the trailing "/" from the URL text.
+        assert first["data"]["url"] == "https://SERVER.example"
         entries = hass.config_entries.async_entries("assist_live")
         assert len(entries) == 1
         assert entries[0].data["satellites"] == {"device-a": "satellite-a"}

@@ -20,6 +20,24 @@ UNLOADED_ENTRY_DATA = {
     "pipeline_selects": {},
     "record_transcripts": True,
 }
+UNLOADED_ENTRY_OPTIONS = {
+    "fallback_tts_voice": "planted-private-voice",
+    "local_decisions": {
+        "stt.planted_private_entity": {
+            "destination": "local",
+            "recorded_at": "2026-01-01T00:00:00+00:00",
+        }
+    },
+    "local_only": False,
+}
+
+
+def unloaded_entry():
+    return MockConfigEntry(
+        domain="assist_live",
+        data=UNLOADED_ENTRY_DATA,
+        options=UNLOADED_ENTRY_OPTIONS,
+    )
 
 
 def assert_entry_state_only(result):
@@ -27,10 +45,20 @@ def assert_entry_state_only(result):
     assert result["entry"]["data"]["record_transcripts"] is True
     for key in ("url", "token", "fallback_stt", "fallback_tts", "satellites"):
         assert result["entry"]["data"][key] == "**REDACTED**", key
-    assert result["entry"]["options"] == {}
+    assert result["entry"]["options"] == {
+        "fallback_tts_voice": "**REDACTED**",
+        "local_decisions": "**REDACTED**",
+        "local_only": False,
+    }
     assert "turns" not in result and "failures" not in result
     serialized = json.dumps(result)
-    for value in ("server.example", "planted-sensitive-token", "device-a"):
+    for value in (
+        "server.example",
+        "planted-sensitive-token",
+        "device-a",
+        "planted-private-voice",
+        "planted_private_entity",
+    ):
         assert value not in serialized, value
 
 
@@ -59,7 +87,7 @@ async def test_diagnostics_after_unload_give_entry_state_only(
 ):
     hass = pipeline_hass
     client.events = hanging_events
-    entry = MockConfigEntry(domain="assist_live", data=UNLOADED_ENTRY_DATA)
+    entry = unloaded_entry()
     entry.add_to_hass(hass)
     with patch("custom_components.assist_live.AssistLiveClient", return_value=client):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -82,7 +110,7 @@ async def test_diagnostics_after_setup_error_give_entry_state_only(
 
     hass = pipeline_hass
     client.events = hanging_events
-    entry = MockConfigEntry(domain="assist_live", data=UNLOADED_ENTRY_DATA)
+    entry = unloaded_entry()
     entry.add_to_hass(hass)
     with (
         patch("custom_components.assist_live.AssistLiveClient", return_value=client),

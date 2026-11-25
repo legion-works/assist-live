@@ -18,26 +18,24 @@ from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
 from .settings import effective_settings
 
 
-def server_url(url: str) -> str:
-    """Give the server URL that the duplicate check compares.
+def request_key(url: str) -> tuple[str, str, int | None, str] | None:
+    """Give the server request that the duplicate check compares.
 
-    The pinned client parses the URL with yarl and removes a trailing "/".
-    This URL also has a lowercase scheme and host and no default port. The
-    path case does not change.
+    The pinned client removes a trailing "/" from the URL text, adds the API
+    path, and then parses the full URL with yarl (client.py:55 and :94).
+    This key uses the same steps for the bindings request of the flow. Thus
+    two URLs are equal only if the client sends the request to the same
+    scheme, host, port, and path. The case of the scheme and host changes
+    only where yarl makes it lowercase. The port is the port of the
+    connection, so an explicit default port gives the same key.
     """
     try:
-        parsed = URL(url)
+        request = URL(url.rstrip("/") + "/v1/bindings")
     except ValueError:
-        return url.rstrip("/")
-    host = parsed.raw_host
-    if not parsed.absolute or not host or not parsed.scheme:
-        return url.rstrip("/")
-    host = host.lower()
-    if ":" in host:
-        host = f"[{host}]"
-    if not parsed.is_default_port() and parsed.port is not None:
-        host = f"{host}:{parsed.port}"
-    return f"{parsed.scheme.lower()}://{host}{parsed.raw_path.rstrip('/')}"
+        return None
+    if not request.absolute or not request.host or not request.scheme:
+        return None
+    return (request.scheme, request.host, request.port, request.raw_path)
 
 
 def destination(iot_class: str | None) -> str:
@@ -204,13 +202,14 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         # Entries from before this check keep the URL as the user wrote it.
         if not isinstance(url, str) or not isinstance(token, str):
             return
-        key = server_url(url)
+        if (key := request_key(url)) is None:
+            return
         for entry in self._async_current_entries(include_ignore=False):
             stored = entry.data.get("url")
             if (
                 isinstance(stored, str)
                 and entry.data.get("token") == token
-                and server_url(stored) == key
+                and request_key(stored) == key
             ):
                 raise AbortFlow("already_configured")
 
@@ -321,7 +320,8 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                         title="assist-live",
                         data={
                             **self.settings,
-                            "url": server_url(self.settings["url"]),
+                            # The client makes only this change to the URL.
+                            "url": self.settings["url"].rstrip("/"),
                             "satellites": self.satellites,
                             "pipeline_selects": self.selects,
                         },

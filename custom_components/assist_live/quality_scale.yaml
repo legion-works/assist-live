@@ -26,8 +26,9 @@ rules:
   config-flow-test-coverage:
     status: todo
     comment: >-
-      The tests include 91 % of config_flow.py with branches. No test completes
-      a flow to a new entry, and some error paths have no test.
+      A measurement before the duplicate-entry flow tests gave 91 % branch
+      coverage of config_flow.py. Some error paths have no test. The coverage
+      is not measured again.
   dependency-transparency:
     status: todo
     comment: >-
@@ -81,8 +82,9 @@ rules:
     status: done
     comment: >-
       The config flow aborts when an entry has the same server URL and token.
-      It compares normalized URLs at the first step and before it makes the
-      entry. Different tokens on one server are different entries.
+      It compares the bindings request that the client makes from each URL,
+      at the first step and before it makes the entry. Different tokens on
+      one server are different entries.
 
   # Silver
   action-exceptions:

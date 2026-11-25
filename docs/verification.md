@@ -4482,3 +4482,15 @@ No test completes a flow to a new entry.
 The type check found no issues in 38 source files.
 Gitleaks found no leaks, and the public-data check gave `matches=0`.
 The private denylist check did not run.
+
+### Correction: config flow coverage and stored server URL
+
+The section "HA quality scale: Bronze rules" states that no test completes a flow to a new entry.
+That statement is not correct at this time.
+`test_second_open_flow_aborts_after_first_creates_entry` and `test_stored_url_gives_the_validated_request` complete a flow to a new entry.
+The 91 % branch coverage of `config_flow.py` is from a measurement before these tests.
+The coverage is not measured again, and `config-flow-test-coverage` stays `todo`.
+
+A new entry keeps the server URL that the flow validated, without a trailing "/".
+The pinned client makes the same change.
+The duplicate check compares the bindings request that the client makes from each URL.
