@@ -386,9 +386,11 @@ The integration does not run the conversation or device control again.
 
 ### Reply start before the first server audio
 
-Some satellites end the reply turn when no reply audio starts in a set time. The stock Voice PE firmware waits 2 s, and the firmware configuration cannot change this time.
-HA sends audio to the satellite only after the TTS entity gives its audio stream to HA. The HA conversion sends nothing before it has one full audio frame.
-Thus, if a TTS provider uses more than about 2 s for its first sentence, the satellite ends the turn before the reply plays.
+Some satellites end the reply turn when the reply does not start to play in a set time. The stock Voice PE firmware starts a 2 s timer when it gives the reply URL to its media player. The turn stays open only when the player reports the `ANNOUNCING` state before the timer ends. The firmware configuration cannot change this time.
+
+The Voice PE player reports `ANNOUNCING` when the HTTP response of the reply starts. HA starts that response only after the TTS entity gives its audio stream to HA.
+The HA conversion sends nothing before it has one full audio frame.
+Thus, if a TTS provider uses more than about 2 s for its first sentence, the satellite can end the turn before the reply plays.
 
 The TTS entity can give its audio stream to HA before the server audio starts.
 It does this when the server format is 22050 Hz and the server audio does not start in less than 1 s.

@@ -128,13 +128,14 @@ From HA 2026.11, the converter can give FLAC before it gets the server audio.
 The HA 2026.10 converter buffers the silent audio, so it does not give FLAC before it gets server audio.
 
 The `early_reply_starts` counter starts at integration setup.
-For each turn, `reply_start` is `early` if the stream starts with silent audio and `null` if it does not.
+For each turn, `reply_start` is `early` if the integration selects the start with silent audio, and `null` if it does not. It stays `early` when a fallback follows.
 The `audio_format` field gives the format that the server declares, also if it sends no audio.
-These fields give the output that the integration selects. They do not show that HA or the satellite played it.
+
+The `reply_start`, `early_reply_starts`, and `tts_audio_output` fields give the output that the integration selects. They do not show that HA read the silent audio or that the satellite played it.
 The `tts_audio_output` field gives the output type:
 
 - `streamed`: The server sends audio before the integration starts the output.
-- `early_start`: The integration starts the output with silent audio.
+- `early_start`: The integration selects a start with silent audio. If a fallback follows in the same stream, this value changes to `in_stream_fallback`.
 - `in_stream_fallback`: The fallback adds compatible PCM to the same stream.
 - `fallback`: The integration uses the complete response from the fallback engine.
 - `unknown`: The integration did not select an output.

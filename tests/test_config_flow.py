@@ -359,6 +359,48 @@ async def test_same_server_with_different_token_continues(hass, available_fallba
     assert result["step_id"] == "satellite"
 
 
+@pytest.mark.parametrize(
+    "submitted",
+    [
+        "https://server.example/v1/bindings?value",
+        "https://server.example/v1/bindings#part",
+    ],
+)
+async def test_refused_url_is_invalid_not_already_configured(
+    hass, available_fallbacks, submitted
+):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    # Without the client rule, the appended bindings path goes into the query
+    # or fragment of the submitted URL. Its key is then equal to the key of
+    # this entry, and the flow aborts as already_configured.
+    MockConfigEntry(
+        domain="assist_live",
+        data={
+            "url": "https://server.example",
+            "token": "test-only",
+            "fallback_stt": "stt.standard",
+            "fallback_tts": "tts.standard",
+            "satellites": {"device-a": "satellite-a"},
+        },
+    ).add_to_hass(hass)
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    result = await flow.async_step_user(
+        {
+            "url": submitted,
+            "token": "test-only",
+            "fallback_stt": "stt.standard",
+            "fallback_tts": "tts.standard",
+        }
+    )
+    assert result["errors"] == {"base": "invalid_url"}
+    assert len(hass.config_entries.async_entries("assist_live")) == 1
+
+
 async def test_malformed_url_has_its_own_error(hass, available_fallbacks):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 

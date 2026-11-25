@@ -4539,3 +4539,28 @@ Thus the integration is not at the Bronze level.
 
 The duplicate check of the config flow compares only a URL that the client accepts.
 A URL with a query, a fragment, user information, or a scheme other than `http` and `https` gives `invalid_url`, not `already_configured`.
+
+## Reply start before slow server audio on a satellite (2026-11-25 UTC)
+
+This check used one Voice PE with the stock 2 s reply timer, HA 2026.11.2, and the integration at `cb16447`.
+The TTS server provider gave its first audio more than 2 s after the reply request.
+In one reply turn, the device log showed these times after the reply URL:
+
+| Step | Time after the reply URL |
+|---|---|
+| HTTP response of the reply starts | 1.074 s |
+| Media player reports `ANNOUNCING` | 1.107 s |
+| First server audio at the server | about 3.0 s |
+| Announcement ends and the turn goes to the `idle` state | 6.908 s |
+
+The turn stayed in the reply state until the announcement ended.
+Before this change, each slow reply turn of this satellite went to the `idle` state 2.0 s after the reply started. The reply then played as an unrelated announcement.
+The other reply turns of this check came from the HA TTS cache, so they did not use the slow path.
+This check does not test question replies.
+
+## Duplicate check of refused server URLs (2026-11-25 UTC)
+
+| Check | Result |
+|---|---|
+| New tests with the config flow of `cb16447` | `6 failed`. The flow aborts with `already_configured` for a URL with a query or fragment. |
+| `tests/test_config_flow.py` with the change | `61 passed` |
