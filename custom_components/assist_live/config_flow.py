@@ -25,7 +25,7 @@ def request_key(url: str) -> tuple[str, str, int | None, str] | None:
     path, and then parses the full URL with yarl (client.py:55 and :94).
     This key uses the same steps for the bindings request of the flow. Thus
     two URLs are equal only if the client sends the request to the same
-    scheme, host, port, and path. The case of the scheme and host changes
+    scheme, encoded host, port, and path. The case of the scheme and host changes
     only where yarl makes it lowercase. The port is the port of the
     connection, so an explicit default port gives the same key.
     """
@@ -33,9 +33,11 @@ def request_key(url: str) -> tuple[str, str, int | None, str] | None:
         request = URL(url.rstrip("/") + "/v1/bindings")
     except ValueError:
         return None
-    if not request.absolute or not request.host or not request.scheme:
+    # The key uses the encoded host, as the aiohttp connector does. Reading the
+    # decoded host can raise UnicodeError for a malformed international name.
+    if not request.absolute or not request.raw_host or not request.scheme:
         return None
-    return (request.scheme, request.host, request.port, request.raw_path)
+    return (request.scheme, request.raw_host, request.port, request.raw_path)
 
 
 def destination(iot_class: str | None) -> str:

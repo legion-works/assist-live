@@ -126,6 +126,14 @@ def test_request_key_is_equal_only_for_the_same_client_request(first, second, sa
     assert request_key("not-a-server/") is None
 
 
+def test_request_key_accepts_a_malformed_international_host():
+    from custom_components.assist_live.config_flow import request_key
+
+    key = request_key("https://xn--a.example")
+    assert key is not None
+    assert key[1] == "xn--a.example"
+
+
 async def test_stored_url_gives_the_validated_request(hass, available_fallbacks):
     from assist_live_client import AssistLiveClient
 
