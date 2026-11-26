@@ -134,6 +134,45 @@ async def test_matching_fallback_uses_server_position_without_wav_header(
     )
 
 
+@pytest.mark.parametrize("next_marker", [False, True])
+async def test_continuation_restarts_at_last_completed_sentence_end(
+    client, ledger, hass, next_marker
+):
+    capable(client)
+    server_finished_audio = False
+
+    async def reply():
+        yield "First sentence. Second sentence. Third sentence."
+
+    async def fail(turn, source, voice, *, text_positions=False):
+        nonlocal server_finished_audio
+        assert [part async for part in source]
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0, 15)
+        yield TTSAudio(b"\x03\x00")
+        yield TTSAudio(b"\x04\x00")
+        server_finished_audio = True
+        if next_marker:
+            yield TTSSentenceEnd(1, 32)
+        raise ProtocolError("mid-audio failure")
+
+    client.tts_stream = fail
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
+    forward.hass = hass
+    response = await forward.async_stream_tts_audio(TTSAudioRequest("en", {}, reply()))
+    stream = response.data_gen
+    assert (await anext(stream)).startswith(b"RIFF")
+    for pcm in (b"\x01\x00", b"\x03\x00", b"\x04\x00"):
+        assert await anext(stream) == pcm
+        assert not server_finished_audio
+    assert b"".join([part async for part in stream]) == wav_audio()[44:]
+    assert fallback.received_text == [
+        "Third sentence." if next_marker else "Second sentence. Third sentence."
+    ]
+
+
 @pytest.mark.parametrize("case", ["legacy", "missing", "missing_after_position"])
 async def test_missing_position_reports_full_text(client, ledger, hass, case):
     capable(client, text_positions=case != "legacy")

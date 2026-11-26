@@ -21,6 +21,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
@@ -29,6 +30,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+from homeassistant.util.hass_dict import HassEntryKey
 
 from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN, HEALTH_TIMEOUT
 from .ledger import TurnLedger
@@ -53,6 +55,9 @@ class SavedState(TypedDict):
     fallback_metadata: NotRequired[dict[str, FallbackMetadata]]
 
 
+_UNSAVED_STATE = HassEntryKey[SavedState](f"{DOMAIN}.unsaved_state")
+
+
 class Runtime:
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry, client: AssistLiveClient
@@ -60,6 +65,7 @@ class Runtime:
         self.hass = hass
         self.entry = entry
         self.client = client
+        self._unsaved_state = hass.data.setdefault(_UNSAVED_STATE, {})
         self.hints = STTHints(hass, client, entry.data["satellites"].values())
         self.ledger = TurnLedger(client)
         self.ledger.create_event_task = lambda coro: hass.async_create_background_task(
@@ -137,20 +143,23 @@ class Runtime:
         self.speaker_destination(data)
         self.hass.bus.async_fire("assist_live_speaker", data)
 
+    def _saved_state(self) -> SavedState:
+        data: SavedState = {
+            "version": 1,
+            "turns": self.ledger.snapshot(),
+            "cursors": dict(self.cursors),
+        }
+        if self.fallback_metadata:
+            data["fallback_metadata"] = copy.deepcopy(self.fallback_metadata)
+        return data
+
     async def _save(
         self, *, cursor: tuple[str, int] | None = None, debounce: bool = False
     ) -> None:
         async with self._save_lock:
-            cursors = dict(self.cursors)
+            data = self._saved_state()
             if cursor is not None:
-                cursors[cursor[0]] = cursor[1]
-            data: SavedState = {
-                "version": 1,
-                "turns": self.ledger.snapshot(),
-                "cursors": cursors,
-            }
-            if self.fallback_metadata:
-                data["fallback_metadata"] = copy.deepcopy(self.fallback_metadata)
+                data["cursors"][cursor[0]] = cursor[1]
             if data == self._last_saved:
                 return
             if (
@@ -166,13 +175,16 @@ class Runtime:
             # HA Store logs some write failures without raising them.
             if await self.store.async_load() != data:
                 raise HomeAssistantError("turn store write not confirmed")
+            self._unsaved_state.pop(self.entry.entry_id, None)
             self._last_saved = data
             self._last_write = self.clock()
             self._store_retry_due = 0.0
 
     async def start(self) -> None:
-        saved = await self.store.async_load()
-        await self._restore_saved(saved)
+        saved = self._unsaved_state.get(self.entry.entry_id)
+        await self._restore_saved(
+            saved if saved is not None else await self.store.async_load()
+        )
         self.hints.start()
         for satellite in self.entry.data["satellites"].values():
             self.tasks.append(
@@ -434,11 +446,28 @@ class Runtime:
                 await task
         try:
             await self._save()
+        except Exception as error:
+            # HA skips setup after an unload error. An HA restart clears this state.
+            self._unsaved_state[self.entry.entry_id] = self._saved_state()
+            _LOGGER.warning("Final turn store save failed: %s", type(error).__name__)
         finally:
             await self.client.close()
 
 
 type AssistLiveConfigEntry = ConfigEntry[Runtime]
+
+
+def _can_remove_device(
+    hass: HomeAssistant, entry: AssistLiveConfigEntry, device: dr.AnyDeviceEntry
+) -> bool:
+    return (
+        device.config_entry_id == entry.entry_id
+        and device.id not in entry.data["satellites"]
+        and not dr.async_entries_for_parent_device(dr.async_get(hass), device.id)
+        and not er.async_entries_for_device(
+            er.async_get(hass), device.id, include_disabled_entities=True
+        )
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -> bool:
@@ -504,6 +533,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
                     hass, pipeline, tts_voice=voice
                 )
         await runtime._maintenance(None)
+        devices = dr.async_get(hass)
+        for device_entry in dr.async_entries_for_config_entry(devices, entry.entry_id):
+            if _can_remove_device(hass, entry, device_entry):
+                devices.async_remove_device(device_entry.id)
     except BaseException:
         # Cleanup must not replace the setup error or cancellation.
         if forwarding_started:
@@ -532,3 +565,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) 
             hass, entry.entry_id, part, settings.get(f"fallback_{part}", ""), False
         )
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -> None:
+    if (unsaved := hass.data.get(_UNSAVED_STATE)) is not None:
+        unsaved.pop(entry.entry_id, None)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: AssistLiveConfigEntry, device: dr.AnyDeviceEntry
+) -> bool:
+    return _can_remove_device(hass, entry, device)

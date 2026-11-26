@@ -85,7 +85,7 @@ async def async_setup_entry(
         )
         entity.notify_tts_failure = entry.data.get(CONF_NOTIFY_TTS_FAILURE, False)
         entity.fallback_voice = settings.get(CONF_FALLBACK_TTS_VOICE) or None
-        entity._attach_device(hass, device)
+        entity._attach_device(hass)
         runtime.tts[device] = entity
         entities.append(entity)
     async_add_entities(entities)

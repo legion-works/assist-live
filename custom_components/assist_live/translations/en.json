@@ -143,17 +143,17 @@
   "entity": {
     "sensor": {
       "last_turn_latency": {
-        "name": "assist-live last turn latency"
+        "name": "Last turn latency"
       }
     },
     "stt": {
       "speech_to_text": {
-        "name": "assist-live STT"
+        "name": "STT"
       }
     },
     "tts": {
       "text_to_speech": {
-        "name": "assist-live TTS"
+        "name": "TTS"
       }
     }
   }

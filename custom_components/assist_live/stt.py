@@ -52,7 +52,7 @@ async def async_setup_entry(
             entry.entry_id,
             cached,
         )
-        entity._attach_device(hass, device)
+        entity._attach_device(hass)
         entities.append(entity)
         runtime.stt[device] = entity
     async_add_entities(entities)

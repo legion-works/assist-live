@@ -186,6 +186,9 @@ HA removes the STT, TTS, and latency sensor entities of that entry.
 The integration stops the event subscriptions and closes the server connections of that entry.
 The other entries continue to operate.
 
+When HA unloads or reloads an entry, the integration writes its turn store.
+If that write is not satisfactory, the integration keeps the turn state in memory for the next setup of the entry. An HA restart clears this state from memory.
+
 To remove the integration files, first delete each assist-live entry.
 Then remove the `custom_components/assist_live/` folder and restart HA.
 

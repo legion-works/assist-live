@@ -22,7 +22,7 @@ async def async_setup_entry(
     entities = []
     for device, satellite in entry.data["satellites"].items():
         entity = TurnLatencySensor(satellite, device, ledger)
-        entity._attach_device(hass, device)
+        entity._attach_device(hass)
         entities.append(entity)
     async_add_entities(entities)
 

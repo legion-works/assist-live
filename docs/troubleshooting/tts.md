@@ -62,8 +62,13 @@ For other engines, the public HA adapter waits for the full text and makes the f
 After server audio, continuation is possible only with a server that advertises `capabilities.text_positions=true` in its health response.
 The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
+The position gives the end of a sentence in the text. It does not give a position in the audio.
+
 The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
-It does not find sentence boundaries itself.
+If the server stops during the next sentence, fallback starts that sentence again and speaks the remaining text.
+If the provider sends a marker late, fallback can speak more than one sentence again.
+The entity sends server audio without a wait for the next marker.
+The entity does not find sentence boundaries itself.
 See the [server protocol](https://github.com/legion-works/assist-live-server/blob/477a59417ca83934c5f0b2581f7d2c056967f9b2/docs/protocol.md) at client release revision `477a594` for position rules.
 
 An older server without `text_positions` uses the failure path with the full text, not continuation.
@@ -81,7 +86,7 @@ The WAV parser skips other RIFF chunks before `data`.
 It uses only `fmt` and `data` to check the format and supply PCM.
 
 If no sentence position is available, the entity stops the audio.
-A restart could play the start of a sentence again. A skip could remove its remaining text.
+Without a marker, the entity cannot know which sentences the server sent.
 This condition uses the same failure event and optional notification as a format difference.
 The integration does not run the conversation or the device operation again.
 

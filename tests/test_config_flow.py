@@ -596,7 +596,7 @@ async def test_upgrade_keeps_ids_and_pipeline_and_names_tts_in_other_language(
             assert tts.async_resolve_engine(hass, tts_id) == tts_id
             assert (
                 hass.states.get(tts_id).attributes["friendly_name"]
-                == "Synthetic satellite assist-live TTS"
+                == "Synthetic satellite TTS"
             )
             stream = tts.async_create_stream(
                 hass,
@@ -741,12 +741,10 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     assert hass.states.get(stt_id) is not None
     assert hass.states.get(tts_id) is not None
     assert (
-        hass.states.get(stt_id).attributes["friendly_name"]
-        == "Synthetic satellite assist-live STT"
+        hass.states.get(stt_id).attributes["friendly_name"] == "Synthetic satellite STT"
     ), "STT name is in the context of its device"
     assert (
-        hass.states.get(tts_id).attributes["friendly_name"]
-        == "Synthetic satellite assist-live TTS"
+        hass.states.get(tts_id).attributes["friendly_name"] == "Synthetic satellite TTS"
     ), "TTS name is in the context of its device"
     assert er.async_get(hass).async_get(stt_id).device_id == device.id
     assert er.async_get(hass).async_get(tts_id).device_id == device.id
@@ -787,7 +785,7 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     assert sensors[0].attributes["quality"] == "missing"
     assert (
         sensors[0].attributes["friendly_name"]
-        == "Synthetic satellite assist-live last turn latency"
+        == "Synthetic satellite Last turn latency"
     ), "sensor name is in the context of its device"
     sending, cancelled = asyncio.Event(), asyncio.Event()
 

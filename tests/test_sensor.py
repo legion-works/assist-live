@@ -132,6 +132,6 @@ def test_entities_have_device_context_names(client, ledger):
         assert entity.translation_key == key
         # An unregistered satellite device keeps a different name for each key.
         assert entity.device_info == {
-            "identifiers": {("assist_live", "device-a")},
+            "identifiers": {("assist_live", "satellite-a")},
             "name": "satellite-a",
         }, key

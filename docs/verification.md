@@ -4589,3 +4589,39 @@ The shared HA session stays open after redirect refusal and after the client clo
 | `task check` | Exit 0, `2141 passed, 1 skipped` |
 | `task ha-minimum` | Exit 0, `2141 passed, 1 skipped` |
 | `task ha-2026-11` | Exit 0, `2142 passed` |
+
+## Runtime reload, satellite entities, and TTS continuation (2026-11-26 UTC)
+
+The reload test prevents writes to the turn store during a change of the fallback engine.
+The entity test checks the devices and names for two satellites.
+It checks that the entity IDs in the registry do not change.
+The TTS test checks that fallback starts at the last sentence marker and speaks all the text after it.
+The integration does not wait for a marker before it sends server audio.
+
+| Check | Result |
+|---|---|
+| New tests on `f44516c` | `2 failed, 2 passed`. The two TTS tests gave satisfactory results. |
+| Tests for runtime reload, configuration, sensors, and TTS fallback | `114 passed` |
+| Three test mutations | `4 failed`. Each mutation gave an unsatisfactory result. |
+| `task check` | Exit 0, `2147 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2147 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2148 passed` |
+| STE check | Exit 0 |
+| `uv run --locked python tools/check_records.py` | Exit 0 |
+| `git diff --check` | Exit 0 |
+
+### Review checks on `b4960bd`
+
+The test writes a new cursor after a turn store fault and checks the cursor after a second reload.
+The device test starts with registry rows from the previous version.
+It checks that setup removes the empty devices and keeps the satellite device, its entity, and all six assist-live entity IDs.
+
+| Check | Result |
+|---|---|
+| New tests on `b4960bd` | `2 failed, 2 passed`. The device tests gave the two failures. |
+| Tests for runtime reload and configuration | `65 passed` |
+| Two test mutations | `2 failed, 2 passed`. Each mutation gave an unsatisfactory result. |
+| `task check` | Exit 0, `2149 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2149 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2150 passed` |
+| STE, `tools/check_records.py`, and `git diff --check` | Exit 0 |

@@ -391,8 +391,13 @@ If the server stops before audio starts, fallback gets buffered parts followed b
 A streaming fallback streams audio. A non-streaming fallback gets the full text and shows a slower path in diagnostics.
 The config flow refuses an assist-live fallback to prevent loops.
 
-After audio starts, fallback can continue at the next sentence only with the same audio format.
-If the formats do not agree, the entity ends audio, records `tts_failed`, and fires `assist_live_tts_failed` with the full reply text.
+After audio starts, fallback can continue only with the same audio format and a text position from the last sentence marker.
+Fallback speaks all the text after that position.
+If the server sent audio for the next sentence before it stopped, fallback can speak the start of that sentence again.
+The entity sends server audio before it gets the next marker.
+
+If the formats do not agree or there is no text position, the entity stops the audio.
+It records `tts_failed` and fires `assist_live_tts_failed` with the full reply text.
 An optional `notify` service receives the full reply.
 The integration does not run the conversation or device control again.
 
