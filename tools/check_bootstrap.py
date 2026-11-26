@@ -1,6 +1,7 @@
 """Check the experimental integration boundary without Home Assistant."""
 
 import json
+import re
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ ROOT_DOCUMENTS = (
 )
 REQUIRED_FILES = (
     *ROOT_DOCUMENTS,
+    ".release-please-manifest.json",
     "LICENSE",
     ".gitignore",
     ".editorconfig",
@@ -55,8 +57,11 @@ MANIFEST_FIELDS = {
     "issue_tracker": "https://github.com/legion-works/assist-live/issues",
     "iot_class": "local_push",
     "integration_type": "service",
-    "version": "0.0.0",
 }
+RELEASE_VERSION = (
+    r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
 
 
 def check_bootstrap(root: str | Path) -> list[str]:
@@ -91,6 +96,16 @@ def check_bootstrap(root: str | Path) -> list[str]:
             value = manifest.get(field)
             if type(value) is not type(expected) or value != expected:
                 failures.append(f"manifest {field}")
+        release = json.loads(
+            (root / ".release-please-manifest.json").read_text(encoding="utf-8")
+        )
+        version = manifest.get("version")
+        if (
+            not isinstance(version, str)
+            or not re.fullmatch(RELEASE_VERSION, version)
+            or release["."] != version
+        ):
+            failures.append("manifest version")
         requirements = manifest.get("requirements")
         if not valid_client_requirement(root, requirements):
             failures.append("manifest requirements")

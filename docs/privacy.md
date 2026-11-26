@@ -105,6 +105,9 @@ After a send failure, pending events wait for a satisfactory maintenance health 
 Integration shutdown cancels the sender and discards pending events without a last send or disk write.
 Diagnostics count queue overflow and refused-event removals in `timing_events_dropped`. This counter contains no event content.
 
+If the satellite has a newer turn, maintenance removes the older pending open and its pending events.
+It counts the open in `turn_opens_dropped` and the events in `timing_events_dropped`.
+
 Refused timing events do not put event data or server error messages in the logs.
 The `turn_opens_dropped` counter contains no turn or event data.
 

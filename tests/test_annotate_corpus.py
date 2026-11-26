@@ -51,18 +51,8 @@ def cli(*args):
 
 
 def export_file(tmp_path, rows):
-    protected = {
-        k: v
-        for k, v in rows[0].items()
-        if k
-        not in (
-            "last_voice_sample",
-            "last_voice_annotation",
-            "last_voice_annotator_note",
-        )
-    }
     digest = hashlib.sha256(
-        json.dumps(protected, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(rows[0], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     value = {
         "version": 1,
@@ -162,6 +152,7 @@ def test_import_changes_only_manual_fields_and_is_idempotent(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     actual = json.loads(labels.read_text())
+    assert len(actual["last_voice_annotator_note"].pop("import_sha256")) == 64
     expected = dict(
         rows[0],
         last_voice_sample=12500,
@@ -194,6 +185,32 @@ def test_import_changes_only_manual_fields_and_is_idempotent(
     assert "energy n=1 median_ms=31.250 p90_ms=31.250 max_ms=31.250" in result.stdout
     assert "aligned n=1 median_ms=18.750 p90_ms=18.750 max_ms=18.750" in result.stdout
     assert "closest=aligned" in result.stdout
+
+
+def test_import_refuses_stale_review_of_manual_fields(annotation_bundle, tmp_path):
+    from tools.annotate_corpus import build, import_annotations
+
+    labels, audio, rows = annotation_bundle
+    page = build(rows, audio, tmp_path / "page", "tuning").read_text()
+    payload = page.split('<script id="payload" type="application/json">', 1)[1]
+    base = json.loads(payload.split("</script>", 1)[0])["rows"][0]["row_sha256"]
+    _, newer = export_file(tmp_path, rows)
+    newer["rows"][0]["row_sha256"] = base
+    older = dict(newer, rows=[dict(newer["rows"][0], last_voice_sample=12600)])
+
+    assert import_annotations(labels, audio, newer, "tuning") == 1
+    before = labels.read_bytes()
+    assert import_annotations(labels, audio, newer, "tuning") == 0
+    with pytest.raises(ValueError, match="annotation conflict: clip-01"):
+        import_annotations(labels, audio, older, "tuning")
+    assert labels.read_bytes() == before
+
+    updated = json.loads(before)
+    updated["transcript"] = "updated metadata"
+    labels.write_text(json.dumps(updated) + "\n")
+    with pytest.raises(ValueError, match="annotation conflict: clip-01"):
+        import_annotations(labels, audio, newer, "tuning")
+    assert json.loads(labels.read_text()) == updated
 
 
 @pytest.mark.parametrize(
@@ -240,18 +257,8 @@ def test_import_refuses_tampered_export_without_writes(
     elif change == "held_out":
         rows[0]["split"] = "held_out"
         labels.write_text(json.dumps(rows[0]) + "\n")
-        protected = {
-            key: val
-            for key, val in rows[0].items()
-            if key
-            not in (
-                "last_voice_sample",
-                "last_voice_annotation",
-                "last_voice_annotator_note",
-            )
-        }
         item["row_sha256"] = hashlib.sha256(
-            json.dumps(protected, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(rows[0], sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
     elif change == "note":
         item["transcript_note"] = ""
@@ -323,6 +330,23 @@ def test_build_selection_and_git_output_guard(annotation_bundle, tmp_path):
     with pytest.raises(ValueError, match="outside Git"):
         build(rows, audio, output / "page", "tuning")
     assert not (output / "page").exists()
+
+
+def test_build_refuses_page_symlink_to_git_worktree(tmp_path):
+    from tools.annotate_corpus import build
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    target = repository / "unchanged.html"
+    target.write_text("unchanged")
+    output = tmp_path / "page"
+    output.mkdir()
+    (output / "index.html").symlink_to(target)
+
+    with pytest.raises(ValueError, match="annotation output must be outside Git"):
+        build([], tmp_path, output, None)
+    assert target.read_text() == "unchanged"
 
 
 def test_compare_percentiles_and_excludes_automatic_rows():

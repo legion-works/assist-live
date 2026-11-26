@@ -13,11 +13,14 @@ The decision is a proxy with `decision_source: ha_audio_end`. Each `fallback_use
 
 The integration keeps `conversation_id` empty and supplies a `turn_id` on each event.
 
-After a server outage, the integration sends the turn open before its events, with the initial open time.
+After a server outage, the integration sends each remaining open before its events, with the initial open time.
 Refused events increase `timing_events_dropped` and do not stop the next event.
 After a refused late open, the sender sends each event independently. The server can accept it if the turn is in storage.
 The diagnostic counter `turn_opens_dropped` counts removed refused opens, not events.
 Time limits and connection errors keep the pending event until a satisfactory maintenance health check.
+
+If the satellite has a newer turn, maintenance removes the older pending open and its pending events.
+It counts the open in `turn_opens_dropped` and the events in `timing_events_dropped`.
 
 ## Event owners
 

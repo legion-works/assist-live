@@ -139,6 +139,10 @@ When the list is full, a new event removes the oldest event.
 Diagnostics count these removals and refused-event removals in `timing_events_dropped`.
 The counter `turn_opens_dropped` counts removed refused opens, not events.
 
+Maintenance removes a pending open if the satellite has a newer turn.
+It reports `stale_turn_open` and adds the open to `turn_opens_dropped`.
+It removes the pending events for that open and adds them to `timing_events_dropped`.
+
 Diagnostics give `counters_since_utc_ns`, the time when these counters started.
 If this time changes, the integration started its counters again, and a report does not compare the two values.
 Pending events can stay after their short-lived local turn records expire.

@@ -61,6 +61,33 @@ async def test_connect_timeout_and_restart(ledger, client):
     assert event.data == {"reason": "restart"}
 
 
+async def test_maintenance_drops_stale_open_and_retries_current_open(
+    ledger, client, drain_timing_events
+):
+    client.open_turn.side_effect = [OSError(), None, OSError(), None, None]
+    old = ledger.open_voice("satellite-a")
+    assert not await ledger.connect(old)
+    ledger.mark(old.turn_id, "stt_final_received")
+    current = ledger.open_voice("satellite-a")
+    assert await ledger.connect(current)
+    other = ledger.open_voice("satellite-b")
+    assert not await ledger.connect(other)
+
+    ledger.schedule_events(retry=True)
+    await drain_timing_events(ledger)
+    assert [call.args[0] for call in client.open_turn.await_args_list] == [
+        old,
+        current,
+        other,
+        other,
+    ], "maintenance sent a stale open"
+    assert ledger.failures["stale_turn_open"] == 1
+    assert ledger.turn_opens_dropped == 1
+    client.event.assert_not_awaited()
+    ledger.device_event("satellite-a", current.turn_id, "playback_end")
+    assert ledger.open_voice("satellite-a").parent_turn_id == current.turn_id
+
+
 async def test_connection_deadline(ledger, client, monkeypatch):
     import asyncio
 

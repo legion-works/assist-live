@@ -126,8 +126,11 @@ It starts at integration setup. These limits have no user options.
 The counter `turn_opens_dropped` counts removed refused opens, not timing events.
 Integration shutdown discards pending events without a last send. Pending events do not survive reload or restart.
 
+If the satellite has a newer turn, maintenance removes the older pending open and its pending events.
+It counts the open in `turn_opens_dropped` and the events in `timing_events_dropped`.
+
 A refused event does not stop the next event. Time limits and connection errors keep the event for the next health check.
-After an outage, the sender opens each pending turn before its events, with the initial `opened_utc_ns` time.
+After an outage, the sender retries each remaining open before its events, with the initial `opened_utc_ns` time.
 
 A retry with the same open values succeeds if HA does not receive the first response.
 The server refuses a conflicting or too-old open. The sender then sends each event for its own check.

@@ -935,9 +935,14 @@ def test_release_workflows_fail_closed(name):
     import subprocess
 
     workflow = yaml.safe_load((ROOT / f".github/workflows/{name}.yml").read_text())
-    assert workflow.get("on", workflow.get(True)) == {"workflow_dispatch": None}
+    triggers = {"workflow_dispatch": None}
+    if name == "release-artifacts":
+        triggers["workflow_call"] = None
+    assert workflow.get("on", workflow.get(True)) == triggers
     assert workflow["permissions"] == {"contents": "read"}
     for job in workflow["jobs"].values():
+        if "uses" in job:
+            continue
         guard = job["steps"][0]
         assert guard["env"] == {"APPROVED": "${{ vars.ASSIST_LIVE_RELEASES_APPROVED }}"}
         for value in ("", "false", "true"):
@@ -948,6 +953,52 @@ def test_release_workflows_fail_closed(name):
                 check=False,
             )
             assert (result.returncode == 0) is (value == "true")
+
+
+def test_release_publisher_requires_archive_check_in_same_run():
+    from tools.check_ci import check_release_publisher
+
+    check_release_publisher(ROOT)
+
+
+@pytest.mark.parametrize(
+    ("file", "job", "field", "value"),
+    [
+        ("release-please.yml", "release-please", "needs", None),
+        ("release-please.yml", "release-please", "if", "${{ always() }}"),
+        ("release-artifacts.yml", "archive", "continue-on-error", True),
+        ("release-please.yml", "archive", "if", None),
+    ],
+)
+def test_release_publisher_rejects_dependency_bypass(tmp_path, file, job, field, value):
+    from shutil import copyfile
+
+    from tools.check_ci import check_release_publisher
+
+    relative = Path(".github/workflows")
+    workflows = tmp_path / relative
+    workflows.mkdir(parents=True)
+    for name in ("release-please.yml", "release-artifacts.yml"):
+        copyfile(ROOT / relative / name, workflows / name)
+    path = workflows / file
+    workflow = yaml.safe_load(path.read_text())
+    job_config = workflow["jobs"][job]
+    if value is None:
+        job_config.pop(field)
+    else:
+        job_config[field] = value
+    path.write_text(yaml.safe_dump(workflow))
+    with pytest.raises(ValueError, match="^release publisher dependency$"):
+        check_release_publisher(tmp_path)
+
+
+def test_release_archive_checks_only_default_branch():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/release-please.yml").read_text()
+    )
+    assert workflow["jobs"]["archive"].get("if") == (
+        "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    ), "publisher can release a branch other than the checked branch"
 
 
 def test_release_archive_checks_published_client_before_build(tmp_path):

@@ -331,6 +331,27 @@ def test_runtime_metadata_rules(bootstrap_copy, change):
     assert expected in check_bootstrap(bootstrap_copy)
 
 
+def test_bootstrap_accepts_release_proposal_and_still_checks_version(bootstrap_copy):
+    from tools.check_bootstrap import check_bootstrap
+
+    path = bootstrap_copy / "custom_components/assist_live/manifest.json"
+    tracking = bootstrap_copy / ".release-please-manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["version"] = "1.2.3"
+    tracking.write_text(json.dumps({".": "1.2.3"}))
+    path.write_text(json.dumps(manifest))
+    assert check_bootstrap(bootstrap_copy) == []
+
+    manifest["version"] = "1.2.4"
+    path.write_text(json.dumps(manifest))
+    assert check_bootstrap(bootstrap_copy) == ["manifest version"]
+
+    manifest["version"] = "not a version"
+    tracking.write_text(json.dumps({".": "not a version"}))
+    path.write_text(json.dumps(manifest))
+    assert check_bootstrap(bootstrap_copy) == ["manifest version"]
+
+
 @pytest.fixture
 def bootstrap_copy(tmp_path):
     root = tmp_path / "bootstrap"

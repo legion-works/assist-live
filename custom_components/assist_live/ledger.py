@@ -642,6 +642,19 @@ class TurnLedger:
                     None,
                 )
                 if turn is not None:
+                    if self.latest[turn.satellite].turn != turn:
+                        self._pending_opens.pop(turn.turn_id)
+                        self.turn_opens_dropped += 1
+                        reason = "stale_turn_open"
+                        self.failures[reason] = self.failures.get(reason, 0) + 1
+                        pending = len(self._pending)
+                        self._pending = [
+                            event
+                            for event in self._pending
+                            if event.turn_id != turn.turn_id
+                        ]
+                        self.timing_events_dropped += pending - len(self._pending)
+                        continue
                     self._opening[turn.turn_id] = asyncio.Event()
                     try:
                         async with asyncio.timeout(TIMING_EVENT_TIMEOUT):

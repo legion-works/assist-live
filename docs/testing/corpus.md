@@ -536,7 +536,7 @@ uv run --locked python tools/annotate_corpus.py build --labels tests/data/labels
 
 `--ids ID1,ID2` selects named rows. `--flagged` selects rows with `boundary_review_required=true`.
 These filters can also limit a partition selection.
-The tool rejects an output directory in a Git repository, also through a symlink.
+The tool rejects an output directory or page in a Git worktree, also through a symlink.
 
 1. Open `$ANNOTATION_DIR/index.html` in a browser.
 2. Record an anonymous annotator code, such as `annotator-01`.
@@ -549,7 +549,7 @@ The tool rejects an output directory in a Git repository, also through a symlink
 9. Use **Accept marker** if the automatic marker is correct.
 10. If the transcript is different, select its checkbox and record the difference in the text field.
 11. Use **Skip** if the boundary is unclear.
-12. Export JSON before a break and after the last row.
+12. Export JSON before a break and after the last row. Import only the last export of a page.
 
 For a pause row, mark its intervals after recording and conversion:
 
@@ -583,7 +583,7 @@ uv run --locked python tools/annotate_corpus.py compare --labels tests/data/labe
 
 Import checks the export version, unique known IDs, partition, audio hash, recording length, sample limits, and record digest.
 Unknown fields and a transcript-difference checkbox without a note cause failure.
-All rows must give satisfactory results before a write. A second import makes no change.
+All rows must give satisfactory results before a write. If you run the same import again immediately, it makes no change.
 
 Import changes `last_voice_sample`, `last_voice_annotation`, and `last_voice_annotator_note`.
 For pause rows, it also writes the two interval lists, the first pause sample boundaries, and `pause_annotation=manual`.
@@ -595,8 +595,10 @@ It does not change transcripts, intent slots, partitions, flags, automatic metho
 
 Use a different checked correction for a transcript difference, not this importer.
 
-The record digest does not include these manual fields so that re-import stays idempotent.
-It finds stale or damaged metadata. It is not a signature or proof of a human decision.
+The record digest includes the manual fields. If the record changed since export, import reports `annotation conflict`.
+Build a new page from the current records and export the review again. Use these steps also for a page from an earlier tool version.
+The annotator note records `import_sha256`. The tool uses it when you run the same import again.
+
 A person with edit access can select a different correct sample. Check the annotator record before freeze.
 
 For these replay rows, `aligned_end_sample + energy_minus_aligned_samples` keeps the initial energy marker.

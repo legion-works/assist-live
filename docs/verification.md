@@ -4682,3 +4682,39 @@ If the server records the reply end, the stop request must come before it.
 | `task check` | Exit 0, `2195 passed, 1 skipped` |
 | `task ha-minimum` | Exit 0, `2195 passed, 1 skipped` |
 | `task ha-2026-11` | Exit 0, `2196 passed` |
+
+## Release, `annotate_corpus`, and turn retry checks
+
+The release task waits for the `check_release_pin` check in the same workflow run.
+`ASSIST_LIVE_RELEASES_APPROVED` controls the release.
+The bootstrap check accepts the version from the release proposal and rejects a version mismatch.
+The proposal changes the version in the HA manifest, not in `pyproject.toml`.
+
+The [manual boundary procedure](testing/corpus.md#manual-boundary-procedure) keeps the audio page external to Git.
+The import refuses an older review of a changed row. If you run the same import again, it makes no change.
+
+Maintenance drops an older pending turn open with `stale_turn_open`.
+It retries the latest turn open. The follow-up uses the turn that completed playback.
+
+| Check | Result |
+|---|---|
+| Five regression tests on the initial code | `5 failed` |
+| The same five tests with the corrections | `5 passed` |
+| Scratch mutations, one for each test | `5 failed` |
+| `task check` | Exit 0, `2200 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2200 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2201 passed` |
+
+### Default branch and counter checks
+
+The archive task runs only for the default branch.
+The release task does not run if the archive task does not run.
+The branch check rejects a condition that lets a tag with the same name start the archive task.
+The [timing design](design.md#background-timing-events) gives the counts for removed opens and events.
+
+| Check | Result |
+|---|---|
+| Branch check on `09a8503` | Exit 1, `1 failed` |
+| CI, corpus, ledger, and public tree tests | Exit 0, `216 passed` |
+| Branch check with a short ref name | Exit 1, `1 failed` |
+| `task check` | Exit 0, `2205 passed, 1 skipped` |

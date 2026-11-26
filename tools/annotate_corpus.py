@@ -14,16 +14,7 @@ if TYPE_CHECKING or __package__:
 else:
     from corpus import Row, integer, interval_errors, load_corpus, resolve_audio, text
 
-MANUAL_FIELDS = {
-    "last_voice_sample",
-    "last_voice_annotation",
-    "last_voice_annotator_note",
-    "pause_intervals_ms",
-    "executable_prefix_intervals_ms",
-    "pause_start_sample",
-    "pause_end_sample",
-    "pause_annotation",
-}
+IMPORT_DIGEST = "import_sha256"
 EXPORT_FIELDS = {
     "id",
     "audio_sha256",
@@ -39,12 +30,13 @@ EXPORT_FIELDS = {
 
 
 def row_digest(row: Row) -> str:
-    protected = {key: value for key, value in row.items() if key not in MANUAL_FIELDS}
     return hashlib.sha256(
-        json.dumps(
-            protected, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()
+        json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
+
+
+def import_digest(entry: Row, annotator: str, row: Row) -> str:
+    return row_digest({"entry": entry, "annotator": annotator, "row": row})
 
 
 def automatic_markers(row: Row) -> dict[str, int]:
@@ -326,8 +318,12 @@ document.getElementById('export').onclick=()=>{
 
 def build(rows: list[Row], root: Path, output: Path, split: str | None) -> Path:
     output = output.resolve()
-    if any((parent / ".git").exists() for parent in (output, *output.parents)):
-        raise ValueError("annotation output must be outside Git")
+    page = (output / "index.html").resolve()
+    for destination in (output, page):
+        if any(
+            (parent / ".git").exists() for parent in (destination, *destination.parents)
+        ):
+            raise ValueError("annotation output must be outside Git")
     payload = []
     for row in rows:
         data, frames = audio_info(row, root)
@@ -383,9 +379,17 @@ def build(rows: list[Row], root: Path, output: Path, split: str | None) -> Path:
         encoded.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     )
     output.mkdir(parents=True, exist_ok=True)
-    path = output / "index.html"
-    path.write_text(PAGE.replace("__DATA__", encoded), encoding="utf-8")
-    return path
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=page.parent, delete=False
+    ) as temporary:
+        name = Path(temporary.name)
+        try:
+            temporary.write(PAGE.replace("__DATA__", encoded))
+            temporary.close()
+            name.replace(page)
+        finally:
+            name.unlink(missing_ok=True)
+    return page
 
 
 def import_annotations(
@@ -420,19 +424,11 @@ def import_annotations(
             raise ValueError("unknown or duplicate export id")
         seen.add(identifier)
         row = index[identifier]
-        if (split is not None and row.get("split") != split) or (
-            export["split"] != "all" and row.get("split") != export["split"]
-        ):
-            raise ValueError("export row outside requested split")
-        _, frames = audio_info(row, root)
         sample = entry["last_voice_sample"]
         if (
-            entry["audio_sha256"] != row["audio_sha256"]
-            or entry["row_sha256"] != row_digest(row)
-            or not integer(entry["frames"])
-            or entry["frames"] != frames
+            not integer(entry["frames"])
             or not integer(sample)
-            or not 0 <= sample < frames
+            or not 0 <= sample < entry["frames"]
             or type(entry["skip"]) is not bool
             or type(entry["transcript_differs"]) is not bool
             or not isinstance(entry["transcript_note"], str)
@@ -443,7 +439,28 @@ def import_annotations(
             )
         ):
             raise ValueError("tampered export or invalid annotation")
-        if entry["skip"]:
+        note = row.get("last_voice_annotator_note")
+        reviewed = row
+        previous_import = None
+        if isinstance(note, dict) and IMPORT_DIGEST in note:
+            note = note.copy()
+            previous_import = note.pop(IMPORT_DIGEST)
+            reviewed = dict(row, last_voice_annotator_note=note)
+        replay = entry["row_sha256"] != row_digest(row)
+        if replay:
+            # The receipt applies only to the same export and its unchanged result.
+            if entry["skip"] or previous_import != import_digest(
+                entry, export["annotator"], reviewed
+            ):
+                raise ValueError(f"annotation conflict: {identifier}")
+        if (split is not None and row.get("split") != split) or (
+            export["split"] != "all" and row.get("split") != export["split"]
+        ):
+            raise ValueError("export row outside requested split")
+        _, frames = audio_info(row, root)
+        if entry["audio_sha256"] != row["audio_sha256"] or entry["frames"] != frames:
+            raise ValueError("tampered export or invalid annotation")
+        if replay or entry["skip"]:
             continue
         annotated = dict(
             row,
@@ -484,7 +501,10 @@ def import_annotations(
             energy = automatic_markers(row).get("energy")
             if energy is not None:
                 updates["last_voice_annotator_note"]["automatic_energy_sample"] = energy
-        if any(row.get(key) != value for key, value in updates.items()):
+        if any(reviewed.get(key) != value for key, value in updates.items()):
+            updates["last_voice_annotator_note"][IMPORT_DIGEST] = import_digest(
+                entry, export["annotator"], dict(row, **updates)
+            )
             row.update(updates)
             changes += 1
     if changes:
