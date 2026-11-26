@@ -223,7 +223,9 @@ This check resolves symlinks before it compares paths. Keep hardware results in 
 
 ### Timer removal
 
-Hardware mode sends `cancel all timers` to the native HA agent with the satellite device ID.
+Hardware mode sends `cancel all timers` to the native HA agent with the test agent's virtual device ID.
+The virtual device owns the timers. The physical satellite supplies the input audio only.
+
 It removes timers before the first qualification or calibration play and during cleanup, also after cancellation or an error.
 It also removes timers after each qualification, calibration, and trial test run, before the next `idle` wait.
 The test run first captures its operations, transcripts, and applicable baselines.
@@ -242,7 +244,11 @@ The run and fault summary name `timer_cancel_failed`. This failure also makes `-
 
 The private result keeps `timer_cancel_calls` in call order, with the initial call and cleanup.
 Each row has `canceled`, the count from the reply's `response.speech_slots.canceled`.
-A missing count gives `null`, not a failure. The count can be `0`.
+
+For each timer start, add the recorded timer seconds to its monotonic start time.
+If this time is after the start of removal, a missing count or `0` gives `timer_cancel_failed`.
+Removal is not necessary for an expired timer.
+If the agent did not record a timer start, the count can be `0` or `null`.
 HA `2026.10.1` and `2026.10.4` set this count in `components/intent/timers.py:988-1001`.
 Their `helpers/intent.py:1518-1536` puts `speech_slots` in the serialized response.
 
@@ -302,7 +308,13 @@ The `trials` and `attempts` lists and trial denominators do not include qualific
 The public fault gate includes `qualification` with `candidates`, `eligible`, `needed`, and `causes` counts only.
 The `needed` count is the private `target` count. The `causes` mapping counts recordings for each cause, without eligible recordings.
 The JSON report, Markdown report, and fault-gate output show these counts, without recording IDs, transcripts, audio paths, or messages.
-Simulated results without qualification keep their previous format.
+Simulated results without qualification keep their previous format. They cannot satisfy the hardware gate.
+
+Hardware scope is necessary for the result and each trial (`hardware_scope_required`).
+A recording qualification record is necessary (`missing_recording_qualification`).
+The qualification counts must agree with the recorded plays.
+Each counted trial must use the recording ID and source hash of an eligible play.
+The gate gives `invalid_recording_qualification` for invalid records or `unqualified_trial_recording` if the trial data does not agree with an eligible play.
 
 Add `--qualify-only` to the hardware command to measure eligibility without calibration or faults.
 This flag also plays audio. Get bench approval for this flag.
@@ -406,7 +418,20 @@ If the SHA-256 of an archived turn audio file does not agree with its record, th
 The `speech` schedule is playback launch plus wake length, window midpoint, and calibrated interval, minus measured stop latency.
 The `pause` schedule keeps the quarter-window target.
 The `before` fault stops the server before playback.
-The `after-final` fault stops only after the public debug events contain `stt-end` for that run.
+
+The `after-final` fault requests a stop on the first poll with `stt-end`, also if that poll shows `run-end`.
+The event, its observation, the stop request, and the stop end must occur in that order.
+The isolated containers and the runner use the same host clock for these timestamps.
+
+Use the server URL and token file from [device replay](device-replay.md) to read the turn after server restoration.
+If the turn has a server `tts_end` or `tts_last_byte`, the stop request must come before the last of those events.
+If the two server settings are not set, the runner uses only the turn end. This gives weaker proof and the result gives `turn_end_only`.
+If the read succeeds but the turn has no server reply end, the result gives `server_read_no_reply_end`.
+If the runner cannot read the server turn, or only one setting is set, the try is invalid with `server_read_failed`.
+
+The stop must end before device `playback_end`. If this event is not available, use the HA satellite state change from `responding` to `idle`.
+A missing turn end time or an incorrect time order gives `after_final_stop_order` and an invalid try.
+The check does not use the fallback result.
 
 The recognized text, intent, operations, and deadline use the same acceptance checks as simulated mode.
 The deadline stays at 20 s.

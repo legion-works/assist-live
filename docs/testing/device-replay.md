@@ -148,6 +148,14 @@ The P1 row keeps that P0 transcript as `baseline_transcript`.
 
 Rows keep the device and host times, event quality, event uncertainty, calibration revision, and external microphone `alignment`.
 Device wake, microphone-open, playback-start, and playback-end records are mandatory.
+
+A complete voice row also has one recorded `end_decision` and `stt_final` from the correct owners.
+Use the TTS events for the applicable path.
+
+For an STT or TTS handover, the report compares event times from the server and HA.
+These two sources must use the same host clock, as on the test bench.
+The [measurement rules](measurement-rules.md#event-owners) give the owners and failure codes.
+The runner reads the transcript only from the `stt_final` event of the STT owner.
 A server-only WebSocket sample cannot satisfy these checks.
 A missing transcript, intent, or operation record also causes failure.
 

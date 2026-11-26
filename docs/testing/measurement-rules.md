@@ -19,6 +19,28 @@ After a refused late open, the sender sends each event independently. The server
 The diagnostic counter `turn_opens_dropped` counts removed refused opens, not events.
 Time limits and connection errors keep the pending event until a satisfactory maintenance health check.
 
+## Event owners
+
+For P0 baseline rows, the integration owns `end_decision`, `stt_final`, and `tts_first_byte`.
+For P1 rows, the server owns these events unless the integration records `fallback_used` for that part of the same turn.
+The `stt` part applies to `end_decision` and `stt_final`. The `tts` part applies to `tts_first_byte`.
+A test-only event cannot supply a `stage` value for completeness or change its owner.
+
+Missing events, duplicate events from the owner, and events from a different owner do not satisfy completeness.
+The report gives the `stage` value after `MISSING_`, `DUPLICATE_`, or `WRONG_OWNER_`.
+
+When the server records `tts_text_received`, it must also record `tts_first_byte` unless TTS changes to the fallback path.
+The fallback path uses an integration `fallback_used` event for `tts` and an integration `tts_first_byte` at or after it.
+The TTS entity does not get a reply from the HA cache. If there are no TTS events, the report does not check `tts_first_byte`.
+
+One server `end_decision` before an STT `fallback_used` event does not cause an owner error.
+The integration records the fallback decision and the `stt_final` event with `transcript`.
+
+One server `tts_first_byte` before a TTS `fallback_used` event does not cause an owner error.
+If this first byte is available, use its time for reply latency.
+The integration first byte gives proof of the handover. An incorrect handover gives `INVALID_HANDOVER_` and the `stage` value.
+It does not use an event from a different owner to calculate a time or read a transcript.
+
 ## Sets
 
 Each report row names its `set`: `replay` or `pause`.

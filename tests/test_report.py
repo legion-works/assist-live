@@ -14,6 +14,83 @@ def test_incomplete_turns_stay_in_denominator():
     assert completeness(complete=190, voice_turns=200)["rate"] == 0.95
 
 
+def test_p0_missing_bridge_fails_even_when_completeness_passes():
+    labels, rows = dataset(200)
+    rows[0].update(
+        complete=False,
+        failures=["MISSING_OR_INVALID_OPERATION_EVIDENCE"],
+        evaluated_intent=None,
+        action_trace=None,
+        action_trace_complete=False,
+    )
+    report = build(rows, labels)
+    assert all(
+        value for key, value in report["gates"].items() if key != "evidence_records"
+    )
+    assert not report["gates"]["evidence_records"], "P0_MISSING_BRIDGE"
+    assert not report["accepted"]
+    assert report["profiles"]["baseline"]["failed_turns"][0]["reasons"] == [
+        "MISSING_OR_INVALID_OPERATION_EVIDENCE"
+    ]
+
+
+@pytest.mark.parametrize("stage", ["end_decision", "stt_final", "tts_first_byte"])
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "wrong_owner"])
+def test_internal_stage_defects_count_against_completeness(stage, defect):
+    from tools.report import summarize
+
+    _, rows = dataset(2, "p1")
+    row = rows[0]
+    row["events"].append(event("tts_text_received", 1700, row["turn_id"], "server"))
+    index = next(i for i, item in enumerate(row["events"]) if item["stage"] == stage)
+    if defect == "missing":
+        row["events"].pop(index)
+    elif defect == "duplicate":
+        row["events"].append(copy.deepcopy(row["events"][index]))
+    else:
+        row["events"][index]["source"] = "integration"
+    summary = summarize(rows)
+    assert summary["completeness"]["rate"] == 0.5, "INTERNAL_STAGE_REQUIRED"
+    assert summary["failed_turns"][0]["reasons"] == [
+        f"{defect.upper()}_{stage.upper()}"
+    ]
+
+
+@pytest.mark.parametrize("parts", [(), ("stt",), ("tts",), ("stt", "tts")])
+def test_p1_stage_ownership_follows_each_fallback_part(parts):
+    from tools.device_replay import INTERNAL_STAGE_PARTS
+    from tools.report import observation_complete, timing
+
+    _, rows = dataset(1, "p1")
+    row = rows[0]
+    for part in parts:
+        marker = event("fallback_used", 1300, row["turn_id"], "integration")
+        marker["data"] = {"part": part, "reason": "stream_closed"}
+        row["events"].append(marker)
+    for item in row["events"]:
+        if INTERNAL_STAGE_PARTS.get(item["stage"]) in parts:
+            item["source"] = "integration"
+            if item["stage"] == "stt_final":
+                item["data"] = {"transcript": row["recognized_transcript"]}
+    assert observation_complete(row)
+    for stage, part in INTERNAL_STAGE_PARTS.items():
+        assert timing(row, stage)["source"] == (
+            "integration" if part in parts else "server"
+        )
+
+
+def test_test_only_fallback_marker_cannot_change_owner():
+    from tools.report import observation_complete, timing
+
+    _, rows = dataset(1, "p1")
+    row = rows[0]
+    marker = event("fallback_used", 1300, row["turn_id"], "integration")
+    marker.update(test_only=True, data={"part": "stt", "reason": "stream_closed"})
+    row["events"].append(marker)
+    assert observation_complete(row)
+    assert timing(row, "stt_final")["source"] == "server"
+
+
 def dataset(count=2, phase="p0", latency=500, *, offset=0, set_name="replay"):
     labels, rows = [], []
     snapshot = {
@@ -44,14 +121,13 @@ def dataset(count=2, phase="p0", latency=500, *, offset=0, set_name="replay"):
         )
         for item in row["events"]:
             item["turn_id"] = row["turn_id"]
+            if phase == "p1" and item["source"] == "integration":
+                item["source"] = "server"
         row["events"][2]["t_utc_ns"] = 11_500_000_000 + latency * 1_000_000
         for stage, ms in (
             ("speech_start", 1100),
             ("end_candidate", 1400),
-            ("end_decision", 1500),
-            ("stt_final", 1600),
             ("tts_first_text", 1700),
-            ("tts_first_byte", 1750),
         ):
             row["events"].append(event(stage, ms, row["turn_id"], "integration"))
         row["alignment"]["reply_start_utc_ns"] = row["events"][2]["t_utc_ns"]
@@ -326,11 +402,34 @@ def acceptance_fixture():
         for engine in ("server", "fallback")
     }
     faults = {
+        "scope": "hardware",
+        "qualification": {
+            "candidates": 1,
+            "eligible": 1,
+            "target": 1,
+            "sufficient": True,
+            "recordings": [
+                {
+                    "scope": "hardware",
+                    "stage": "qualification",
+                    "clip_id": labels[0]["id"],
+                    "source_audio_sha256": labels[0]["audio_sha256"],
+                    "correlation": {"complete": True},
+                    "eligible": True,
+                    "cause": None,
+                }
+            ],
+        },
         "trials": [
             {
+                "scope": "hardware",
                 "stage": stage,
                 "clip_id": labels[0]["id"],
                 "audio_sha256": labels[0]["audio_sha256"],
+                "source_audio_sha256": labels[0]["audio_sha256"],
+                "correlation": {"complete": True, "offset_samples": 1000},
+                "server_audio_samples": 25000,
+                "server_audio_last_chunk_samples": 320,
                 "stt_engines": {"server": "stt.server", "fallback": "stt.fallback"},
                 "baselines": copy.deepcopy(fault_baselines),
                 "turn_id": f"fault-{stage}-{i}",
@@ -376,13 +475,21 @@ def acceptance_fixture():
                         ],
                     }
                 ],
-                "events": [{"stage": "run-start", "t_utc_ns": 1_000_000_000}],
+                "events": [
+                    {"stage": "run-start", "t_utc_ns": 1_000_000_000},
+                    {"stage": "stt-end", "t_utc_ns": 12_000_000_000},
+                    {"stage": "run-end", "t_utc_ns": 20_000_000_000},
+                ],
+                "final_observed_utc_ns": 13_000_000_000,
+                "fault_requested_utc_ns": 14_000_000_000,
+                "fault_stopped_utc_ns": 15_000_000_000,
+                "satellite_reply_idle_utc_ns": 20_000_000_000,
                 "fallback_deadline_utc_ns": 21_000_000_000,
                 "completed_utc_ns": 19_000_000_000,
             }
             for stage in ("before", "speech", "pause", "after-final")
             for i in range(10)
-        ]
+        ],
     }
     return labels + pause_labels, safe + fast, baseline, faults
 
@@ -390,6 +497,37 @@ def acceptance_fixture():
 @pytest.fixture(scope="module")
 def acceptance():
     return acceptance_fixture()
+
+
+@pytest.mark.parametrize(
+    "missing", ["scope", "run_scope", "qualification", "recordings", "recording_match"]
+)
+def test_fault_acceptance_requires_hardware_proof(acceptance, missing):
+    from tools.fault_runner import fault_gate
+
+    _, _, _, faults = copy.deepcopy(acceptance)
+    if missing == "scope":
+        faults["trials"][0].pop("scope", None)
+    elif missing == "run_scope":
+        faults.pop("scope")
+    elif missing == "qualification":
+        faults.pop("qualification", None)
+    elif missing == "recordings":
+        faults["qualification"].pop("recordings")
+    else:
+        faults["trials"][0]["source_audio_sha256"] = "b" * 64
+    result = fault_gate(faults)
+    assert not result["passed"], "HARDWARE_PROOF_REQUIRED"
+    assert (
+        result["reason"]
+        == {
+            "scope": "hardware_scope_required",
+            "run_scope": "hardware_scope_required",
+            "qualification": "missing_recording_qualification",
+            "recordings": "invalid_recording_qualification",
+            "recording_match": "unqualified_trial_recording",
+        }[missing]
+    )
 
 
 def test_p1_known_passing_fixture_and_every_acceptance_gate(acceptance):
@@ -637,21 +775,32 @@ def test_failed_attempt_requires_present_fields_and_named_reasons():
         build(rows, labels)
 
 
-def test_fault_empty_path_cannot_hide_operations_and_duplicate_trials(acceptance):
-    from tests.test_fault_runner import empty_trial, set_reasons
+def test_fault_empty_path_cannot_hide_operations_and_duplicate_trials(
+    acceptance, monkeypatch
+):
+    from tools import fault_runner
     from tools.report import fault_gate
 
     _, _, _, faults = copy.deepcopy(acceptance)
     assert fault_gate(faults)["passed"]
-    previous = faults["trials"][0]
-    trial = empty_trial()
-    trial.update(
-        stage=previous["stage"],
-        turn_id=previous["turn_id"],
-        action_trace=[{"service": "light.turn_on"}],
+    trial = faults["trials"][0]
+    expected_operations = fault_runner.expected_operations
+    label = trial["label"]
+    monkeypatch.setattr(
+        fault_runner,
+        "expected_operations",
+        lambda row, inventory: (
+            [] if row is label else expected_operations(row, inventory)
+        ),
     )
-    set_reasons(trial, trial["stage"])
-    faults["trials"][0] = trial
+    trial["action_trace"] = [
+        {
+            "service": "light.turn_on",
+            "monotonic_ns": 1,
+            "virtual_target": "light.virtual_light",
+            "arguments": {},
+        }
+    ]
     assert not fault_gate(faults)["passed"]
     trial["action_trace"] = []
     assert fault_gate(faults)["passed"]
@@ -881,7 +1030,7 @@ def test_completeness_threshold_is_inclusive(complete, passed):
         )
     report = build(rows, labels)
     assert report["gates"]["completeness"] is passed
-    assert report["gates"]["evidence_records"]
+    assert not report["gates"]["evidence_records"]
 
 
 @pytest.mark.parametrize("count,passed", [(98, False), (100, True)])

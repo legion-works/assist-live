@@ -84,9 +84,12 @@ Record engine versions, voice, endpoint settings, audio format, and hardware cla
 Keep unchanged native-pipeline rows isolated with `pipeline: native`.
 
 Each replay trial makes one run row.
-A trial that is not complete has `complete: false`, explicit missing values, and named `failures`.
+For a trial that is not complete, the replay tool writes `complete: false`, explicit missing values, and named `failures`.
+The report also checks the recorded events before it counts a trial as complete.
 It stays in the completeness denominator.
-Missing transcript, intent, or operation test records cause an unsatisfactory gate result, not an exclusion.
+
+The `evidence_records` gate checks all forwarding voice trials.
+Missing transcript, intent, or operation test records make this gate unsatisfactory. This rule also applies if the completeness rate is satisfactory.
 The report refuses missing schema fields, smoke rows, unfrozen rows, tuning rows, and unresolved recording hashes before statistics.
 After the device and matrix trials, run:
 
@@ -100,8 +103,9 @@ Each recorded step has p50 and p90 values from linear interpolation at `(n-1)*p`
 Each rate includes its denominator and a two-sided 95% Clopper-Pearson interval.
 The output names these methods.
 
-An unavailable baseline end-decision event uses an explicitly named `stt_final` proxy.
-Other missing internal events stay missing, with no invented timing value.
+The time summary can show a named `stt_final` proxy when the baseline has no end-decision event.
+This proxy does not count as a recorded event for completeness.
+See [event owners](measurement-rules.md#event-owners) for the necessary internal events and failure codes.
 Acoustic values keep their estimated quality and measurement uncertainty.
 
 The `mic_to_speech` step starts at the turn-audio start, not the microphone-open event.

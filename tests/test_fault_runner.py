@@ -8,6 +8,7 @@ from tests.test_device_replay import sample
 def trial():
     row = sample()
     row.update(
+        scope="simulated",
         stage="speech",
         label={
             "transcript": row["recognized_transcript"],
@@ -274,18 +275,13 @@ def test_correct_transcript_cannot_hide_unlabelled_or_missing_operations():
 
 
 def test_fault_gate_requires_all_four_stages_and_distinct_turns():
+    from tests.test_report import acceptance_fixture
     from tools.fault_runner import fault_gate
 
-    trials = []
-    for stage in ("before", "speech", "pause", "after-final"):
-        for i in range(10):
-            row = copy.deepcopy(trial())
-            row.update(stage=stage, turn_id=f"{stage}-{i}")
-            set_reasons(row, stage)
-            trials.append(row)
-    assert fault_gate({"trials": trials})["passed"]
-    trials[0]["stage"] = "speech"
-    assert not fault_gate({"trials": trials})["passed"]
+    _, _, _, faults = acceptance_fixture()
+    assert fault_gate(faults)["passed"]
+    faults["trials"][0]["stage"] = "speech"
+    assert not fault_gate(faults)["passed"]
 
 
 def set_reasons(row, stage):

@@ -205,7 +205,7 @@ def test_report_counts_slots_and_shows_invalid_attempts_separately():
     missed.update(
         status="invalid_injection",
         fault_injected=False,
-        fault_stopped_audio_sample=90000,
+        server_audio_samples=91000,
         label={"alignment_words": [{"start_sample": 16000, "end_sample": 48000}]},
     )
     faults["attempts"] = [missed, *copy.deepcopy(faults["trials"])]

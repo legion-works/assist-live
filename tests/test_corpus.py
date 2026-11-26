@@ -151,7 +151,20 @@ def test_pause_limits_are_inclusive_and_sample_based():
         rows = full_rows()
         rows[200]["pause_start_sample"] = 0
         rows[200]["pause_end_sample"] = samples
+        rows[200]["pause_intervals_ms"] = [[0, samples / 16]]
         assert (validate_corpus(rows) == []) is valid
+
+
+@pytest.mark.parametrize("field", ["pause_start_sample", "pause_end_sample"])
+def test_freeze_refuses_conflicting_pause_windows(field):
+    from tools.corpus import validate_corpus
+
+    rows = full_rows()
+    rows[200][field] += 1
+    assert (
+        "row 201 pause sample boundary disagrees with first interval"
+        in validate_corpus(rows)
+    ), "PAUSE_WINDOWS_MUST_AGREE"
 
 
 @pytest.mark.parametrize(
@@ -216,6 +229,7 @@ def test_policy_intervals_accept_limits_adjacent_windows_and_optional_replay_fie
 
     item = row()
     item["pause_intervals_ms"] = [[0, 400], [400, 1200]]
+    item["pause_start_sample"], item["pause_end_sample"] = 0, 6400
     item["executable_prefix_intervals_ms"] = [[0, 1.5], [1.5, 1200]]
     assert label_errors(item) == []
     item = row(group="replay")
@@ -325,6 +339,17 @@ def test_complete_corpus_freezes_and_verifies_without_rewrite(bundle):
     assert (freeze.stat().st_mtime_ns, freeze.read_bytes()) == before
     result = run_cli(root, command="fetch")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_conflicting_pause_pair_leaves_no_freeze_manifest(bundle):
+    root, rows = bundle
+    rows[200]["pause_intervals_ms"] = [[200.01, 800.01]]
+    write_labels(root / "labels.jsonl", rows)
+    freeze = root / "corpus.sha256"
+    result = run_cli(root, "--freeze", str(freeze))
+    assert result.returncode == 1
+    assert "pause sample boundary disagrees with first interval" in result.stdout
+    assert not freeze.exists()
 
 
 @pytest.mark.parametrize(

@@ -4625,3 +4625,60 @@ It checks that setup removes the empty devices and keeps the satellite device, i
 | `task ha-minimum` | Exit 0, `2149 passed, 1 skipped` |
 | `task ha-2026-11` | Exit 0, `2150 passed` |
 | STE, `tools/check_records.py`, and `git diff --check` | Exit 0 |
+
+## Replay and fault acceptance checks (2026-11-26 UTC)
+
+The tests use synthetic records. They do not run a satellite or a live HA instance.
+There is no earlier accepted P0 or P1 result.
+
+- The P0 test removes the bridge record from one trial. The completeness rate stays satisfactory, but `evidence_records` is unsatisfactory.
+- The replay tests remove an internal event, add a duplicate, or change its owner. The report does not count the row as complete. Replay does not use `stt_final` from a different owner.
+- The fault tests remove hardware scope or qualification. The hardware gate is unsatisfactory and gives the cause.
+- In the stop tests, the server stops at or after `run-end`. The try is invalid. The runner does not request a stop if the first poll shows `run-end`.
+- The timer test checks the virtual device ID. After a recorded timer start, a cancellation count of `0` gives `timer_cancel_failed`.
+- The corpus test supplies two different pause windows for the same recording. The check does not write a freeze manifest.
+
+| Check | Result |
+|---|---|
+| New tests with the tools from `93a7954` | `19 failed` |
+| Corpus, replay, report, and fault test suites | `1004 passed` |
+| Six test mutations | `1 failed` for each mutation |
+| `task check` | Exit 0, `2182 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2182 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2183 passed` |
+| STE, `tools/check_records.py`, and `git diff --check` | Exit 0 |
+
+### Review checks on `0570148`
+
+The reply stop check replaces the previous `run-end` limit.
+The runner can request a stop after `run-end` if device reply playback continues.
+The stop must end before the reply ends. The check uses the server reply event if it can read that event.
+
+The replay tests include a cache hit, server TTS, and a TTS fallback.
+They check the STT and TTS handovers and reject events from the previous owner after the handover.
+The timer test distinguishes active, expired, and different-device timer records.
+The hardware gate test uses a synthetic intent with no operations. An HA pipeline error continues to give an unsatisfactory result.
+
+| Check | Result |
+|---|---|
+| New tests with the tools from `0570148` | `6 failed, 1 passed` |
+| Replay and fault test suites | `731 passed` |
+| Two test mutations | `1 failed` for each mutation |
+| `task check` | Exit 0, `2188 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2188 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2189 passed` |
+
+### Server turn read checks on `d4aaf21`
+
+If the runner cannot read the server turn, the try is invalid and gives `server_read_failed`.
+The tests also include no server settings and a correct record with no reply end.
+If the server records the reply end, the stop request must come before it.
+
+| Check | Result |
+|---|---|
+| New tests with the tools from `d4aaf21` | `4 failed` |
+| Replay and fault test suites | `738 passed` |
+| One test mutation | `1 failed` |
+| `task check` | Exit 0, `2195 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2195 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2196 passed` |

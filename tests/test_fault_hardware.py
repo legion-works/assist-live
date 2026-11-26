@@ -10,6 +10,7 @@ import time
 import wave
 from argparse import Namespace
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -195,6 +196,11 @@ def satellite_bench(tmp_path):
             return [
                 {"entity_id": entity, "state": value, "attributes": {}}
                 for entity, value in states.items()
+            ] + [
+                {
+                    "entity_id": "conversation.assist_live_short",
+                    "attributes": {"virtual_device_id": "virtual"},
+                }
             ]
         if kind == "config/entity_registry/list":
             return registry
@@ -268,9 +274,79 @@ def hardware_row():
         correlation={"offset_samples": 23000, "complete": True},
         server_audio_samples=47000,
         server_audio_last_chunk_samples=320,
+        final_observed_utc_ns=3_000_000_000,
+        fault_requested_utc_ns=4_000_000_000,
+        fault_stopped_utc_ns=5_000_000_000,
+        satellite_reply_idle_utc_ns=20_000_000_000,
     )
+    row["events"].append({"stage": "stt-end", "t_utc_ns": 2_000_000_000})
     row["events"].append({"stage": "run-end", "t_utc_ns": 20_000_000_000})
     return row
+
+
+@pytest.mark.parametrize("stopped_ns", [20_000_000_000, 20_000_000_001])
+def test_after_final_stop_must_complete_before_reply_end(stopped_ns):
+    row = hardware_row()
+    row["stage"] = "after-final"
+    set_reasons(row, "after-final")
+    row.update(
+        final_observed_utc_ns=3_000_000_000,
+        fault_requested_utc_ns=4_000_000_000,
+        fault_stopped_utc_ns=stopped_ns,
+    )
+    assert fault_runner.trial_status(row) == "invalid_injection", (
+        "STOP_BEFORE_REPLY_END"
+    )
+    assert row["hardware_invalid_reason"] == "after_final_stop_order"
+
+
+def test_after_final_ha_timestamp_conversion_keeps_exact_microseconds():
+    assert hardware_module().event_ns(
+        {"timestamp": "2026-01-01T02:00:00.000001+02:00"}
+    ) == (1_767_225_600_000_001_000)
+
+
+@pytest.mark.parametrize("canceled", [0, 1])
+async def test_timer_cleanup_checks_virtual_owner_and_cancellation(
+    satellite_bench, canceled
+):
+    hardware, command, _, _ = satellite_bench
+    await hardware.preflight(command)
+    hardware.observe_timer(
+        {
+            "device_id": hardware.device_id,
+            "response_type": "action_done",
+            "selected_intent": {"name": "HassStartTimer"},
+            "operations": [
+                {
+                    "service": "timer.started",
+                    "arguments": {"seconds": 60},
+                    "t_monotonic_ns": time.monotonic_ns(),
+                }
+            ],
+        }
+    )
+    targets = []
+
+    async def cancel(kind, **fields):
+        if kind == "get_states":
+            return await command(kind, **fields)
+        targets.append(fields["device_id"])
+        return {
+            "response": {
+                "response_type": "action_done",
+                "speech_slots": {"canceled": canceled},
+            }
+        }
+
+    if canceled:
+        await hardware.cancel_timers(cancel)
+    else:
+        with pytest.raises(
+            hardware_module().TimerCancelError, match="timer_cancel_failed"
+        ):
+            await hardware.cancel_timers(cancel)
+    assert targets == ["virtual"], "CANCEL_ON_VIRTUAL_DEVICE"
 
 
 @pytest.mark.parametrize(
@@ -549,6 +625,7 @@ def test_installed_ha_debug_list_get_and_satellite_contract():
         "ambiguous-run",
         "wrong-satellite",
         "missing-turn",
+        "already-ended",
     ],
 )
 @pytest.mark.parametrize("stage", ["before", "speech", "pause", "after-final"])
@@ -562,11 +639,13 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
     hardware.mute_entity = "switch.mute"
     hardware.delay_samples = [0.1]
     state = {"played": False, "ended": False, "gets": 0, "archives": 0}
+    late_poll = stage == "after-final" and outcome == "already-ended"
     records = asyncio.Queue()
     original_sleep = asyncio.sleep
     source = struct.pack("<1200h", *[n % 100 for n in range(1200)])
     turn = wav_file(tmp_path / "captured.wav", bytes(400) + source + bytes(400))
     calls = []
+    timestamps = {}
 
     async def pause(_):
         await original_sleep(0)
@@ -612,7 +691,7 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
                     "data": {"stt_output": {"text": "test transcript"}},
                 },
             ]
-            if state["gets"] > 1:
+            if state["gets"] > 1 or late_poll:
                 state["ended"] = True
                 events += [{"type": "intent-end"}, {"type": "run-end"}]
                 await records.put(
@@ -633,7 +712,12 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
                 await original_sleep(0)
             return {
                 "events": [
-                    {"timestamp": "2026-01-01T00:00:00+00:00", **event}
+                    {
+                        "timestamp": timestamps.setdefault(
+                            event["type"], datetime.now(UTC).isoformat()
+                        ),
+                        **event,
+                    }
                     for event in events
                 ]
             }
@@ -678,6 +762,22 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
         async def stop(self):
             if stage == "after-final":
                 assert state["gets"] >= 1, "AFTER_FINAL_USES_PUBLIC_FINAL"
+                asyncio.get_running_loop().call_soon(
+                    records.put_nowait,
+                    {
+                        "event": {
+                            "event_type": "state_changed",
+                            "time_fired": datetime.fromtimestamp(
+                                time.time() + 1, UTC
+                            ).isoformat(),
+                            "data": {
+                                "entity_id": hardware.satellite,
+                                "old_state": {"state": "responding"},
+                                "new_state": {"state": "idle"},
+                            },
+                        }
+                    },
+                )
             calls.append("stop")
 
         async def restore(self):
@@ -754,10 +854,14 @@ async def test_hardware_trial_links_ids_and_keeps_continuous_audio(
             "DRIVER_PRESERVES_CORRELATION_CAUSE"
         )
         assert fault_runner.injection_status(row) == "invalid_injection"
-    elif outcome in ("valid", "early"):
+    elif outcome in ("valid", "early", "already-ended"):
         assert row["turn_id"] == "turn-new", "TURN_FROM_SENSOR_NOT_TIME"
         assert row["pipeline_run_id"] == "run-new"
         assert state["archives"] == 1, "TURN_COPIED_IMMEDIATELY"
+        if late_poll:
+            assert "stop" in calls, "POLL_CAN_SEE_PIPELINE_END_FIRST"
+            assert row["hardware_invalid_reason"] is None
+            return
         assert (calls.index("stop") < calls.index("play")) is (stage == "before"), (
             "HARDWARE_STOP_ORDER"
         )

@@ -587,8 +587,9 @@ Each `stage` value has one owner:
 - The integration records `stt_final_received` and `tts_audio_received` when it gets a server result. The server records `tts_text_received` when it gets the first text.
 - The server refuses an event from a part that is not the owner of its `stage` value. The response gives the named error `wrong_owner`. The sender removes a refused event, counts it, and sends the next event.
 - A turn has a maximum of 1024 stored events and 1 MiB of stored event data. The server refuses an event after these limits with the named error `turn_event_limit` or `turn_size_limit`.
-- The report uses only the event of the owner. Two events of one `stage` value from the owner give the named error `duplicate_stage`. The recognized transcript comes only from the `stt_final` event of the owner.
+- The report uses only the event of the owner. Missing internal events, duplicate events, and events from a different owner do not satisfy completeness. The report gives the `stage` value after `MISSING_`, `DUPLICATE_`, or `WRONG_OWNER_`. The recognized transcript comes only from the `stt_final` event of the owner.
 - Each turn has a path: `server`, `fallback_stt`, `fallback_tts`, `fallback_both`, or `baseline`. A complete turn has each `stage` value that is necessary for its path, from the owner of each value.
+- The integration owns `end_decision`, `stt_final`, and `tts_first_byte` on the forwarding baseline path.
 - If the server is not available, the integration keeps the turn open request and its events. It sends them when the server is available again. The server keeps the initial open time and marks the turn `late_open`.
 
 - The store keeps codes and numbers only. These are the fallback `reason` and `part`, the `end_decision` rule and source, the satellite state, `onset_ms`, and the TTS `request` number.
@@ -695,6 +696,12 @@ Thus one slow stop does not make the margin larger than the voice windows.
 In a hardware trial, the satellite also speaks the reply, and a TTS fallback after the fault is correct behavior.
 The cause check uses only the STT fallback cause in the turn row of the trial.
 The trial is unsatisfactory if the pipeline run records an error.
+
+For `after-final`, request the stop after `stt-end`, also if HA sent `run-end`.
+If the server records the reply end, the stop request must come before it.
+The stop must finish before the device ends playback.
+If the device event is not available, use the HA satellite state change from `responding` to `idle`.
+The stop time check does not use the fallback result.
 
 Before the first fault, the runner plays each candidate recording one time without a fault.
 The runner gets a no-fault baseline of the turn audio from the server engine and from the fallback engine.

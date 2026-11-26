@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import time
 from argparse import Namespace
 from contextlib import asynccontextmanager
 
@@ -30,6 +31,7 @@ def cancel_response(count=0):
 async def test_timer_cancel_sends_exact_native_request(tmp_path, count):
     hardware = fault_hardware.Hardware(arguments(tmp_path))
     hardware.device_id = "physical"
+    hardware.timer_device_id = "virtual"
     calls = []
 
     async def command(kind, **fields):
@@ -44,7 +46,7 @@ async def test_timer_cancel_sends_exact_native_request(tmp_path, count):
                 "text": "cancel all timers",
                 "language": "en",
                 "agent_id": "conversation.home_assistant",
-                "device_id": "physical",
+                "device_id": "virtual",
             },
         )
     ], "EXACT_NATIVE_TIMER_CANCEL"
@@ -53,6 +55,7 @@ async def test_timer_cancel_sends_exact_native_request(tmp_path, count):
 
 async def test_timer_cancel_missing_count_is_null(tmp_path):
     hardware = fault_hardware.Hardware(arguments(tmp_path))
+    hardware.timer_device_id = "virtual"
 
     async def command(*_, **__):
         return {"response": {"response_type": "action_done"}}
@@ -75,7 +78,7 @@ async def test_timer_cancel_missing_count_is_null(tmp_path):
 )
 async def test_timer_cancel_rejects_error_or_missing_response(tmp_path, response):
     hardware = fault_hardware.Hardware(arguments(tmp_path))
-    hardware.device_id = "physical"
+    hardware.timer_device_id = "virtual"
 
     async def command(*_, **__):
         return response
@@ -86,7 +89,7 @@ async def test_timer_cancel_rejects_error_or_missing_response(tmp_path, response
 
 async def test_timer_cancel_names_transport_failure(tmp_path):
     hardware = fault_hardware.Hardware(arguments(tmp_path))
-    hardware.device_id = "physical"
+    hardware.timer_device_id = "virtual"
 
     async def command(*_, **__):
         raise OSError("synthetic transport error")
@@ -104,12 +107,21 @@ async def test_real_operation_capture_closes_before_cancelled_event(
     original_connect = fault_runner.connect
     subscribers = set()
     expected = copy.deepcopy(trial()["action_trace"])
+    expected.append(
+        {
+            "service": "timer.started",
+            "virtual_target": "test_timer",
+            "arguments": {"seconds": 60},
+            "monotonic_ns": time.monotonic_ns(),
+        }
+    )
     record = {
         "turn_id": "turn-new",
         "device_id": "physical",
         "completed": True,
+        "response_type": "action_done",
         "recognized_transcript": "test transcript",
-        "selected_intent": trial()["evaluated_intent"],
+        "selected_intent": {"name": "HassStartTimer", "slots": {}},
         "operations": [
             {
                 "service": operation["service"],
@@ -193,7 +205,9 @@ async def test_real_operation_capture_closes_before_cancelled_event(
             stop_latency_seconds=0.1,
             stop_margin_seconds=0.02,
         )
+        assert hardware.timer_deadlines_ns, "SUCCESSFUL_TIMER_RECORD_TRACKED"
         await hardware.cancel_timers(command)
+        assert not hardware.timer_deadlines_ns
     assert row["action_trace_complete"] is True, "REAL_OPERATION_CAPTURE_COMPLETED"
     assert row["action_trace"] == expected, (
         "REAL_CANCELLED_EVENT_OUTSIDE_OPERATION_CAPTURE"
@@ -202,7 +216,7 @@ async def test_real_operation_capture_closes_before_cancelled_event(
     assert all(op["service"] != "timer.cancelled" for op in record["operations"]), (
         "REAL_CANCELLED_EVENT_OUTSIDE_AGENT_RECORD"
     )
-    assert len(cancelled_events) == 2, "REAL_CAPTURE_CANCELLED_EVENTS_EMITTED"
+    assert cancelled_events == [{"event": "cancelled", "device_id": "virtual"}] * 2
 
 
 @pytest.fixture
@@ -238,7 +252,9 @@ def timer_run(tmp_path, monkeypatch):
             return value
         state["cancels"] += 1
         timeline.append("cancel")
-        state["timer_events"].append({"event": "cancelled", "device_id": "physical"})
+        state["timer_events"].append(
+            {"event": "cancelled", "device_id": fields["device_id"]}
+        )
         operations.append({"service": "timer.cancelled"})
         if state["cancels"] in state["fail_cancels"]:
             return {"response": {"response_type": "error"}}
@@ -400,7 +416,7 @@ async def test_cancelled_timer_event_does_not_enter_operations_or_grading(timer_
     result = await timer_run["run"]()
     assert (
         timer_run["timer_events"]
-        == [{"event": "cancelled", "device_id": "physical"}] * 5
+        == [{"event": "cancelled", "device_id": "virtual"}] * 5
     ), "CANCEL_EMITS_TIMER_CANCELLED_EVENTS"
     for row in result["attempts"] + result["qualification"]["recordings"]:
         assert row["action_trace"] == trial()["action_trace"], (

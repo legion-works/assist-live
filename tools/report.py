@@ -14,9 +14,13 @@ from tools.correct_transcripts import check_digest, final_text, split_records
 from tools.correct_transcripts import validate as validate_transcripts
 from tools.device_replay import (
     DEVICE_STAGES,
+    INTERNAL_STAGE_PARTS,
     RUN_FIELDS,
     ReplayError,
     frozen_corpus,
+    internal_stage_errors,
+    operation_evidence_errors,
+    owned_internal_event,
     pre_roll_ms,
     sample_errors,
 )
@@ -166,6 +170,27 @@ def timing(row: Row, stage: str) -> Row | None:
             "quality": "estimate",
             "uncertainty_ms": row["alignment"]["uncertainty_ms"],
         }
+    if stage in INTERNAL_STAGE_PARTS:
+        event, errors = owned_internal_event(
+            row["events"], row["turn_id"], stage, row["phase"]
+        )
+        if event is not None:
+            result = dict(event)
+            if result.get("data", {}).get("decision_source") == "ha_audio_end":
+                result["quality"] = "proxy"
+            return result
+        if (
+            stage == "end_decision"
+            and row["phase"] == "p0"
+            and errors == ["MISSING_END_DECISION"]
+            and (proxy := timing(row, "stt_final")) is not None
+        ):
+            return {
+                **proxy,
+                "quality": "proxy",
+                "method": "stt_final proxy for unavailable baseline end_decision",
+            }
+        return None
     events = [
         event
         for event in row["events"]
@@ -175,29 +200,14 @@ def timing(row: Row, stage: str) -> Row | None:
     ]
     if stage in DEVICE_STAGES:
         events = [event for event in events if event["source"] == "device"]
-    if len(events) == 1:
-        result = dict(events[0])
-        if result.get("data", {}).get("decision_source") == "ha_audio_end":
-            result["quality"] = "proxy"
-        return result
-    if stage == "end_decision" and row["phase"] == "p0":
-        proxy = timing(row, "stt_final")
-        if proxy:
-            return {
-                **proxy,
-                "quality": "proxy",
-                "method": "stt_final proxy for unavailable baseline end_decision",
-            }
-    return None
+    return dict(events[0]) if len(events) == 1 else None
 
 
 def evidence_complete(row: Row) -> bool:
     return (
         isinstance(row["recognized_transcript"], str)
         and bool(row["recognized_transcript"].strip())
-        and isinstance(row["evaluated_intent"], dict)
-        and isinstance(row["action_trace"], list)
-        and row["action_trace_complete"] is True
+        and not operation_evidence_errors(row)
     )
 
 
@@ -262,6 +272,7 @@ def observation_complete(row: Row) -> bool:
         and not row.get("reset_unknown")
         and not row.get("no_device_events")
         and all(timing(row, stage) is not None for stage in DEVICE_STAGES)
+        and not internal_stage_errors(row, row["events"])
         and not any(
             event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
             for event in row["events"]
@@ -377,6 +388,7 @@ def sentence_timing(row: Row) -> list[Row] | None:
 
 def summarize(rows: list[Row]) -> Row:
     missing: Counter[str] = Counter()
+    failed = []
     for row in rows:
         for stage in DEVICE_STAGES:
             if timing(row, stage) is None:
@@ -385,6 +397,20 @@ def summarize(rows: list[Row]) -> Row:
             event["stage"] == "unmatched" or event["turn_id"] != row["turn_id"]
             for event in row["events"]
         )
+        errors = internal_stage_errors(row, row["events"])
+        for error in errors:
+            if error.startswith("MISSING_"):
+                missing[error.removeprefix("MISSING_").lower()] += 1
+        if errors or row.get("complete") is False:
+            failed.append(
+                {
+                    "clip_id": row["clip_id"],
+                    "turn_id": row["turn_id"],
+                    "reasons": list(
+                        dict.fromkeys([*(row.get("failures") or []), *errors])
+                    ),
+                }
+            )
     complete = sum(observation_complete(row) for row in rows)
     groups = {
         group: group_timings(
@@ -405,15 +431,7 @@ def summarize(rows: list[Row]) -> Row:
         "sample_count": len(rows),
         "completeness": completeness(complete, len(rows)),
         "missing_events": dict(missing),
-        "failed_turns": [
-            {
-                "clip_id": row["clip_id"],
-                "turn_id": row["turn_id"],
-                "reasons": row.get("failures", []),
-            }
-            for row in rows
-            if row.get("complete") is False
-        ],
+        "failed_turns": failed,
         "reply_groups": groups,
         "sentence_timing": {row["turn_id"]: sentence_timing(row) for row in rows},
         "unclassified_reply_count": sum(
@@ -616,7 +634,9 @@ def build_report(
     )
     gates["replay_samples"] = len(expected) >= 200
     gates["evidence_records"] = bool(primary) and all(
-        evidence_complete(row) for row in primary if observation_complete(row)
+        evidence_complete(row)
+        for row in primary
+        if phase == "p0" or observation_complete(row)
     )
     if phase == "p1":
         if (
@@ -866,6 +886,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         for gate, passed in report["gates"].items():
             print(f"{'PASS' if passed else 'FAIL'} {names.get(gate, gate)}")
+            if gate == "faults" and (reason := report["faults"].get("reason")):
+                print(f"NOTE faults reason: {reason}")
             if gate == "faults" and "qualification" in report["faults"]:
                 qualification = report["faults"]["qualification"]
                 print(

@@ -13,12 +13,14 @@ import wave
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 import aiohttp
+from assist_live_client import AssistLiveClient
+from assist_live_client.protocol import ProtocolError
 
 from tools import fault_runner as runner
 from tools.device_replay import BRIDGE_OPERATION_MAP
@@ -145,12 +147,50 @@ def fault_interval(
     return sent - last - offset, sent - offset
 
 
+def after_final_stop_in_run(row: Row) -> bool:
+    events = row.get("events")
+    if not isinstance(events, list):
+        return False
+    finals = [
+        event.get("t_utc_ns")
+        for event in events
+        if isinstance(event, dict) and event.get("stage") == "stt-end"
+    ]
+    if len(finals) != 1:
+        return False
+    final = finals[0]
+    end = row.get("device_playback_end_utc_ns")
+    if end is None:
+        end = row.get("satellite_reply_idle_utc_ns")
+    server_end = row.get("server_reply_end_utc_ns")
+    observed = row.get("final_observed_utc_ns")
+    requested = row.get("fault_requested_utc_ns")
+    stopped = row.get("fault_stopped_utc_ns")
+    return (
+        type(final) is int
+        and type(observed) is int
+        and type(requested) is int
+        and type(stopped) is int
+        and type(end) is int
+        and 0 < final <= observed <= requested <= stopped
+        and stopped < end
+        and (server_end is None or (type(server_end) is int and requested < server_end))
+    )
+
+
 def injection_status(row: Row) -> str:
+    if (
+        row.get("stage") == "after-final"
+        and row.get("after_final_bound_source") == "server_read_failed"
+    ):
+        row["hardware_invalid_reason"] = "server_read_failed"
+        return "invalid_injection"
     if row.get("hardware_invalid_reason") in {
         "no_wake",
         "early_end",
         "fault_outside_window",
         "correlation_unavailable",
+        "after_final_stop_order",
     }:
         return "invalid_injection"
     correlation = row.get("correlation")
@@ -161,6 +201,9 @@ def injection_status(row: Row) -> str:
             row["hardware_invalid_reason"] = "correlation_unavailable"
             return "invalid_injection"
         return "unavailable"
+    if row.get("stage") == "after-final" and not after_final_stop_in_run(row):
+        row["hardware_invalid_reason"] = "after_final_stop_order"
+        return "invalid_injection"
     if row.get("stage") not in ("speech", "pause"):
         return "verified"
     interval = fault_interval(
@@ -363,7 +406,57 @@ def event_ns(event: Row) -> int:
     timestamp = datetime.fromisoformat(event["timestamp"])
     if timestamp.tzinfo is None:
         raise ValueError("pipeline event lacks timezone")
-    return int(timestamp.timestamp() * 1_000_000_000)
+    elapsed = timestamp - datetime(1970, 1, 1, tzinfo=UTC)
+    return (
+        elapsed.days * 86400 + elapsed.seconds
+    ) * 1_000_000_000 + elapsed.microseconds * 1000
+
+
+async def read_reply_bounds(row: Row) -> None:
+    url = os.environ.get("ASSIST_LIVE_URL")
+    token_file = os.environ.get("ASSIST_LIVE_TOKEN_FILE")
+    if url is None and token_file is None:
+        row["after_final_bound_source"] = "turn_end_only"
+        return
+    row["after_final_bound_source"] = "server_read_failed"
+    if not url or not token_file or not isinstance(row.get("turn_id"), str):
+        return
+    try:
+        token = json.loads(Path(token_file).read_text())["token"]
+        async with asyncio.timeout(5), AssistLiveClient(url, token) as client:
+            turn = await client.turn(row["turn_id"])
+    except OSError, ValueError, ProtocolError, KeyError, TypeError, aiohttp.ClientError:
+        return
+    if not isinstance(turn, dict) or turn.get("turn_id") != row["turn_id"]:
+        return
+    events = turn.get("events")
+    if not isinstance(events, list) or any(
+        not isinstance(event, dict)
+        or event.get("turn_id") != row["turn_id"]
+        or not isinstance(event.get("source"), str)
+        or not isinstance(event.get("stage"), str)
+        or type(event.get("t_utc_ns")) is not int
+        or event["t_utc_ns"] <= 0
+        for event in events
+    ):
+        return
+    ends = [
+        e["t_utc_ns"]
+        for e in events
+        if e["source"] == "server" and e["stage"] in ("tts_end", "tts_last_byte")
+    ]
+    if ends:
+        row["server_reply_end_utc_ns"] = max(ends)
+    playback = [
+        e["t_utc_ns"]
+        for e in events
+        if e["source"] == "device" and e["stage"] == "playback_end"
+    ]
+    if len(playback) == 1:
+        row["device_playback_end_utc_ns"] = playback[0]
+    row["after_final_bound_source"] = (
+        "server_and_turn_end" if ends else "server_read_no_reply_end"
+    )
 
 
 class Hardware:
@@ -385,6 +478,8 @@ class Hardware:
         self.pipeline_name = ""
         self.delay_samples: list[float] = []
         self.timer_cancel_calls: list[Row] = []
+        self.timer_device_id = ""
+        self.timer_deadlines_ns: list[int] = []
 
     async def preflight(self, command: Command) -> None:
         registry = await command("config/entity_registry/list")
@@ -422,12 +517,17 @@ class Hardware:
         call: Row = {"canceled": None}
         self.timer_cancel_calls.append(call)
         try:
+            if not self.timer_device_id:
+                self.timer_device_id = runner.virtual_timer_device(
+                    await command("get_states")
+                )
+            active = any(end > time.monotonic_ns() for end in self.timer_deadlines_ns)
             result = await command(
                 "conversation/process",
                 text="cancel all timers",
                 language="en",
                 agent_id="conversation.home_assistant",
-                device_id=self.device_id,
+                device_id=self.timer_device_id,
             )
             response = runner.mapping(runner.mapping(result).get("response"))
             # HA 2026.10.1 and .4 intent/timers.py:988-1001 sets speech_slots.canceled.
@@ -436,8 +536,32 @@ class Hardware:
             count = runner.mapping(response.get("speech_slots")).get("canceled")
             if type(count) is int and count >= 0:
                 call["canceled"] = count
+            if active and not call["canceled"]:
+                raise ValueError("active timer recorded but no cancellation confirmed")
+            self.timer_deadlines_ns.clear()
         except Exception as error:
             raise TimerCancelError("timer_cancel_failed") from error
+
+    def observe_timer(self, record: Row) -> None:
+        if (
+            record.get("device_id") == self.device_id
+            and record.get("response_type") == "action_done"
+            and runner.mapping(record.get("selected_intent")).get("name")
+            == "HassStartTimer"
+        ):
+            for operation in record.get("operations", []):
+                if operation.get("service") not in ("timer.started", "timer.scheduled"):
+                    continue
+                stamp = operation.get("t_monotonic_ns")
+                seconds = runner.mapping(operation.get("arguments")).get("seconds")
+                if (
+                    type(stamp) is int
+                    and (type(seconds) is int or type(seconds) is float)
+                    and 0 < seconds < math.inf
+                ):
+                    self.timer_deadlines_ns.append(stamp + int(seconds * 1_000_000_000))
+                if operation.get("service") == "timer.started":
+                    break
 
     async def ready(self, command: Command) -> Row:
         deadline = time.monotonic() + 30
@@ -592,6 +716,7 @@ class Hardware:
             server,
             device_id=self.device_id,
             turn_sensor=sensor,
+            on_agent_record=self.observe_timer,
         )
 
     def calibrate(self, row: Row) -> None:
@@ -703,6 +828,7 @@ class Hardware:
                 row["recordings_before"] = sorted(files_before)
                 row["pipeline_runs_before"] = sorted(known)
                 observed_turns: set[str] = set()
+                reply_idle = asyncio.Event()
                 async with await runner.connect(session, token_file) as ws:
                     await ws.send_json({"id": 1, "type": "subscribe_events"})
                     if (await ws.receive_json()).get("success") is not True:
@@ -715,6 +841,24 @@ class Hardware:
                             data = event.get("data", {})
                             if event.get("event_type") == "assist_live_test_record":
                                 row["agent_records"].append(data)
+                                self.observe_timer(data)
+                            if (
+                                stage == "after-final"
+                                and playback is not None
+                                and event.get("event_type") == "state_changed"
+                                and data.get("entity_id") == self.satellite
+                                and (data.get("old_state") or {}).get("state")
+                                == "responding"
+                                and (data.get("new_state") or {}).get("state") == "idle"
+                                and not reply_idle.is_set()
+                            ):
+                                try:
+                                    row["satellite_reply_idle_utc_ns"] = event_ns(
+                                        {"timestamp": event["time_fired"]}
+                                    )
+                                except KeyError, TypeError, ValueError:
+                                    continue
+                                reply_idle.set()
                             if (
                                 event.get("event_type") == "state_changed"
                                 and data.get("entity_id") == sensor
@@ -874,14 +1018,21 @@ class Hardware:
                                     for event in events
                                     if event["type"] == "stt-end"
                                 ]
+                                ended = any(
+                                    event["type"] == "run-end" for event in events
+                                )
                                 if finals:
                                     row["recognized_transcript"] = finals[0]["data"][
                                         "stt_output"
                                     ]["text"]
-                                    if stage == "after-final" and injection is None:
+                                    if (
+                                        stage == "after-final"
+                                        and injection is None
+                                        and len(finals) == 1
+                                    ):
                                         row["final_observed_utc_ns"] = time.time_ns()
                                         injection = asyncio.create_task(inject())
-                                if any(event["type"] == "run-end" for event in events):
+                                if ended:
                                     ends = [
                                         event
                                         for event in events
@@ -907,6 +1058,14 @@ class Hardware:
                                     row["hardware_invalid_reason"] = "no_wake"
                                     break
                             await asyncio.sleep(0.1)
+                    if stage == "after-final" and injection is not None:
+                        try:
+                            await asyncio.wait_for(
+                                reply_idle.wait(),
+                                timeout=runner.FALLBACK_LIMIT_NS / 1e9,
+                            )
+                        except TimeoutError:
+                            pass
                     states = {
                         state["entity_id"]: state
                         for state in await command("get_states")
@@ -1044,13 +1203,15 @@ class Hardware:
                     row["fault_stopped_audio_sample"] = interval[1]
                 if stage != "qualification":
                     self.calibrate(row)
-                if (
-                    injection_status(row) == "invalid_injection"
-                    and row["hardware_invalid_reason"] is None
-                ):
-                    row["hardware_invalid_reason"] = "fault_outside_window"
             finally:
                 await server.restore()
+        if stage == "after-final":
+            await read_reply_bounds(row)
+        if (
+            injection_status(row) == "invalid_injection"
+            and row["hardware_invalid_reason"] is None
+        ):
+            row["hardware_invalid_reason"] = "fault_outside_window"
         if injection_status(row) != "verified":
             runner.complete_failure_messages(row)
         return row

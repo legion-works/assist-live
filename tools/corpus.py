@@ -338,7 +338,20 @@ def label_errors(row: Row, *, synthetic: bool = False) -> list[str]:
             errors.append("manual pause_annotation")
     elif row.get("executable_prefix") is True:
         errors.append("executable_prefix requires pause set")
-    errors.extend(interval_errors(row))
+    intervals = interval_errors(row)
+    errors.extend(intervals)
+    if row.get("set") == "pause" and not intervals and integer(rate) and rate > 0:
+        start, end = row.get("pause_start_sample"), row.get("pause_end_sample")
+        if (
+            integer(start)
+            and integer(end)
+            and row["pause_intervals_ms"][0]
+            != [
+                start * 1000 / rate,
+                end * 1000 / rate,
+            ]
+        ):
+            errors.append("pause sample boundary disagrees with first interval")
     return errors
 
 

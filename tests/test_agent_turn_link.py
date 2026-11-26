@@ -147,7 +147,8 @@ async def test_native_cancel_response_records_two_then_zero_timers(
     hass = configured_hass
     _, _, _, devices = await agent_bench(hass, monkeypatch)
     hardware = Hardware(arguments(tmp_path))
-    hardware.device_id = devices[0].id
+    hardware.device_id = devices[1].id
+    hardware.timer_device_id = devices[0].id
 
     async def command(kind, **fields):
         assert kind == "conversation/process"
@@ -158,13 +159,15 @@ async def test_native_cancel_response_records_two_then_zero_timers(
             Context(),
             language="en",
             agent_id=conversation.HOME_ASSISTANT_AGENT,
-            device_id=hardware.device_id,
+            device_id=fields["device_id"],
         )
         return result.as_dict()
 
     for minutes in (5, 10):
         result = await command(
-            "conversation/process", text=f"start a timer for {minutes} minutes"
+            "conversation/process",
+            text=f"start a timer for {minutes} minutes",
+            device_id=hardware.timer_device_id,
         )
         assert result["response"]["response_type"] == "action_done"
     await hardware.cancel_timers(command)

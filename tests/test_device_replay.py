@@ -54,6 +54,14 @@ def event(stage, offset=0, turn_id=TURN, source="device"):
 
 def sample():
     events = [event(stage, i * 1000) for i, stage in enumerate(DEVICE_STAGES)]
+    internal = [
+        event(stage, ms, source="integration")
+        for stage, ms in (
+            ("end_decision", 1500),
+            ("stt_final", 1600),
+            ("tts_first_byte", 1750),
+        )
+    ]
     return {
         "schema_version": 2,
         "mode": "acceptance",
@@ -81,7 +89,7 @@ def sample():
         "reply_text": "Done.",
         "reply_char_count": 5,
         "reply_group": "short",
-        "events": events,
+        "events": events + internal,
         **{stage: item for stage, item in zip(DEVICE_STAGES, events, strict=True)},
         "host_timing": {
             "mark_start_utc_ns": 1,
@@ -406,6 +414,25 @@ class FakeEvents:
 
 
 @pytest.mark.asyncio
+async def test_replay_transcript_does_not_use_last_final_by_position(tmp_path):
+    label, recording = bundle(tmp_path)
+    events = FakeEvents().events
+    for source, transcript in (("server", "owned text"), ("integration", "wrong text")):
+        final = event("stt_final", 1500, source=source)
+        final["data"]["transcript"] = transcript
+        events.append(final)
+    row = await replay_sample(
+        label,
+        tmp_path,
+        tmp_path / "wake.wav",
+        FakeOutput(),
+        FakeCapture(recording),
+        FakeEvents(exported=events),
+    )
+    assert row["recognized_transcript"] == "owned text", "OWNER_NOT_POSITION"
+
+
+@pytest.mark.asyncio
 async def test_runner_plays_wake_then_command_and_exports_only_timing(tmp_path):
     label, recording = bundle(tmp_path)
     output, capture, source = FakeOutput(), FakeCapture(recording), FakeEvents()
@@ -726,7 +753,15 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             ]
             transcript = event("stt_final", 1500, turn, "server")
             transcript["data"] = {"transcript": baseline["recognized_transcript"]}
-            super().__init__(items, items + [transcript])
+            super().__init__(
+                items,
+                items
+                + [
+                    event("end_decision", 1450, turn, "server"),
+                    transcript,
+                    event("tts_first_byte", 1750, turn, "server"),
+                ],
+            )
             row = copy.deepcopy(baseline)
             row["turn_id"] = turn
             records.append(recorder(row))

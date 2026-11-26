@@ -10,7 +10,7 @@ import sys
 import time
 import wave
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -204,6 +204,8 @@ def injection_status(trial: Row) -> str:
         from tools.fault_hardware import injection_status as hardware_injection_status
 
         return hardware_injection_status(trial)
+    if trial.get("scope") != "simulated":
+        return "unavailable"
     if trial.get("stage") not in ("speech", "pause"):
         return "verified"
     try:
@@ -326,6 +328,43 @@ def acceptable(trial: Row) -> bool:
         return False
 
 
+def qualification_reason(qualification: Row, trials: list[Row]) -> str | None:
+    recordings = qualification.get("recordings")
+    target, count, candidates = (
+        qualification.get(key) for key in ("target", "eligible", "candidates")
+    )
+    if (
+        qualification.get("sufficient") is not True
+        or type(target) is not int
+        or type(count) is not int
+        or type(candidates) is not int
+        or not 0 < target <= count <= candidates
+    ):
+        return "insufficient_eligible_recordings"
+    if not isinstance(recordings, list) or len(recordings) != candidates:
+        return "invalid_recording_qualification"
+    eligible = {
+        (row["clip_id"], row["source_audio_sha256"])
+        for row in recordings
+        if isinstance(row, dict)
+        and row.get("scope") == "hardware"
+        and row.get("stage") == "qualification"
+        and row.get("eligible") is True
+        and row.get("cause") is None
+        and mapping(row.get("correlation")).get("complete") is True
+        and isinstance(row.get("clip_id"), str)
+        and isinstance(row.get("source_audio_sha256"), str)
+    }
+    if len(eligible) != count:
+        return "invalid_recording_qualification"
+    if any(
+        (row.get("clip_id"), row.get("source_audio_sha256")) not in eligible
+        for row in trials
+    ):
+        return "unqualified_trial_recording"
+    return None
+
+
 def fault_gate(faults: Row) -> Row:
     slots = faults.get("trials", [])
     statuses = [(row, trial_status(row)) for row in slots]
@@ -357,11 +396,11 @@ def fault_gate(faults: Row) -> Row:
         "passed": len(slots) == len(trials) == 40
         and len({trial.get("turn_id") for trial in trials}) == 40
         and passed == 40
-        and counts == {stage: 10 for stage in STAGES}
-        and not any(trial.get("scope") == "simulated" for trial in trials),
+        and counts == {stage: 10 for stage in STAGES},
     }
     qualification = faults.get("qualification")
-    if qualification is not None:
+    if isinstance(qualification, dict):
+        records = qualification.get("recordings")
         summary["qualification"] = {
             "candidates": qualification.get("candidates", 0),
             "eligible": qualification.get("eligible", 0),
@@ -369,13 +408,25 @@ def fault_gate(faults: Row) -> Row:
             "causes": dict(
                 Counter(
                     cause
-                    for row in qualification.get("recordings", [])
-                    if (cause := row.get("cause")) is not None
+                    for row in (records if isinstance(records, list) else [])
+                    if isinstance(row, dict)
+                    and isinstance(cause := row.get("cause"), str)
                 )
             ),
         }
-        if qualification.get("sufficient") is not True:
-            summary.update(passed=False, reason="insufficient_eligible_recordings")
+    if slots and (
+        faults.get("scope") != "hardware"
+        or any(row.get("scope") != "hardware" for row in slots)
+    ):
+        summary.update(passed=False, reason="hardware_scope_required")
+    elif not isinstance(qualification, dict):
+        summary.update(passed=False, reason="missing_recording_qualification")
+    elif reason := qualification_reason(qualification, trials):
+        summary.update(passed=False, reason=reason)
+    elif any(
+        row.get("hardware_invalid_reason") == "after_final_stop_order" for row in slots
+    ):
+        summary.update(passed=False, reason="after_final_stop_order")
     if faults.get("timer_cancel_failed"):
         summary.update(passed=False, reason="timer_cancel_failed")
     if faults.get("agent_turn_link_missing"):
@@ -729,6 +780,7 @@ async def pipeline_trial(
     turn_sensor: str | None = None,
     baselines: Row | None = None,
     stt_engines: Row | None = None,
+    on_agent_record: Callable[[Row], None] | None = None,
 ) -> Row:
     row: Row = dict.fromkeys(RUN_FIELDS)
     row.update(
@@ -885,6 +937,8 @@ async def pipeline_trial(
                     event = message.get("event", {})
                     if event.get("event_type") == "assist_live_test_record":
                         row.setdefault("agent_records", []).append(event["data"])
+                        if on_agent_record is not None:
+                            on_agent_record(event["data"])
                     if message.get("id") != 3 or message.get("type") != "event":
                         if message.get("id") == 4 and message.get("type") == "result":
                             if turn_sensor and message.get("success") is True:
@@ -1118,6 +1172,7 @@ async def collect_baselines(
     *,
     device_id: str | None = None,
     turn_sensor: str | None = None,
+    on_agent_record: Callable[[Row], None] | None = None,
 ) -> Row:
     baselines: Row = {}
     for engine in ("server", "fallback"):
@@ -1145,6 +1200,7 @@ async def collect_baselines(
                     server,
                     device_id=device_id,
                     turn_sensor=turn_sensor,
+                    on_agent_record=on_agent_record,
                 )
                 record["evidence"] = row
                 if row["failures"] or transcript_engine(row) != "server":
@@ -1176,6 +1232,7 @@ async def collect_baselines(
                             "fallback-baseline",
                             server,
                             device_id=device_id,
+                            on_agent_record=on_agent_record,
                         )
                         record["evidence"] = row
                         if row["failures"]:
@@ -1197,6 +1254,18 @@ async def collect_baselines(
             record["error"] = type(error).__name__
             record["message"] = failure_message(error)
     return baselines
+
+
+def virtual_timer_device(states: list[Row]) -> str:
+    devices = [
+        mapping(state.get("attributes")).get("virtual_device_id")
+        for state in states
+        if state.get("entity_id") == "conversation.assist_live_short"
+    ]
+    device = devices[0] if len(devices) == 1 else None
+    if not isinstance(device, str) or not device:
+        raise ValueError("unique virtual timer device unavailable")
+    return device
 
 
 @asynccontextmanager
@@ -1244,11 +1313,7 @@ async def temporary_pipeline(
             if pipeline["id"] == source_id
         )
         states = await command("get_states")
-        device_id = next(
-            state["attributes"]["virtual_device_id"]
-            for state in states
-            if state["entity_id"] == "conversation.assist_live_short"
-        )
+        device_id = virtual_timer_device(states)
         registry = await command("config/entity_registry/list")
         stt_device = next(
             entity["device_id"]
@@ -1805,6 +1870,7 @@ async def run(args: argparse.Namespace) -> Row:
                         sensor,
                     ):
                         if hardware:
+                            hardware.timer_device_id = device_id
                             async with hardware.selected(
                                 fresh_command, pipeline, result
                             ):
@@ -2027,10 +2093,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         for stage, counts in summary["stages"].items():
             print(f"NOTE {stage}: " + json.dumps(counts, sort_keys=True))
+        if args.hardware and (reason := summary.get("reason")):
+            print(f"NOTE hardware fault reason: {reason}")
         return int(
             result.get("preflight_failed") is True
             or args.check
-            and (not fault_gate(result)["passed"] or bool(result.get("native_errors")))
+            and (not summary["passed"] or bool(result.get("native_errors")))
         )
     except TemporaryPipelineError as error:
         print("FAIL " + str(error))

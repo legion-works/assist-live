@@ -47,6 +47,11 @@ ACOUSTIC_METHOD = "rms-10ms-reference-fit-noise-floor-50ms"
 CAPTURE_PERIOD_SAMPLES = 160
 CAPTURE_BUFFER_SAMPLES = 320
 DEVICE_STAGES = ("wake_detected", "mic_open", "playback_start", "playback_end")
+INTERNAL_STAGE_PARTS = {
+    "end_decision": "stt",
+    "stt_final": "stt",
+    "tts_first_byte": "tts",
+}
 BRIDGE_FIELDS = (
     "turn_id",
     "turn_type",
@@ -201,6 +206,131 @@ def read_server_clock(path: Path | None, url: str) -> Row:
         raise ReplayError("INVALID_SERVER_CLOCK") from None
 
 
+def turn_events(events: list[Row], turn_id: str | None) -> list[Row]:
+    return [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("turn_id") == turn_id
+        and not event.get("test_only")
+    ]
+
+
+def fallback_markers(events: list[Row], part: str) -> list[Row]:
+    return [
+        event
+        for event in events
+        if (
+            event.get("stage") == "fallback_used"
+            and event.get("source") == "integration"
+            and isinstance(event.get("data"), dict)
+            and event["data"].get("part") == part
+        )
+    ]
+
+
+def owned_internal_event(
+    events: list[Row], turn_id: str | None, stage: str, phase: str | None
+) -> tuple[Row | None, list[str]]:
+    events = turn_events(events, turn_id)
+    fallback = fallback_markers(events, INTERNAL_STAGE_PARTS[stage])
+    owner = "integration" if phase == "p0" or fallback else "server"
+    candidates = [event for event in events if event.get("stage") == stage]
+    owned = [event for event in candidates if event.get("source") == owner]
+    suffix = stage.upper()
+    errors = []
+    if not candidates:
+        errors.append("MISSING_" + suffix)
+    if len(owned) > 1:
+        errors.append("DUPLICATE_" + suffix)
+    prior = []
+    if (
+        phase != "p0"
+        and len(fallback) == 1
+        and stage in ("end_decision", "tts_first_byte")
+    ):
+        stamp = fallback[0].get("t_utc_ns")
+        if type(stamp) is int:
+            prior = [
+                e
+                for e in candidates
+                if e.get("source") == "server"
+                and type(e.get("t_utc_ns")) is int
+                and e["t_utc_ns"] < stamp
+            ]
+    if len(prior) > 1 and "DUPLICATE_" + suffix not in errors:
+        errors.append("DUPLICATE_" + suffix)
+    if len(candidates) != len(owned) + len(prior):
+        errors.append("WRONG_OWNER_" + suffix)
+    if fallback and len(owned) == 1:
+        stamp, handover = owned[0].get("t_utc_ns"), fallback[0].get("t_utc_ns")
+        data = owned[0].get("data")
+        if (
+            len(fallback) != 1
+            or type(stamp) is not int
+            or type(handover) is not int
+            or stamp < handover
+            or (
+                phase != "p0"
+                and stage == "stt_final"
+                and (not isinstance(data, dict) or not text(data.get("transcript")))
+            )
+        ):
+            errors.append("INVALID_HANDOVER_" + suffix)
+    if prior and not owned:
+        errors.append("MISSING_" + suffix)
+    chosen = prior if stage == "tts_first_byte" and prior else owned
+    return (chosen[0] if len(chosen) == 1 else None), errors
+
+
+def internal_stage_errors(row: Row, events: list[Row]) -> list[str]:
+    if row.get("turn_type", "voice") != "voice" or row.get("pipeline") == "native":
+        return []
+    events = turn_events(events, row.get("turn_id"))
+    stages = ["end_decision", "stt_final"]
+    if fallback_markers(events, "tts") or any(
+        e.get("stage") == "tts_first_byte"
+        or (e.get("stage") == "tts_text_received" and e.get("source") == "server")
+        for e in events
+    ):
+        stages.append("tts_first_byte")
+    return [
+        error
+        for stage in stages
+        for error in owned_internal_event(
+            events, row.get("turn_id"), stage, row.get("phase")
+        )[1]
+    ]
+
+
+def operation_evidence_errors(row: Row) -> list[str]:
+    errors = []
+    intent = row.get("evaluated_intent")
+    if (
+        not isinstance(intent, dict)
+        or not text(intent.get("name"))
+        or not isinstance(intent.get("slots"), dict)
+    ):
+        errors.append("MISSING_INTENT")
+    if row.get("action_trace_complete") is not True:
+        errors.append("INCOMPLETE_OPERATION_LOG")
+    actions = row.get("action_trace")
+    if not isinstance(actions, list):
+        errors.append("MISSING_OPERATION_LOG")
+    else:
+        for action in actions:
+            if (
+                not isinstance(action, dict)
+                or not text(action.get("service"))
+                or not text(action.get("virtual_target"))
+                or not isinstance(action.get("arguments"), dict)
+                or not finite(action.get("monotonic_ns"))
+                or action["monotonic_ns"] < 0
+            ):
+                errors.append("INVALID_OPERATION")
+    return errors
+
+
 def sample_errors(
     row: Row, *, acceptance: bool = True, allow_incomplete: bool = False
 ) -> list[str]:
@@ -274,29 +404,7 @@ def sample_errors(
                 except TypeError, ValueError, AttributeError:
                     errors.append("INVALID_EVENT")
         return errors
-    intent = row.get("evaluated_intent")
-    if (
-        not isinstance(intent, dict)
-        or not text(intent.get("name"))
-        or not isinstance(intent.get("slots"), dict)
-    ):
-        errors.append("MISSING_INTENT")
-    if row.get("action_trace_complete") is not True:
-        errors.append("INCOMPLETE_OPERATION_LOG")
-    actions = row.get("action_trace")
-    if not isinstance(actions, list):
-        errors.append("MISSING_OPERATION_LOG")
-    else:
-        for action in actions:
-            if (
-                not isinstance(action, dict)
-                or not text(action.get("service"))
-                or not text(action.get("virtual_target"))
-                or not isinstance(action.get("arguments"), dict)
-                or not finite(action.get("monotonic_ns"))
-                or action["monotonic_ns"] < 0
-            ):
-                errors.append("INVALID_OPERATION")
+    errors.extend(operation_evidence_errors(row))
     reply = row.get("reply_text")
     if (
         not isinstance(reply, str)
@@ -346,6 +454,8 @@ def sample_errors(
             device_times.append(found[0]["t_utc_ns"])
     if len(device_times) == len(DEVICE_STAGES) and device_times != sorted(device_times):
         errors.append("DEVICE_EVENT_ORDER")
+    if not allow_incomplete:
+        errors.extend(internal_stage_errors(row, valid_events))
     host = row.get("host_timing")
     if not isinstance(host, dict) or any(
         not finite(host.get(key))
@@ -756,6 +866,7 @@ async def replay_sample(
     output: AudioOutput,
     capture: AudioCapture,
     source: DeviceEvents,
+    phase: str = "p1",
 ) -> Row:
     audio_errors = check_audio([label], audio_root)
     if audio_errors:
@@ -817,14 +928,8 @@ async def replay_sample(
         if stored.get("turn_type") != "voice" or stored.get("turn_id") != turn_id:
             raise ReplayError("UNMATCHED_TURN")
         events = exported
-        transcript_events = [
-            event for event in events if event.get("stage") == "stt_final"
-        ]
-        transcript = (
-            transcript_events[-1].get("data", {}).get("transcript")
-            if transcript_events
-            else None
-        )
+        final, _ = owned_internal_event(events, turn_id, "stt_final", phase)
+        transcript = final.get("data", {}).get("transcript") if final else None
         return {
             "turn_id": turn_id,
             "events": events,
@@ -1093,6 +1198,7 @@ async def run(
                         ClientEvents(
                             client, os.environ["ASSIST_LIVE_SATELLITE"], clock
                         ),
+                        args.phase,
                     )
                     row.update(sample)
                     if row["turn_id"] is not None and any(
@@ -1135,6 +1241,8 @@ async def run(
                 if isinstance(error, ReplayError)
                 else "INVALID_OPERATION_EVIDENCE"
             )
+        if row["failures"] and row["turn_id"] is not None:
+            row["failures"].extend(internal_stage_errors(row, row["events"]))
         row["complete"] = not row["failures"]
         errors = sample_errors(row, acceptance=args.limit is None)
         if errors and row["complete"]:

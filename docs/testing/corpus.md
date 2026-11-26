@@ -70,6 +70,9 @@ These fields are also necessary for pause rows:
 The pause starts at or after sample 0.
 Its end follows its start.
 The pause time is `(pause_end_sample - pause_start_sample) / sample_rate`.
+The sample pair must agree with the first `pause_intervals_ms` pair.
+For each endpoint, multiply the sample index by 1000 and divide by `sample_rate`.
+The freeze check rejects a difference at the start or end, also when the difference is less than one sample.
 
 It must be 400 to 800 ms, with the two limits included.
 A person must mark the two pause boundaries and the last voice sample.
