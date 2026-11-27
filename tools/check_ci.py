@@ -38,7 +38,7 @@ RELEASE_DEFAULT_BRANCH = (
 HA_MATRIX = [
     {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
     {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
-    {"ha": "2026.11.2", "plugin": "0.13.375", "member": "compatibility"},
+    {"ha": "2026.11.3", "plugin": "0.13.375", "member": "compatibility"},
 ]
 HA_COMPONENT_REQUIREMENTS = [
     "gazetteer-matcher==1.1.0",
@@ -90,7 +90,7 @@ def ha_2026_11_commands(client_requirement: str) -> list[list[str]]:
             python,
             "--override",
             "tests/ha-2026-11-override.txt",
-            "homeassistant==2026.11.2",
+            "homeassistant==2026.11.3",
             "pytest-homeassistant-custom-component==0.13.375",
             "PyYAML==6.0.3",
             *requirements,
@@ -265,7 +265,7 @@ def check_jobs(path: str | Path) -> set[str]:
     required.extend(["pytest", "tests/", "-q"])
     compatibility_commands = ha_2026_11_commands(client_requirement)
     expected_lines = [
-        shlex.split('if [ "$HA_VERSION" = "2026.11.2" ]; then'),
+        shlex.split('if [ "$HA_VERSION" = "2026.11.3" ]; then'),
         *compatibility_commands,
         ["else"],
         required,
@@ -283,11 +283,11 @@ def check_jobs(path: str | Path) -> set[str]:
         shlex.split(cmd)
         for cmd in taskfile["tasks"].get("ha-2026-11", {}).get("cmds", [])
     ] != compatibility_commands:
-        failures.append("HA 2026.11.2 Taskfile.yml")
+        failures.append("HA 2026.11.3 Taskfile.yml")
     if (
         root / "tests/ha-2026-11-override.txt"
-    ).read_text() != "homeassistant==2026.11.2\n":
-        failures.append("HA 2026.11.2 override")
+    ).read_text() != "homeassistant==2026.11.3\n":
+        failures.append("HA 2026.11.3 override")
     current_task = taskfile["tasks"]["check"]
     if not any(
         isinstance(command, dict) and command.get("task") == "records-check"

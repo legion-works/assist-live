@@ -17,7 +17,7 @@ These are design goals, not compatibility or performance claims.
 
 Use Python `3.14.2` or a subsequent version and `uv`.
 Install FFmpeg and make sure that `ffmpeg` is on `PATH` for the local tests.
-The test matrix uses HA `2026.10.1` (minimum), `2026.10.4`, and `2026.11.2`.
+The test matrix uses HA `2026.10.1` (minimum), `2026.10.4`, and `2026.11.3`.
 The locked development environment uses HA `2026.10.4`.
 Run these commands from the repository root:
 

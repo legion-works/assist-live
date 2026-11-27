@@ -155,11 +155,12 @@ async def test_ha_tts_stream_conversion_keeps_streaming_wav_pcm(
                 )
         with wave.open(io.BytesIO(b"".join(emitted)), "rb") as source:
             assert source.readframes(len(mono_pcm) // 2 + 1) == mono_pcm
-        if version("homeassistant") == "2026.11.2" and channels == 1:
+        has_wav_fast_path = version("homeassistant") in ("2026.11.2", "2026.11.3")
+        if has_wav_fast_path and channels == 1:
             assert ffmpeg_commands == [], "HA_WAV_FAST_PATH_NOT_USED"
         else:
             assert len(ffmpeg_commands) == 1, "HA_WAV_FFMPEG_NOT_USED"
-        if version("homeassistant") == "2026.11.2" and channels == 2:
+        if has_wav_fast_path and channels == 2:
             command = ffmpeg_commands[0]
             assert command[1 : command.index("-i") + 2] == (
                 "-hide_banner",

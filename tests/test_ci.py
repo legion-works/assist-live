@@ -90,14 +90,14 @@ def test_ci_current_member_versions():
     assert HA_MATRIX == [
         {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
         {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
-        {"ha": "2026.11.2", "plugin": "0.13.375", "member": "compatibility"},
+        {"ha": "2026.11.3", "plugin": "0.13.375", "member": "compatibility"},
     ]
 
 
 def test_ha_2026_11_target_uses_override_and_early_pytest_bootstrap():
     taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
     commands = taskfile["tasks"].get("ha-2026-11", {}).get("cmds", [])
-    assert len(commands) == 3, "HA 2026.11.2 isolated target missing"
+    assert len(commands) == 3, "HA 2026.11.3 isolated target missing"
     args = [shlex.split(command) for command in commands]
     assert args[0] == [
         "uv",
@@ -115,7 +115,7 @@ def test_ha_2026_11_target_uses_override_and_early_pytest_bootstrap():
         ".venv-ha-2026-11/bin/python",
     ]
     assert args[1][5:7] == ["--override", "tests/ha-2026-11-override.txt"]
-    assert "homeassistant==2026.11.2" in args[1]
+    assert "homeassistant==2026.11.3" in args[1]
     assert "pytest-homeassistant-custom-component==0.13.375" in args[1]
     assert "home-assistant-intents==2026.10.27" in args[1]
     assert args[2] == [
@@ -134,7 +134,7 @@ def test_completion_requires_ha_2026_11_output():
 
     needs = {job: {"result": "success"} for job in REQUIRED_JOBS - {"ci-complete"}}
     needs["ha"]["outputs"] = {"minimum": "success", "current": "success"}
-    assert not results_pass(needs), "HA 2026.11.2 result is mandatory"
+    assert not results_pass(needs), "HA 2026.11.3 result is mandatory"
     needs["ha"]["outputs"]["compatibility"] = "success"
     assert results_pass(needs)
 
@@ -149,8 +149,8 @@ def test_completion_requires_ha_2026_11_output():
         ("ha-env", "HA version environment"),
         ("plugin-env", "HA version environment"),
         ("output", "HA member outputs"),
-        ("local-command", "HA 2026.11.2 Taskfile.yml"),
-        ("override-file", "HA 2026.11.2 override"),
+        ("local-command", "HA 2026.11.3 Taskfile.yml"),
+        ("override-file", "HA 2026.11.3 override"),
     ],
 )
 def test_ci_rejects_weakened_ha_2026_11_member(
@@ -205,7 +205,7 @@ def test_ci_rejects_weakened_ha_2026_11_member(
         target.write_text(yaml.safe_dump(taskfile))
     else:
         (tmp_path / "tests/ha-2026-11-override.txt").write_text(
-            "homeassistant==2026.10.4\n"
+            "homeassistant==2026.11.2\n"
         )
     path.write_text(yaml.safe_dump(workflow))
     with pytest.raises(ValueError, match=failure):
@@ -524,7 +524,7 @@ def test_ci_commands_match_taskfile():
                 and step_key == "Test all contracts on the exact HA version"
             ):
                 lines = [line.strip() for line in run.splitlines() if line.strip()]
-                assert lines[0] == 'if [ "$HA_VERSION" = "2026.11.2" ]; then'
+                assert lines[0] == 'if [ "$HA_VERSION" = "2026.11.3" ]; then'
                 assert [shlex.split(line) for line in lines[1:4]] == [
                     shlex.split(command)
                     for command in taskfile["tasks"]["ha-2026-11"]["cmds"]

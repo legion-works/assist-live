@@ -12,7 +12,7 @@ Do not add personal data, secrets, or household recordings.
 Use Python `3.14.2` or a subsequent version and `uv`.
 Install FFmpeg and make sure that `ffmpeg` is on `PATH` before tests.
 The TTS conversion test uses HA's FFmpeg path and gives a failure if the executable is missing.
-The locked environment uses HA `2026.10.4`. CI also tests HA `2026.10.1` and `2026.11.2`.
+The locked environment uses HA `2026.10.4`. CI also tests HA `2026.10.1` and `2026.11.3`.
 Run these commands from the repository root:
 
 ```sh

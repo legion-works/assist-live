@@ -4858,3 +4858,24 @@ Each of the 16 integration modules was above 95 %.
 The full test run gave `21 failed, 2296 passed, 1 skipped`.
 Each failure was in a check for which Gitleaks or a Git worktree is necessary.
 The test environment did not have those items.
+
+## HA 2026.11.3 test target (2026-11-27 UTC)
+
+The `ha-2026-11` target uses HA `2026.11.3` and test plugin `0.13.375`.
+The other matrix versions stay at `2026.10.1` and `2026.10.4`.
+The voice component interfaces and the private functions that the integration uses did not change.
+The logger helper alias is necessary for the test plugin.
+The TTS conversion test checks that HA does not start FFmpeg for the compatible mono WAV stream.
+It also checks that HA sends raw PCM to FFmpeg for stereo conversion.
+
+| Check | Result |
+|---|---|
+| HA 2026.11.2 suite before the target change | `21 failed, 2279 passed` |
+| HA 2026.11.3 suite with the target change | `21 failed, 2279 passed` |
+| HA 2026.11.3 preferred pipeline and TTS conversion tests | `5 passed` |
+| CI guard tests | `96 passed` |
+
+The suite runner had no Gitleaks or repository Git metadata.
+This caused the same 21 failures in the two suite runs.
+Three checks found failures before the change: the `2026.11.2` pin, the missing logger alias, and an incorrect mono test result.
+The checks found the same faults in copies with the `2026.11.2` override, an incorrect alias name, or a mono condition for `2026.11.2` only.
