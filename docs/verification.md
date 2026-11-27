@@ -4879,3 +4879,23 @@ The suite runner had no Gitleaks or repository Git metadata.
 This caused the same 21 failures in the two suite runs.
 Three checks found failures before the change: the `2026.11.2` pin, the missing logger alias, and an incorrect mono test result.
 The checks found the same faults in copies with the `2026.11.2` override, an incorrect alias name, or a mono condition for `2026.11.2` only.
+
+## Satellite state timing events (2026-11-27 UTC)
+
+The HA state listener sends timing events only for values in `AssistSatelliteState`.
+With an open turn, `unavailable` and `unknown` do not cause a callback error or a timing event.
+The turn record does not get a `satellite_state` entry for these states.
+The contract test checks that `assist-live-client==0.1.0a2` accepts each value in the HA enum.
+
+| Check | Result |
+|---|---|
+| Listener and client contract tests before the change | `2 failed, 4 passed` |
+| `uv run --locked pytest tests/test_runtime_reload.py tests/test_receipt_contract.py -q` | `87 passed` |
+| Listener tests without the state filter | `2 failed` |
+| HA `2026.10.1` suite | `21 failed, 2303 passed, 1 skipped` |
+| HA `2026.10.4` suite | `21 failed, 2303 passed, 1 skipped` |
+| HA `2026.11.3` suite | `21 failed, 2304 passed` |
+
+Before the change and without the filter, the two listener tests found `ValueError: invalid event data` in the HA callback log.
+The three suites had the same 21 failures in the archive and public-tree checks.
+The suite runner had no Gitleaks or repository Git metadata.

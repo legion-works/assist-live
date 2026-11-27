@@ -48,6 +48,13 @@ HA developer documentation also gives two public entity-interface types that the
 
 Contract tests pin their import paths and the fields that assist-live uses on each HA version in CI.
 
+The satellite state listener imports `AssistSatelliteState` from `homeassistant.components.assist_satellite.entity`.
+The definition is at [`entity.py:40`](https://github.com/home-assistant/core/blob/2026.11.3/homeassistant/components/assist_satellite/entity.py#L40).
+HA 2026.10.1, 2026.10.4, and 2026.11.3 do not export it in `assist_satellite.__all__`.
+The four values are the same in each of these versions.
+The listener sends a satellite state to the server only if the state is one of these values.
+The contract test [`tests/test_receipt_contract.py`](../tests/test_receipt_contract.py) checks that the pinned client accepts each value.
+
 ## Repositories and release boundary
 
 | Repository | Content | License |

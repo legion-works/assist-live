@@ -11,6 +11,7 @@ from assist_live_client.models import (
     TTSFormat,
 )
 from assist_live_client.protocol import ProtocolError
+from homeassistant.components.assist_satellite.entity import AssistSatelliteState
 from homeassistant.components.tts import TTSAudioRequest
 from test_stt_forward import Fallback as STTFallback
 from test_stt_forward import audio, metadata
@@ -18,6 +19,22 @@ from test_stt_forward import entity as stt_entity
 from test_tts_forward import Fallback as TTSFallback
 from test_tts_forward import entity as tts_entity
 from test_tts_forward import text
+
+
+@pytest.mark.parametrize("state", list(AssistSatelliteState))
+def test_client_accepts_each_assist_satellite_state(ledger, state):
+    turn = ledger.open_voice("satellite-a")
+    event = TimingEvent(
+        turn.turn_id,
+        turn.satellite,
+        "ha_state",
+        "satellite_state",
+        0,
+        "proxy",
+        None,
+        data={"state": state.value},
+    )
+    assert event.data == {"state": state.value}
 
 
 @pytest.mark.parametrize(

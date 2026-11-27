@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
@@ -90,7 +91,6 @@ async def test_latency_sensor_reports_server_outage_but_speech_fallbacks_stay_av
     runtime_entry, client
 ):
     from assist_live_client.models import HealthCapabilities
-    from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
     hass, entry, _, old_ids = runtime_entry
     await hass.async_block_till_done()
@@ -172,6 +172,22 @@ async def test_satellite_state_updates_only_its_own_turn(runtime_entry):
     hass.states.async_remove("assist_satellite.synthetic_voice")
     await hass.async_block_till_done()
     assert "satellite_state" not in runtime.ledger.latest["satellite-a"].stages
+
+
+@pytest.mark.parametrize("state", [STATE_UNAVAILABLE, STATE_UNKNOWN])
+async def test_satellite_listener_ignores_non_protocol_states(
+    runtime_entry, caplog, state
+):
+    hass, entry, _, _ = runtime_entry
+    ledger = entry.runtime_data.ledger
+    turn = ledger.open_voice("satellite-a")
+
+    hass.states.async_set("assist_satellite.synthetic_voice", state)
+    await hass.async_block_till_done()
+
+    assert not [record.exc_info for record in caplog.records if record.exc_info]
+    assert "satellite_state" not in ledger.records[turn.turn_id].stages
+    assert not any(event.stage == "satellite_state" for event in ledger._pending)
 
 
 async def test_setup_removes_empty_legacy_devices(runtime_entry):

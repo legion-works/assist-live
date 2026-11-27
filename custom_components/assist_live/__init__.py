@@ -11,6 +11,7 @@ from assist_live_client import AssistLiveClient
 from assist_live_client.models import HealthCapabilities, TimingEvent
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import assist_pipeline
+from homeassistant.components.assist_satellite.entity import AssistSatelliteState
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import (
@@ -207,7 +208,12 @@ class Runtime:
         def state_changed(event: Event[EventStateChangedData]) -> None:
             entity = registry.async_get(event.data["entity_id"])
             state = event.data.get("new_state")
-            if entity and state and entity.device_id in self.entry.data["satellites"]:
+            if (
+                entity
+                and state
+                and state.state in AssistSatelliteState
+                and entity.device_id in self.entry.data["satellites"]
+            ):
                 satellite = self.entry.data["satellites"][entity.device_id]
                 self.ledger.satellite_state(satellite, state.state)
                 self.ledger.schedule_events()
