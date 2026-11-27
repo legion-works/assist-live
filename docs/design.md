@@ -82,6 +82,13 @@ The config flow selects the server, token, satellites, and fallback entities.
 After setup, the options flow can change the fallback entities and the fallback voice, with the same checks as the config flow.
 If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
 
+The server gives HTTP 401 for an incorrect token.
+From client `0.1.0a3`, that result is `ProtocolError(kind="unauthorized")`, and other refusals stay `refused`.
+If setup or a subsequent server request gets `unauthorized`, the integration starts the HA reauthentication flow and continues, so that the fallback engines answer turns.
+The reauthentication flow gets a new token for the same server URL and reads the bindings with it.
+Then it stores the token and reloads the entry.
+The config flow shows `invalid_auth` for an incorrect token.
+
 HA can set up the fallback engines after assist-live, and an engine can go out of service when its integration reloads.
 Thus the fallback engines are not necessary for the setup of assist-live.
 The entities keep the entity ID of each fallback engine and find the engine each time that they use it.
