@@ -110,8 +110,8 @@ The text-only run does not invent an assist-live turn identifier.
 For device replay, the agent reads loaded `assist_live` config entries.
 The entry's `satellites` mapping must connect the input device ID to a satellite key.
 In that entry's entity registry rows, the agent selects platform `assist_live`, domain `sensor`, and unique ID `<satellite>_last_turn_latency`.
-HA 2026.10 gives each config entry its own device. These devices can share a MAC connection.
-Thus a lookup of sensors on the input device cannot find the assist-live sensor.
+The sensor is on the device of its satellite, but the agent does not use a device lookup.
+The entry and the unique ID identify the sensor also when two satellites share one entry.
 
 The sensor shows `turn_id` and `turn_type` when the turn opens.
 The agent connects that voice turn to the conversation context ID and device ID.

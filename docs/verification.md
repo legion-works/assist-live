@@ -4718,3 +4718,16 @@ The [timing design](design.md#background-timing-events) gives the counts for rem
 | CI, corpus, ledger, and public tree tests | Exit 0, `216 passed` |
 | Branch check with a short ref name | Exit 1, `1 failed` |
 | `task check` | Exit 0, `2205 passed, 1 skipped` |
+
+## Landing of the release, `annotate_corpus`, and turn retry checks (2026-11-27 UTC)
+
+The record above has no date. Its checks ran on 2026-11-26 and 2026-11-27 UTC.
+The landing gates for commit `82ab94f` gave these results:
+
+| Check | Result |
+|---|---|
+| `task check` | Exit 0, `2205 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2205 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2206 passed` |
+
+The changelog and the [virtual intents procedure](testing/virtual-intents.md#device-operation-bridge) give the entity names and the sensor lookup after the change to satellite devices.

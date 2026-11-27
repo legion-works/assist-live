@@ -24,10 +24,11 @@
 
 - The config flow stops a second entry with the same server URL and token. The check ignores the case of the scheme and host, a trailing slash, and a default port. It also stops a second flow that started before the first flow made its entry. Different tokens on one server stay different entries.
 - Diagnostics of an entry that is not loaded give the entry state with redacted data, not an error.
-- Entity names are in the context of the satellite device. The entity IDs in the registry do not change. The displayed names change:
-  - STT: `assist-live <key>` becomes `<device name> assist-live STT`.
-  - TTS: `assist-live <key>` becomes `<device name> assist-live TTS`.
-  - Latency sensor: `assist-live <key> last turn latency` becomes `<device name> assist-live last turn latency`.
+- The STT, TTS, and latency sensor entities attach to the device of their satellite. The entity IDs in the registry do not change. The displayed names change:
+  - STT: `assist-live <key>` becomes `<satellite device name> STT`.
+  - TTS: `assist-live <key>` becomes `<satellite device name> TTS`.
+  - Latency sensor: `assist-live <key> last turn latency` becomes `<satellite device name> Last turn latency`.
+- Setup removes an assist-live device that has no entities and no satellite connection. The satellite's own device does not change.
 
 ### Corrections
 
@@ -38,5 +39,7 @@
 - Refresh STT name hints after changes to device names, areas, or parent devices, and after server restarts.
 - Refuse WebSocket redirects in the pipeline probe and send credentials only to the checked address.
 - Refuse redirects in the test tools that send credentials to the isolated HA instance.
+- Keep the entry loadable when the integration cannot write the turn store as HA stops the entry. The turn state stays in memory until the next good write. An HA restart clears it.
+- Do not open an older pending turn again after a newer turn of the same satellite opened.
 
 No release is available. Version `0.0.0` is a metadata placeholder.
