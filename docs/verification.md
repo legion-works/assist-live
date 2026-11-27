@@ -4804,3 +4804,18 @@ A read-only drift review of the open changes asked for these documentation corre
 - The `server_unhealthy` fallback cause names a timing-store fault.
 - The turn records name the HA clock rule for late turn opens.
 - The `dependency-transparency` evidence: on 2026-11-27, `git ls-remote --tags origin 'client-v*'` in assist-live-server showed the annotated tags `client-v0.1.0a1` at `f3c1341` and `client-v0.1.0a2` at `477a594` on the public remote. The client publish workflow published those versions from those commits.
+
+## P1 pause replay checks (2026-11-27 UTC)
+
+The base `c8eab3b` did not replay the held-out pause rows.
+The replay and report tests gave 269 satisfactory results with HA 2026.10.4.
+The new test uses synthetic recordings and test events for `safe` and `fast`.
+
+The first implementation did not count cuts in the margin for the time to receive audio and for `alignment` uncertainty.
+The revised test checks cuts in the margin, a decision at its end, and a decision after the remaining words.
+It also checks a missing decision time and a missing estimate of the time to receive audio.
+The report counts two cuts and two missing observations in six pause trials.
+The test gives an unsatisfactory result if the runner does not subtract the `alignment` uncertainty.
+
+Volunteer pause recordings are necessary for P1 acceptance.
+These tests do not show hardware acceptance.

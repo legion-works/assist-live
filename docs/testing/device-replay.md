@@ -130,6 +130,8 @@ Acceptance validation refuses them.
 A frozen corpus manifest that agrees with the corpus records and each recording hash is necessary for acceptance.
 The current corpus is not frozen.
 The tool refuses acceptance with `BLOCKED corpus not frozen` until corpus collection and voice-boundary checks are complete.
+Volunteer pause recordings are necessary for P1 acceptance.
+
 These commands use hardware.
 Set `HA_URL`, `HA_TOKEN_FILE`, `INTEGRATION_ENTRY`, and `DEVICE_LOSS_ENTITY` for the same device and HA instance.
 See [counter sources](measurement-rules.md#missing-events).
@@ -149,8 +151,27 @@ Tests use a fake selector for the two settings.
 Run schema version 2 includes the recording hash, partition, phase, `profile`, turn, run, and immutable baseline configuration identifier.
 It includes `recognized_transcript`, `evaluated_intent`, `action_trace`, `action_trace_complete`, reply text, character count, and reply group.
 Short replies have at most 60 characters.
-Each P1 row connects to one P0 acceptance row with the same recording hash, partition, and configuration identifier.
+Each P1 `replay` row connects to one P0 acceptance row with the same recording hash, partition, and configuration identifier.
 The P1 row keeps that P0 transcript as `baseline_transcript`.
+
+For `safe` and `fast`, the runner uses the held-out `replay` and `pause` rows.
+A P0 transcript is not necessary for a pause row.
+
+The runner uses the server clock time of `end_decision`, not the audio stream position.
+It calculates an interval from the first voice in the capture to the server `speech_start`.
+This interval is not only the time to receive audio. It also includes the command-start check: 250 ms of voice and one 32 ms detector frame. If the voice starts in the first 400 ms of the turn, it also includes the time to the end of the start guard.
+
+The runner subtracts the `alignment` uncertainty from the decision time and adds the interval to the last pause end.
+If the adjusted decision time is before the adjusted pause end, it writes `pause_cut: true`. At or after that end, it writes `pause_cut: false`.
+
+This rule is correct only if the time to receive audio at the end decision is not more than this interval.
+The audio queue can become longer after the command start.
+If the increase is more than the command-start check, the runner can write `pause_cut: false` for a turn that ended in the pause.
+
+If the runner cannot compare the times, it writes `complete: false` without `pause_cut`.
+It gives `MISSING_PAUSE_MAPPING` or `MISSING_PAUSE_DELAY_ESTIMATE`.
+With the audio stream position in `end_decision`, the runner can compare positions without a clock estimate.
+The server must record that position before the first P1 run with volunteer pause recordings.
 
 Rows keep the device and host times, event quality, event uncertainty, calibration revision, and external microphone `alignment`.
 Device wake, microphone-open, playback-start, and playback-end records are mandatory.

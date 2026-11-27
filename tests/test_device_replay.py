@@ -375,9 +375,21 @@ def test_alignment_refusal(case, error):
         align_capture(Capture(mic, rate, 0, 1), reference, boundary)
 
 
-def bundle(tmp_path):
-    reference, mic = signals()
-    path = tmp_path / "command.wav"
+def bundle(tmp_path, *, pause=False):
+    if pause:
+        quiet = [0.0] * 6400
+        reference = (
+            [0.0] * 800
+            + tone(1600, 0.4)
+            + quiet
+            + tone(1600, 0.15)
+            + quiet
+            + tone(1600, 0.25)
+        )
+        mic = [0.0] * 1600 + reference + [0.0] * 3200 + tone(3200, 0.3) + quiet
+    else:
+        reference, mic = signals()
+    path = tmp_path / ("pause.wav" if pause else "command.wav")
     with wave.open(str(path), "wb") as wav:
         wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
         wav.writeframes(
@@ -385,15 +397,17 @@ def bundle(tmp_path):
         )
     label = {
         "id": "clip-01",
-        "set": "replay",
+        "set": "pause" if pause else "replay",
         "split": "held_out",
         "audio_path": path.name,
         "audio_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "sample_rate": 16000,
-        "last_voice_sample": 7999,
+        "last_voice_sample": len(reference) - 1 if pause else 7999,
         "intent": {"name": "HassTurnOn", "slots": {"name": "virtual light"}},
     }
-    return label, Capture(mic, 16000, 10_000_000_000, 4)
+    if pause:
+        label["pause_intervals_ms"] = [[150, 550], [650, 1050]]
+    return label, Capture(mic, 16000, 11_100_000_000 if pause else 10_000_000_000, 4)
 
 
 class FakeOutput:
@@ -739,12 +753,48 @@ async def test_real_profile_selector_is_explicitly_unavailable():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_pauses", [False, True], ids=["smoke", "pause-report"])
 async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, include_pauses
 ):
-    label, _ = bundle(tmp_path)
+    from tools.report import build_report
+
+    label, replay_capture = bundle(tmp_path)
+    corpus = [label]
+    captures = [replay_capture]
+    decisions = [11_450_000_000]
+    if include_pauses:
+        pause, pause_capture = bundle(tmp_path, pause=True)
+        for name, elapsed_ms in (
+            ("cut", 1130),
+            ("uncertain", 1180),
+            ("boundary", 1181),
+            ("after", 1450),
+            ("missing", None),
+            ("no-delay", 1450),
+        ):
+            corpus.append(
+                {
+                    **pause,
+                    "id": name,
+                    "executable_prefix": True,
+                    "executable_prefix_intervals_ms": [[50, 150]],
+                }
+            )
+            captures.append(pause_capture)
+            decisions.append(
+                11_450_000_000 + elapsed_ms * 1_000_000 if elapsed_ms else None
+            )
+        corpus.append({**pause, "id": "tuning-pause", "split": "tuning"})
     labels = tmp_path / "labels.jsonl"
-    labels.write_text(json.dumps(label) + "\n")
+    labels.write_text("".join(json.dumps(item) + "\n" for item in corpus))
+    if include_pauses:
+        manifest = {item["audio_path"]: item["audio_sha256"] for item in corpus}
+        (tmp_path / "corpus.sha256").write_text(
+            hashlib.sha256(labels.read_bytes()).hexdigest()
+            + "  labels\n"
+            + "".join(f"{digest}  audio/{path}\n" for path, digest in manifest.items())
+        )
     records_path = tmp_path / "operations.jsonl"
     baseline = sample()
     baseline.update(clip_id=label["id"], audio_sha256=label["audio_sha256"])
@@ -753,7 +803,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     token = tmp_path / "token.json"
     token.write_text(json.dumps({"token": "test-only"}))
     clock_record = tmp_path / "clock.json"
-    clock_record.write_text(json.dumps({"kind": "same_host"}))
+    clock_record.write_text(json.dumps(measured_clock(250_000_000, 7)))
     for key, value in {
         "ASSIST_LIVE_URL": "http://127.0.0.1",
         "ASSIST_LIVE_TOKEN_FILE": str(token),
@@ -789,22 +839,31 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     )
 
     class RecordingEvents(FakeEvents):
-        def __init__(self, *args):
+        def __init__(self, client, satellite, clock):
             turn = f"01900000-0000-7000-8000-{len(records) + 10:012x}"
+            index = len(records) % len(decisions)
+            stamp = decisions[index]
             items = [
-                event(stage, i * 1000, turn) for i, stage in enumerate(DEVICE_STAGES)
+                event(stage, ms, turn)
+                for stage, ms in zip(DEVICE_STAGES, (0, 1000, 3500, 4000), strict=True)
             ]
-            transcript = event("stt_final", 1500, turn, "server")
+            owner = "integration" if args.phase == "p0" else "server"
+            transcript = event("stt_final", 3000, turn, owner)
             transcript["data"] = {"transcript": baseline["recognized_transcript"]}
+            internal = [transcript, event("tts_first_byte", 3250, turn, owner)]
+            clip_id = corpus[index]["id"]
+            if corpus[index]["set"] == "pause" and clip_id != "no-delay":
+                detected_ms = 1560 if clip_id == "boundary" else 1600
+                internal.insert(0, event("speech_start", detected_ms, turn, "server"))
+            if stamp is not None:
+                internal.append(
+                    {**event("end_decision", 0, turn, owner), "t_utc_ns": stamp}
+                )
             super().__init__(
                 items,
-                items
-                + [
-                    event("end_decision", 1450, turn, "server"),
-                    transcript,
-                    event("tts_first_byte", 1750, turn, "server"),
-                ],
+                items + internal,
             )
+            self.server_clock = clock
             row = copy.deepcopy(baseline)
             row["turn_id"] = turn
             records.append(recorder(row))
@@ -826,36 +885,84 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     monkeypatch.setattr("tools.device_replay.AlsaOutput", lambda *args: FakeOutput())
     monkeypatch.setattr(
         "tools.device_replay.AlsaCapture",
-        lambda *args: FakeCapture(bundle(tmp_path)[1]),
+        lambda *args: FakeCapture(
+            copy.deepcopy(captures[len(records) % len(captures)])
+        ),
     )
     monkeypatch.setattr("tools.device_replay.ClientEvents", RecordingEvents)
     args = options("--phase", "p1", "--profiles", "safe,fast", "--limit", "1")
+    if include_pauses:
+        args.limit = None
     args.labels, args.audio_root = labels, tmp_path
     args.output = tmp_path / "runs.jsonl"
     args.clock_record = clock_record
     selector = Selector()
     rows = await run(args, selector)
-    assert all(row["set"] == "replay" for row in rows)
     assert all(row["loss_counters"]["start"]["observed_utc_ns"] > 0 for row in rows)
     assert all(row["loss_counters"]["end"]["observed_utc_ns"] > 0 for row in rows)
     assert all(row["loss_unavailable"] and row["reset_unknown"] for row in rows)
-    assert all(row["mode"] == "smoke" for row in rows)
     assert selector.calls == ["safe", "fast"]
-    assert [row["profile"] for row in rows] == ["safe", "fast"]
-    assert all(
-        row["baseline_transcript"] == baseline["recognized_transcript"] for row in rows
-    )
-    assert all(
-        validate_sample(row, acceptance=False) and not row["frozen"] for row in rows
-    )
+    if include_pauses:
+        written = [json.loads(line) for line in args.output.read_text().splitlines()]
+        assert written == rows
+        for profile in selector.calls:
+            trials = {row["clip_id"]: row for row in rows if row["profile"] == profile}
+            assert trials.keys() == {item["id"] for item in corpus[:-1]}
+            assert trials["cut"]["pause_cut"] is True
+            assert trials["uncertain"]["pause_cut"] is True
+            assert trials["boundary"]["pause_cut"] is False
+            assert trials["after"]["pause_cut"] is False
+            assert all(
+                trials[key]["complete"]
+                for key in ("cut", "uncertain", "boundary", "after")
+            )
+            assert "pause_cut" not in trials["missing"]
+            assert trials["missing"]["complete"] is False
+            assert "MISSING_PAUSE_MAPPING" in trials["missing"]["failures"]
+            assert "pause_cut" not in trials["no-delay"]
+            assert trials["no-delay"]["complete"] is False
+            assert "MISSING_PAUSE_DELAY_ESTIMATE" in trials["no-delay"]["failures"]
+            assert "pause_cut" not in trials[label["id"]]
+        report = build_report(
+            "p1",
+            written,
+            corpus,
+            {},
+            [],
+            baseline={
+                "schema_version": 1,
+                "phase": "p0",
+                "accepted": True,
+                "baseline_config_id": baseline["baseline_config_id"],
+                "calibration_revision": baseline["calibration_revision"],
+                "profiles": {"baseline": {"reply_groups": {}}},
+            },
+        )
+        assert report["gates"]["pause_coverage"] is True
+        assert report["pauses"]["denominator"] == 6
+        assert report["executable_prefix_cuts"]["denominator"] == 6
+        assert (
+            report["pauses"]["count"] == report["executable_prefix_cuts"]["count"] == 4
+        )
+        assert report["gates"]["pauses"] is False
+    else:
+        assert [row["profile"] for row in rows] == ["safe", "fast"]
+        assert all(row["set"] == "replay" and row["mode"] == "smoke" for row in rows)
+        assert all(
+            row["baseline_transcript"] == baseline["recognized_transcript"]
+            and validate_sample(row, acceptance=False)
+            and not row["frozen"]
+            for row in rows
+        )
     with pytest.raises(ReplayError, match="STALE_OPERATION_EVIDENCE"):
         await run(args, Selector())
 
     records_path.unlink()
+    records.clear()
     selector.calls.clear()
     args.phase, args.profiles = "p0", None
     rows = await run(args)
-    assert all(row["mode"] == "smoke" for row in rows)
+    assert all(row["set"] == "replay" for row in rows)
     assert [row["profile"] for row in rows] == ["baseline"]
     assert selector.calls == []
 

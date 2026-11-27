@@ -304,6 +304,57 @@ def internal_stage_errors(row: Row, events: list[Row]) -> list[str]:
     ]
 
 
+def pause_cut(row: Row, label: Row) -> bool:
+    alignment = row.get("alignment")
+    clock = row.get("server_clock")
+    if (
+        not isinstance(alignment, dict)
+        or alignment.get("method") != ACOUSTIC_METHOD
+        or not valid_server_clock(clock)
+    ):
+        raise ReplayError("MISSING_PAUSE_MAPPING")
+    decision, errors = owned_internal_event(
+        row["events"], row["turn_id"], "end_decision", row["phase"]
+    )
+    decision_ns = decision.get("t_utc_ns") if decision is not None else None
+    last_voice_ns = alignment.get("last_voice_utc_ns")
+    uncertainty_ms = alignment.get("uncertainty_ms")
+    if (
+        errors
+        or type(decision_ns) is not int
+        or type(last_voice_ns) is not int
+        or not finite(uncertainty_ms)
+        or uncertainty_ms < 0
+    ):
+        raise ReplayError("MISSING_PAUSE_MAPPING")
+    clock_offset_ns: int = clock["offset_ns"]
+    first_voice_ns = alignment.get("first_voice_utc_ns")
+    starts = [
+        item.get("t_utc_ns")
+        for item in turn_events(row["events"], row["turn_id"])
+        if item.get("stage") == "speech_start" and item.get("source") == "server"
+    ]
+    if (
+        len(starts) != 1
+        or type(starts[0]) is not int
+        or type(first_voice_ns) is not int
+    ):
+        raise ReplayError("MISSING_PAUSE_DELAY_ESTIMATE")
+    speech_start_ns: int = starts[0]
+    delay_ns = speech_start_ns - (first_voice_ns + clock_offset_ns)
+    if delay_ns < 0 or speech_start_ns > decision_ns:
+        raise ReplayError("MISSING_PAUSE_DELAY_ESTIMATE")
+    last_voice_offset_ns: int = (
+        label["last_voice_sample"] * 1_000_000_000 // label["sample_rate"]
+    )
+    clip_start_ns = last_voice_ns - last_voice_offset_ns + clock_offset_ns
+    pause_end_ms: int | float = label["pause_intervals_ms"][-1][1]
+    return (
+        decision_ns - clip_start_ns - math.ceil(uncertainty_ms * 1_000_000)
+        < pause_end_ms * 1_000_000 + delay_ns
+    )
+
+
 def operation_evidence_errors(row: Row) -> list[str]:
     errors = []
     intent = row.get("evaluated_intent")
@@ -415,7 +466,11 @@ def sample_errors(
         errors.append("REPLY_CHAR_COUNT")
     elif row.get("reply_group") != ("short" if len(reply) <= 60 else "long"):
         errors.append("REPLY_GROUP")
-    if row.get("phase") == "p1" and not text(row.get("baseline_transcript")):
+    if (
+        row.get("phase") == "p1"
+        and row.get("set") != "pause"
+        and not text(row.get("baseline_transcript"))
+    ):
         errors.append("MISSING_BASELINE_TRANSCRIPT")
     events = row.get("events")
     if not isinstance(events, list):
@@ -656,6 +711,8 @@ def align_capture(
         "last_voice_sample": mapped_last_voice,
         "reply_start_sample": start,
         "reply_end_sample": end,
+        "first_voice_utc_ns": capture.start_utc_ns
+        + (lag + command[0]) * width * 1_000_000_000 // capture.rate,
         "last_voice_utc_ns": capture.start_utc_ns
         + mapped_last_voice * 1_000_000_000 // capture.rate,
         "reply_start_utc_ns": capture.start_utc_ns
@@ -1087,10 +1144,13 @@ async def run(
         raise ReplayError("BLOCKED corpus not frozen")
     if not frozen:
         print("NOT FROZEN corpus")
+    sets = (
+        ("replay", "pause")
+        if args.phase == "p1" and args.split == "held_out"
+        else ("replay",)
+    )
     selected = [
-        row
-        for row in rows
-        if row.get("split") == args.split and row.get("set") == "replay"
+        row for row in rows if row.get("split") == args.split and row.get("set") in sets
     ]
     if not selected:
         raise ReplayError("EMPTY_REPLAY_SPLIT")
@@ -1151,6 +1211,7 @@ async def run(
                         "PROFILE_SELECTION_" + type(error).__name__.upper()
                     )
             for label in selected:
+                is_pause = label["set"] == "pause"
                 row: Row = {key: None for key in RUN_FIELDS}
                 row.update(
                     {
@@ -1184,7 +1245,7 @@ async def run(
                         raise ReplayError(selection_error)
                     row["baseline_transcript"] = (
                         baseline_for(label, config, baselines)
-                        if args.phase == "p1"
+                        if args.phase == "p1" and not is_pause
                         else None
                     )
                     sample = await replay_sample(
@@ -1213,6 +1274,14 @@ async def run(
                         row["failures"].append(str(error))
                     else:
                         row["failures"].append("SAMPLE_" + type(error).__name__.upper())
+                    if is_pause:
+                        row["failures"].append("MISSING_PAUSE_MAPPING")
+                else:
+                    if is_pause:
+                        try:
+                            row["pause_cut"] = pause_cut(row, label)
+                        except ReplayError as error:
+                            row["failures"].append(str(error))
                 pending.append((label, row))
                 write_private_jsonl(output, (item for _, item in pending))
         await asyncio.sleep(1.0)

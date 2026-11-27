@@ -55,6 +55,23 @@ A timing criterion with the two sets gives `MIXED_CRITERION_SETS`.
 
 Wrong-action checks use the two sets, as specified in the design.
 
+### Pause observations
+
+The P1 runner replays the held-out `pause` rows for `safe` and `fast`.
+The pause criteria use `safe`.
+The runner subtracts the time of `last_voice_sample` from the aligned last-voice time to get the start of the recording.
+It applies the replay-to-server clock offset to the recording start and the first voice time.
+The interval to receive audio is the server `speech_start` time minus the first voice time on that clock.
+
+`end_decision` gives a clock time, not an audio stream position.
+The runner subtracts the `alignment` uncertainty from the decision time and adds the interval to the last end in `pause_intervals_ms`.
+It writes `pause_cut: true` if the adjusted decision time is before the adjusted pause end, and `false` at or after that end.
+With the audio stream position in `end_decision`, the runner can compare positions without a clock estimate.
+
+If the runner cannot compare the times, it records `complete: false` and `MISSING_PAUSE_MAPPING` or `MISSING_PAUSE_DELAY_ESTIMATE`.
+The report counts that trial as a cut.
+Volunteer pause recordings are necessary for P1 acceptance.
+
 ## Correct transcripts
 
 P1 `accuracy` and the two word-error-rate paths use the correct transcript with `status=final`, not the source prompt.

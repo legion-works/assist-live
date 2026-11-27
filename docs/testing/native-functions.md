@@ -141,8 +141,14 @@ The report shows `fast` independently. It does not replace `safe` with `fast`.
 uv run python tools/report.py p1 --labels tests/data/labels.jsonl --split held_out --latency-profile safe --baseline "$RUNROOT/p0-baseline.json" --runs "$RUNROOT/p1-runs.jsonl" --calibration "$RUNROOT/p0-calibration.json" --faults "$RUNROOT/p1-faults.json" --native "$RUNROOT/p1-native.json" --output "$RUNROOT/p1-acceptance.json" --markdown "$RUNROOT/p1-acceptance.md" --check
 ```
 
-Each pause row must have a Boolean `pause_cut` value from the trial.
-A pause trial that is not complete without this observation causes an unsatisfactory pause gate result.
+The P1 runner replays the held-out pause recordings for `safe` and `fast`.
+It uses the server clock time of `end_decision` with a margin for the time to receive audio and for `alignment` uncertainty.
+See [pause observations](measurement-rules.md#pause-observations) for the rule.
+With the audio stream position in `end_decision`, the runner can compare positions without a clock estimate.
+If the runner cannot compare the times, it writes `complete: false` with `MISSING_PAUSE_MAPPING` or `MISSING_PAUSE_DELAY_ESTIMATE`.
+The report counts that trial as a cut.
+
+Volunteer pause recordings are necessary for P1 acceptance.
 The pause gate uses 300 held-out commands, at most 3% cuts, and a maximum confidence limit of at most 6%.
 A minimum of 30 executable-prefix commands must have no cuts.
 Safe replay must have a minimum of 95% correct transcript and intent together.
