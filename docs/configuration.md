@@ -24,6 +24,18 @@ If the TTS entity changes, a second step shows the voices of the new engine and 
 Select a voice, then select **Submit** again to save all changes.
 If the TTS entity does not change, the first step also shows the voice selection.
 
+| Field | Purpose | Default |
+|---|---|---|
+| `Fallback STT entity` | Select the standard STT entity to use when the server cannot supply STT. | Current STT entity. |
+| `Fallback TTS entity` | Select the standard TTS entity to use when the server cannot supply TTS. | Current TTS entity. |
+| `Use local destinations only` | Apply the local destination checks for server and fallback engines. | Current setting. Initially off. |
+| `Permit transcript storage on the server` | Let the server store the last transcript of the turn if its policy also lets it do this. | Current setting. Initially off. |
+| `Record an unknown fallback STT destination as local` | Identify the selected STT entity as local if HA cannot find its destination. | Current decision for this entity. Initially off. |
+| `Record an unknown fallback TTS destination as local` | Identify the selected TTS entity as local if HA cannot find its destination. | Current decision for this entity. Initially off. |
+| `Record the replacement fallback STT as local` | Select this field only if the new STT entity uses a local destination. | Off. |
+| `Record the replacement fallback TTS as local` | Select this field only if the new TTS entity uses a local destination. | Off. |
+| `Fallback TTS voice (empty uses its default)` | Select a voice for the fallback TTS entity only. | Current selection. Initially empty. Empty also applies when you change the entity. |
+
 HA refuses missing engines and assist-live entities as fallbacks.
 The same destination checks apply at setup and in the options flow.
 A local decision stays with its entity ID, not with the STT or TTS field.
@@ -199,6 +211,8 @@ Their event `reason` values are `not_local_only` and `destination_not_local` in 
 
 Each satellite has one last-turn latency sensor, in milliseconds.
 Its attributes show quality, uncertainty, and the end-decision source.
+The sensor is unavailable after an unsatisfactory server health check.
+The STT and TTS entities can use the fallback engines during a server outage.
 Missing events give no value and quality `missing`.
 
 A server message that HA sees is a proxy until the server timing event supplies its timestamp.

@@ -604,3 +604,80 @@ async def test_wav_pcm_parser_refuses_wrong_riff_magic():
             )
         ]
     assert closed == [True]
+
+
+@pytest.mark.parametrize("item", [TTSSentenceEnd(4, 20), object()])
+async def test_invalid_server_item_stops_continuation(client, ledger, hass, item):
+    capable(client)
+
+    async def fail(turn, source, voice, *, text_positions=False):
+        assert [part async for part in source]
+        yield TTSFormat("pcm_s16le", 16000, 1, 2)
+        yield TTSAudio(b"\x01\x00")
+        yield TTSSentenceEnd(0, 15)
+        yield item
+
+    client.tts_stream = fail
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
+    forward.hass = hass
+    failures = []
+    hass.bus.async_listen(
+        "assist_live_tts_failed", callback(lambda event: failures.append(event.data))
+    )
+    response = await forward.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
+    assert b"".join([chunk async for chunk in response.data_gen])[44:] == b"\x01\x00"
+    assert fallback.received_text == []
+    assert failures == [
+        {"satellite": "satellite-a", "text": "First sentence. Second sentence."}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ("large ancillary chunk", "fallback WAV header limit"),
+        ("duplicate format", "invalid fallback WAV format"),
+        ("short data", "incomplete fallback WAV"),
+        ("short header", "incomplete fallback WAV"),
+        ("odd ancillary chunk", None),
+    ],
+)
+async def test_wav_pcm_parser_checks_chunk_boundaries(change, error):
+    import struct
+
+    from custom_components.assist_live.tts_fallback import compatible_pcm
+
+    wav = wav_audio()
+    data = {
+        "large ancillary chunk": wav[:12] + struct.pack("<4sI", b"JUNK", 65535),
+        "duplicate format": wav[:36] + wav[12:],
+        "short data": wav[:-2],
+        "short header": wav[:20],
+        "odd ancillary chunk": wav[:12] + b"JUNK\x01\0\0\0x\0" + wav[12:],
+    }[change]
+    closed = []
+
+    async def source():
+        try:
+            yield data
+        finally:
+            closed.append(True)
+
+    async def collect():
+        return b"".join(
+            [
+                part
+                async for part in compatible_pcm(
+                    TTSAudioResponse("wav", source()),
+                    TTSFormat("pcm_s16le", 16000, 1, 2),
+                )
+            ]
+        )
+
+    if error:
+        with pytest.raises(ValueError, match=error):
+            await collect()
+    else:
+        assert await collect() == b"\x02\x00\x02\x00"
+    assert closed == [True]

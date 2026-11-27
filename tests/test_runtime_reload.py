@@ -86,6 +86,39 @@ async def runtime_entry(pipeline_hass, client, enable_custom_integrations):  # n
                 assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_latency_sensor_reports_server_outage_but_speech_fallbacks_stay_available(
+    runtime_entry, client
+):
+    from assist_live_client.models import HealthCapabilities
+    from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+
+    hass, entry, _, old_ids = runtime_entry
+    await hass.async_block_till_done()
+    runtime = entry.runtime_data
+    now = 0.0
+    runtime.clock = lambda: now
+    runtime._health_due = 5.0
+    latency = old_ids["satellite-a_last_turn_latency"]
+
+    def assert_states(expected_latency):
+        assert hass.states.get(latency).state == expected_latency
+        for suffix in ("stt", "tts"):
+            assert (
+                hass.states.get(old_ids[f"satellite-a_{suffix}"]).state
+                != STATE_UNAVAILABLE
+            )
+
+    assert_states(STATE_UNAVAILABLE)
+    now += 5
+    client.health_capabilities.return_value = HealthCapabilities(True, True, True)
+    await runtime.refresh_health()
+    assert_states(STATE_UNKNOWN)
+    now += 30
+    client.health_capabilities.side_effect = OSError
+    await runtime.refresh_health()
+    assert_states(STATE_UNAVAILABLE)
+
+
 async def test_final_turn_store_fault_keeps_options_reload_working(
     runtime_entry, caplog
 ):
@@ -124,6 +157,21 @@ async def test_final_turn_store_fault_keeps_options_reload_working(
     assert await hass.config_entries.async_reload(entry.entry_id)
     assert entry.runtime_data is not runtime
     assert entry.runtime_data.cursors == {"satellite-a": 50}
+
+
+async def test_satellite_state_updates_only_its_own_turn(runtime_entry):
+    hass, entry, _, _ = runtime_entry
+    runtime = entry.runtime_data
+    a = runtime.ledger.open_voice("satellite-a")
+    b = runtime.ledger.open_voice("satellite-b")
+    hass.states.async_set("assist_satellite.synthetic_voice", "responding")
+    await hass.async_block_till_done()
+    assert "satellite_state" in runtime.ledger.records[a.turn_id].stages
+    assert "satellite_state" not in runtime.ledger.records[b.turn_id].stages
+    runtime.ledger.open_voice("satellite-a")
+    hass.states.async_remove("assist_satellite.synthetic_voice")
+    await hass.async_block_till_done()
+    assert "satellite_state" not in runtime.ledger.latest["satellite-a"].stages
 
 
 async def test_setup_removes_empty_legacy_devices(runtime_entry):

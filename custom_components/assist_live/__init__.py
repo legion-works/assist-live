@@ -94,14 +94,15 @@ class Runtime:
         self._last_write = 0.0
         self._save_lock = asyncio.Lock()
         self._health_due = 0.0
-        self._healthy = False
+        self._healthy: bool | None = None
+        self.health_listeners: set[Callable[[], None]] = set()
         self.last_healthy: datetime | None = None
         self.last_healthy_health: HealthCapabilities | None = None
         self._store_retry_due = 0.0
 
     @property
     def server_healthy(self) -> bool:
-        return self._healthy
+        return self._healthy is True
 
     @callback
     def update_options(self, entry: ConfigEntry) -> None:
@@ -381,22 +382,29 @@ class Runtime:
         try:
             health = await self.client.health_capabilities(timeout=HEALTH_TIMEOUT)
         except ProtocolError, TimeoutError, OSError:
-            self._healthy = False
+            healthy = False
         else:
-            self._healthy = (
-                isinstance(health, HealthCapabilities) and health.healthy is True
-            )
-            if self._healthy:
-                self.last_healthy = dt_util.utcnow()
-                self.last_healthy_health = health
-                self.ledger.schedule_events(retry=True)
+            healthy = False
             if isinstance(health, HealthCapabilities):
+                healthy = health.healthy is True
+                if healthy:
+                    self.last_healthy = dt_util.utcnow()
+                    self.last_healthy_health = health
+                    self.ledger.schedule_events(retry=True)
                 self.ledger.last_health = health
                 self.hints.observe_health(health)
                 for entity in self.tts.values():
                     if isinstance(entity, AssistLiveTTS):
                         entity.async_update_voices()
-        self._health_due = self.clock() + (30 if self._healthy else 5)
+        self._health_due = self.clock() + (30 if healthy else 5)
+        previous, self._healthy = self._healthy, healthy
+        if healthy != previous:
+            if not healthy:
+                _LOGGER.info("Assist-live server is unavailable")
+            elif previous is False:
+                _LOGGER.info("Assist-live server is available again")
+            for listener in tuple(self.health_listeners):
+                listener()
 
     async def _maintenance(self, _: object) -> None:
         for satellite in self.entry.data["satellites"].values():
@@ -414,7 +422,9 @@ class Runtime:
         await self.refresh_health()
         entry_selectors = self.entry.data.get("pipeline_selects", {})
         if not entry_selectors:
-            update_issues(self.hass, self.entry.entry_id, self._healthy, [], set())
+            update_issues(
+                self.hass, self.entry.entry_id, self.server_healthy, [], set()
+            )
             return
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
         entries = {
@@ -459,7 +469,11 @@ class Runtime:
             if (pipeline := resolved.get(entity_id)) is not None
         ]
         update_issues(
-            self.hass, self.entry.entry_id, self._healthy, selected, forwarding_ids
+            self.hass,
+            self.entry.entry_id,
+            self.server_healthy,
+            selected,
+            forwarding_ids,
         )
 
     async def stop(self) -> None:

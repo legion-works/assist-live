@@ -392,16 +392,23 @@ def test_shipped_hassfest_metadata_shape():
         assert strings["config"]["step"]["user"]["description"]
 
 
-@pytest.mark.parametrize("change", ["manifest_order", "step", "title", "description"])
+@pytest.mark.parametrize(
+    "change", ["manifest_order", "manifest_owner", "step", "title", "description"]
+)
 def test_bootstrap_rejects_hassfest_metadata_regressions(bootstrap_copy, change):
     from tools.check_bootstrap import check_bootstrap
 
     package = bootstrap_copy / "custom_components/assist_live"
-    if change == "manifest_order":
+    if change in {"manifest_order", "manifest_owner"}:
         path = package / "manifest.json"
         manifest = json.loads(path.read_text())
-        path.write_text(json.dumps(dict(reversed(list(manifest.items())))))
-        expected = "manifest key order"
+        if change == "manifest_owner":
+            manifest["codeowners"] = []
+            expected = "manifest codeowners"
+        else:
+            manifest = dict(reversed(list(manifest.items())))
+            expected = "manifest key order"
+        path.write_text(json.dumps(manifest))
     else:
         for name in ("strings.json", "translations/en.json"):
             path = package / name

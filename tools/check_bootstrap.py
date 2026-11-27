@@ -51,7 +51,7 @@ REQUIRED_FILES = (
 MANIFEST_FIELDS = {
     "domain": "assist_live",
     "name": "assist-live",
-    "codeowners": [],
+    "codeowners": ["@iceteaSA"],
     "config_flow": True,
     "documentation": "https://github.com/legion-works/assist-live",
     "issue_tracker": "https://github.com/legion-works/assist-live/issues",

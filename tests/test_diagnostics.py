@@ -212,6 +212,48 @@ async def test_diagnostics_do_not_change_fallback_metadata_or_repair(
     assert sum(result["tts_fallback"].values()) == 1
 
 
+async def test_diagnostics_sanitize_decisions_and_exclude_unavailable_engines(
+    pipeline_hass,  # noqa: F811
+    client,
+):
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+    from custom_components.assist_live.tts import AssistLiveTTS, fallback_engine
+
+    hass = pipeline_hass
+    stt_id, tts_id = "stt.contract_stt", "tts.contract_tts"
+    entry = MockConfigEntry(
+        domain="assist_live",
+        data={"satellites": {}, "fallback_stt": stt_id, "fallback_tts": tts_id},
+        options={
+            "local_decisions": {
+                stt_id: {"destination": "local", "recorded_at": "not a date"}
+            }
+        },
+    )
+    runtime = entry.runtime_data = Runtime(hass, entry, client)
+    runtime.tts["device-a"] = AssistLiveTTS(
+        "satellite-a", "device-a", client, runtime.ledger, tts_id, entry.entry_id
+    )
+    fallback_engine(hass, tts_id)._attr_available = False
+    with patch(
+        "custom_components.assist_live.diagnostics.entity_iot_class",
+        side_effect=["unrecognized.label", None],
+    ):
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["fallbacks"]["stt"] == {
+        "destination": "local",
+        "iot_class": "[redacted]",
+    }
+    assert result["local_decisions"] == [
+        {"part": "stt", "destination": "local", "recorded_at": None}
+    ]
+    assert sum(result["tts_fallback"].values()) == 0
+
+
 @pytest.mark.parametrize("failure", [TimeoutError(), OSError(), "unhealthy"])
 async def test_diagnostics_health_outage_and_recovery(hass, client, failure):
     from assist_live_client.models import HealthCapabilities, TTSVoice

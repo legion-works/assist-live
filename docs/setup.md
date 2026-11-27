@@ -41,6 +41,26 @@ Setup ends when you add the fifth satellite.
 The server has 16 audio and event connection slots for each token.
 Each satellite can use one event connection and two audio connections.
 
+### Setup fields
+
+| Field | Purpose | Default |
+|---|---|---|
+| `Server URL` | Set the HTTP or HTTPS address of the assist-live server. | None. Necessary. |
+| `Access token` | Set the integration token from the server. Give it access to the selected satellite keys. | None. Necessary. |
+| `Fallback STT entity` | Select the standard STT entity to use when the server cannot supply STT. | None. Necessary. |
+| `Fallback TTS entity` | Select the standard TTS entity to use when the server cannot supply TTS. | None. Necessary. |
+| `Show full reply in a persistent notification if TTS fails` | Show the full reply text in an HA notification after a TTS failure. | Off. |
+| `Use local destinations only` | Apply the local destination checks for server and fallback engines. See [HA options](configuration.md#ha-options). | Off. |
+| `Permit transcript storage on the server` | Let the server store the last transcript of the turn if its policy also lets it do this. | Off. |
+| `Record an unknown fallback STT destination as local` | Identify the selected STT entity as local if HA cannot find its destination. Check the entity before you select this field. | Off. |
+| `Record an unknown fallback TTS destination as local` | Identify the selected TTS entity as local if HA cannot find its destination. Check the entity before you select this field. | Off. |
+| `Satellite device` | Select the HA device of the voice satellite. | None. Necessary. |
+| `Provisioned satellite key` | Select the anonymous key from the server for this device. | None. Necessary. |
+| `Satellite pipeline selector` | Select the HA Assist pipeline control of this device. | None. Necessary. |
+| `Add another satellite` | Add one more satellite before you complete setup. | Off. |
+
+The HTTP warning has no fields. Select **Submit** only on an isolated network.
+
 The manifest pins the published pre-release `assist-live-client==0.1.0a2` from PyPI.
 HA, local tests, and CI install that same client version.
 The integration itself has no release.

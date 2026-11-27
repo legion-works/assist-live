@@ -4819,3 +4819,42 @@ The test gives an unsatisfactory result if the runner does not subtract the `ali
 
 Volunteer pause recordings are necessary for P1 acceptance.
 These tests do not show hardware acceptance.
+
+## Silver quality checks (2026-11-27 UTC)
+
+The setup and options tables give the purpose and default of each field.
+The manifest gives the integration owner.
+The last-turn latency sensor reports unavailable when the server health check is unsatisfactory.
+The STT and TTS entities can use the fallback engines during the outage.
+Each config entry logs one `info` message at the start of a server outage and one when the server is available again.
+
+```sh
+uv run --locked coverage run --branch --source=custom_components/assist_live -m pytest tests/ -q
+uv run --locked coverage report -m --precision=2
+```
+
+With HA 2026.10.4, coverage of statements and branches was 97.08 % overall.
+Each of the 16 integration modules was above 95 %.
+
+| Module | Coverage |
+|---|---:|
+| `__init__.py` | 96.44 % |
+| `config_flow.py` | 100.00 % |
+| `const.py` | 100.00 % |
+| `diagnostics.py` | 98.89 % |
+| `entity.py` | 100.00 % |
+| `ledger.py` | 96.71 % |
+| `llm.py` | 100.00 % |
+| `repairs.py` | 100.00 % |
+| `routing.py` | 100.00 % |
+| `sensor.py` | 100.00 % |
+| `settings.py` | 100.00 % |
+| `stt.py` | 96.49 % |
+| `stt_fallback.py` | 95.87 % |
+| `stt_hints.py` | 96.50 % |
+| `tts.py` | 95.62 % |
+| `tts_fallback.py` | 100.00 % |
+
+The full test run gave `21 failed, 2296 passed, 1 skipped`.
+Each failure was in a check for which Gitleaks or a Git worktree is necessary.
+The test environment did not have those items.

@@ -34,6 +34,25 @@ def stages(ledger):
     return next(iter(ledger.records.values())).stages
 
 
+async def test_cancelled_server_audio_does_not_send_buffered_samples():
+    from custom_components.assist_live.stt_fallback import FallbackAudio
+
+    cancelled = asyncio.Event()
+    buffered = FallbackAudio(
+        audio([bytes(40000)]),
+        started=asyncio.get_running_loop().time(),
+        cancelled=cancelled,
+    )
+    try:
+        stream = buffered.server_audio()
+        assert await anext(stream) == bytes(32000)
+        cancelled.set()
+        assert [chunk async for chunk in stream] == []
+        assert buffered.server_audio_samples == 16000
+    finally:
+        await buffered.aclose()
+
+
 @pytest.mark.parametrize("record_transcripts", [False, True])
 async def test_fallback_final_sends_opted_in_transcript_after_its_owner_marker(
     client, ledger, drain_timing_events, record_transcripts

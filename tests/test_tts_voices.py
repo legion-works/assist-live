@@ -75,6 +75,13 @@ async def test_default_options_use_server_default(client, ledger):
     assert entity(client, ledger, Fallback()).default_options == {"voice": "server-us"}
 
 
+def test_voice_list_without_default_reports_language_but_not_a_voice(client, ledger):
+    ledger.last_health = health(("first", "First", "fr-FR"), ("second", "Second", "en"))
+    forward = entity(client, ledger, Fallback())
+    assert forward.default_language == "fr-FR"
+    assert forward.default_options is None
+
+
 @pytest.mark.parametrize("with_list", [True, False])
 @pytest.mark.parametrize("requested_voice", [None, "server-us", "server-retired"])
 async def test_no_voice_reaches_fake_server_without_voice_field(

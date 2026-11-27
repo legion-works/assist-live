@@ -93,22 +93,25 @@ rules:
     status: done
     comment: async_unload_entry releases the platforms and stops the runtime.
   docs-configuration-parameters:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/configuration.md gives the purpose and default of each options field.
   docs-installation-parameters:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/setup.md gives the purpose and default of each setup field.
   entity-unavailable:
-    status: todo
+    status: done
     comment: >-
-      The STT and TTS entities stay available when the server is unavailable,
-      because the fallback engines answer the turn. Not examined against the rule.
+      The latency sensor reports unavailable when the server health check
+      is unsatisfactory. The STT and TTS entities can use their fallback
+      engines during a server outage, so they do not use server health as
+      their availability state. Each request checks its fallback and gives
+      a turn error if neither route can answer.
   integration-owner:
-    status: todo
-    comment: The manifest has no code owner.
+    status: done
+    comment: The manifest gives the integration owner.
   log-when-unavailable:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: Each entry logs one info message at the start and end of a server outage.
   parallel-updates:
     status: done
     comment: Each entity platform sets PARALLEL_UPDATES to 0.
@@ -116,8 +119,10 @@ rules:
     status: todo
     comment: The integration has no reauthentication flow.
   test-coverage:
-    status: todo
-    comment: Not measured.
+    status: done
+    comment: >-
+      Coverage of statements and branches is 97.08 % overall and above
+      95 % in each module. See docs/verification.md.
 
   # Gold
   devices:

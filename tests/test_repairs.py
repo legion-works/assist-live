@@ -44,6 +44,43 @@ def test_shared_pipeline_and_unavailable_server(hass):
     assert registry.async_get_issue("assist_live", "entry_shared_pipeline") is None
 
 
+@pytest.mark.parametrize("starts_healthy", [True, False])
+async def test_health_logs_once_per_outage_and_recovery(
+    hass, client, caplog, starts_healthy
+):
+    import logging
+
+    from assist_live_client.models import HealthCapabilities
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live import Runtime
+
+    runtime = Runtime(hass, MockConfigEntry(data={"satellites": {}}), client)
+    now = 0.0
+    runtime.clock = lambda: now
+    client.health_capabilities.side_effect = [
+        HealthCapabilities(starts_healthy, True, True),
+        OSError("not for the log"),
+        HealthCapabilities(False, True, True),
+        HealthCapabilities(True, True, True),
+        HealthCapabilities(True, True, True),
+        OSError("not for the log"),
+    ]
+    with caplog.at_level(logging.INFO, logger="custom_components.assist_live"):
+        for _ in range(6):
+            await runtime.refresh_health()
+            now += 30
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "custom_components.assist_live"
+    ] == [
+        (logging.INFO, "Assist-live server is unavailable"),
+        (logging.INFO, "Assist-live server is available again"),
+        (logging.INFO, "Assist-live server is unavailable"),
+    ]
+
+
 async def test_manually_created_forwarding_pipeline_is_checked(hass, client):
     from types import SimpleNamespace
     from unittest.mock import patch

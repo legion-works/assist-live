@@ -5,7 +5,7 @@ from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import AssistLiveConfigEntry
+from . import AssistLiveConfigEntry, Runtime
 from .entity import AssistLiveEntity
 from .ledger import TurnLedger
 
@@ -18,10 +18,10 @@ async def async_setup_entry(
     entry: AssistLiveConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    ledger = entry.runtime_data.ledger
+    runtime = entry.runtime_data
     entities = []
     for device, satellite in entry.data["satellites"].items():
-        entity = TurnLatencySensor(satellite, device, ledger)
+        entity = TurnLatencySensor(satellite, device, runtime.ledger, runtime=runtime)
         entity._attach_device(hass)
         entities.append(entity)
     async_add_entities(entities)
@@ -34,11 +34,23 @@ class TurnLatencySensor(AssistLiveEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
     _unrecorded_attributes = frozenset({"turn_id", "turn_type"})
 
-    def __init__(self, satellite: str, device: str, ledger: TurnLedger) -> None:
+    def __init__(
+        self,
+        satellite: str,
+        device: str,
+        ledger: TurnLedger,
+        *,
+        runtime: Runtime | None = None,
+    ) -> None:
         self.satellite = satellite
         self.ledger = ledger
+        self._runtime = runtime
         self._attr_unique_id = f"{satellite}_last_turn_latency"
         self._set_device(device, satellite)
+
+    @property
+    def available(self) -> bool:
+        return self._runtime is None or self._runtime.server_healthy
 
     def measurement(self) -> tuple[float | None, str, float | None]:
         record = self.ledger.latest.get(self.satellite)
@@ -86,3 +98,6 @@ class TurnLatencySensor(AssistLiveEntity, SensorEntity):
 
         self.ledger.listeners.add(update)
         self.async_on_remove(lambda: self.ledger.listeners.discard(update))
+        if (runtime := self._runtime) is not None:
+            runtime.health_listeners.add(update)
+            self.async_on_remove(lambda: runtime.health_listeners.discard(update))
