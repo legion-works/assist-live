@@ -106,6 +106,57 @@ async def test_options_change_stt_next_turn_uses_selected_entity(fallback_entry)
     assert reopened["data_schema"]({})["fallback_stt"] == "stt.alternate_stt"
 
 
+@pytest.mark.parametrize("part", ["stt", "tts"])
+@pytest.mark.parametrize(
+    "local_only,approve", [(True, True), (False, True), (False, False)]
+)
+async def test_replacement_requires_a_new_local_decision(
+    fallback_entry, part, local_only, approve
+):
+    hass, entry = fallback_entry
+    field = f"fallback_{part}"
+    checkbox = f"{field}_local"
+    old_entity = f"{part}.contract_{part}"
+    replacement = f"{part}.alternate_{part}"
+    with patch(
+        "custom_components.assist_live.config_flow.entity_iot_class",
+        return_value=None,
+    ):
+        initial = await start(hass, entry)
+        saved = await submit(
+            hass,
+            initial,
+            values(
+                local_only=local_only, fallback_stt_local=True, fallback_tts_local=True
+            ),
+        )
+        assert saved["type"] == "create_entry"
+        old_decision = entry.options["local_decisions"][old_entity]
+        form = await start(hass, entry)
+        defaults = form["data_schema"]({})
+        assert defaults[checkbox] is True
+        result = await submit(hass, form, {**defaults, field: replacement})
+        assert result.get("step_id") == "confirm_local", (
+            "the old check cannot approve a new entity"
+        )
+        assert result["data_schema"]({}) == {checkbox: False}
+        assert replacement not in entry.options["local_decisions"]
+        assert entry.options["local_decisions"][old_entity] == old_decision
+        result = await submit(hass, result, {checkbox: approve})
+        if part == "tts":
+            assert result.get("step_id") == "fallback_voice"
+            result = await submit(hass, result, {"fallback_tts_voice": ""})
+        assert result["type"] == "create_entry"
+        assert old_entity not in entry.options["local_decisions"]
+        if approve:
+            assert (
+                entry.options["local_decisions"][replacement]["destination"] == "local"
+            )
+        else:
+            assert replacement not in entry.options["local_decisions"]
+        await hass.async_block_till_done()
+
+
 async def test_options_tts_change_lists_new_voices_and_revalidates(fallback_entry):
     hass, entry = fallback_entry
     engine = hass.data[TTS_COMPONENT].get_entity("tts.alternate_tts")
@@ -236,6 +287,8 @@ async def test_options_local_only_checks_selected_entities_and_prunes_decisions(
                 fallback_tts_local=True,
             ),
         )
+        assert result.get("step_id") == "confirm_local"
+        result = await submit(hass, result, {"fallback_stt_local": True})
     assert result["type"] == "create_entry"
     decisions = entry.options["local_decisions"]
     assert set(decisions) == {"stt.alternate_stt", "tts.contract_tts"}, (
@@ -283,6 +336,49 @@ async def test_options_unchanged_entities_keep_one_step(fallback_entry):
     assert runtime.ledger.current("satellite-a") is turn, (
         "mode-only change keeps running turn"
     )
+
+
+async def test_options_reject_a_voice_removed_after_the_form_opened(fallback_entry):
+    hass, entry = fallback_entry
+    engine = hass.data[TTS_COMPONENT].get_entity("tts.contract_tts")
+    form = await start(hass, entry)
+    assert "voice-two" in {item["value"] for item in voice_options(form)}
+    with patch.object(engine, "async_get_supported_voices", return_value=None):
+        result = await submit(hass, form, values(fallback_tts_voice="voice-two"))
+    assert result["errors"] == {"fallback_tts_voice": "invalid_fallback_voice"}
+    assert voice_options(result) == [{"value": "", "label": "Default"}]
+    assert entry.options == {}
+
+
+@pytest.mark.parametrize("failure", ["engine_missing", "destination_changed"])
+async def test_options_voice_step_returns_to_fallback_settings_on_change(
+    fallback_entry, failure
+):
+    hass, entry = fallback_entry
+    with patch(
+        "custom_components.assist_live.config_flow.entity_iot_class",
+        return_value="local_push",
+    ) as iot_class:
+        form = await start(hass, entry)
+        voice_form = await submit(
+            hass, form, values(fallback_tts="tts.alternate_tts", local_only=True)
+        )
+        assert voice_form["step_id"] == "fallback_voice"
+        if failure == "engine_missing":
+            with patch(
+                "custom_components.assist_live.tts.get_engine_instance",
+                return_value=None,
+            ):
+                result = await submit(hass, voice_form, {"fallback_tts_voice": ""})
+            assert result["errors"] == {"fallback_tts": "invalid_fallback_entity"}
+        else:
+            iot_class.side_effect = lambda _, entity_id: (
+                "cloud_push" if entity_id == "tts.alternate_tts" else "local_push"
+            )
+            result = await submit(hass, voice_form, {"fallback_tts_voice": ""})
+            assert result["errors"] == {"fallback_tts_local": "cloud_destination"}
+    assert result["step_id"] == "init"
+    assert entry.options == {}
 
 
 @pytest.mark.parametrize(

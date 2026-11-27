@@ -84,7 +84,7 @@ def update_issues(
     selected: list[str],
     owned: set[str],
 ) -> None:
-    shared = any(selected.count(name) > 1 for name in owned)
+    shared = any(selected.count(pipeline_id) > 1 for pipeline_id in owned)
     for kind, active in (
         ("server_unavailable", not healthy),
         ("shared_pipeline", shared),

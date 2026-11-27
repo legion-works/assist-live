@@ -85,8 +85,9 @@ The integration must have a recovery procedure for an ID-save failure after crea
 
 The HA harness proves creation, duplicate creation, stable IDs, changed engines, selected voice, missing-engine refusal, and unsupported-language refusal.
 The live WebSocket probe proves that the preferred pipeline stays unchanged.
-There is no exported preferred-pipeline getter: HA has `async_get_pipeline`, but does not include it in `__all__`.
-The harness does not use that function or the private store to read preference.
+This probe did not use the preferred-pipeline getter or read the private store.
+HA 2026.10.1 and 2026.10.4 do not export `assist_pipeline.async_get_pipeline` in `__all__`.
+HA 2026.11.2 exports it. On all three versions, repairs and diagnostics use the non-public import `homeassistant.components.assist_pipeline.pipeline.async_get_pipeline` to read the preferred pipeline.
 
 ## Voice contract
 

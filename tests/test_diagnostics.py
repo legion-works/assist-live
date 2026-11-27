@@ -122,6 +122,96 @@ async def test_diagnostics_after_setup_error_give_entry_state_only(
     )
 
 
+@pytest.mark.parametrize("selection", ["explicit", "manual", "preferred"])
+async def test_diagnostics_report_the_selected_agent(
+    pipeline_hass,  # noqa: F811
+    client,
+    selection,
+):
+    from homeassistant.components import assist_pipeline
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    hass = pipeline_hass
+    preferred = assist_pipeline.async_get_pipeline(hass)
+    other = await assist_pipeline.async_create_default_pipeline(
+        hass, "stt.contract_stt", "tts.contract_tts", "Other pipeline"
+    )
+    assert other is not None
+    cloud = preferred if selection == "preferred" else other
+    await assist_pipeline.async_update_pipeline(
+        hass, cloud, conversation_engine="conversation.synthetic_cloud"
+    )
+    data = {
+        "satellites": {"device-a": "satellite-a"},
+        "pipeline_selects": {"device-a": "select.pipeline_a"},
+    }
+    if selection != "manual":
+        saved = other if selection == "preferred" else preferred
+        data["pipelines"] = {"device-a": saved.id}
+    option = (
+        assist_pipeline.OPTION_PREFERRED if selection == "preferred" else other.name
+    )
+    hass.states.async_set("select.pipeline_a", option)
+    entry = MockConfigEntry(domain="assist_live", data=data)
+    entry.runtime_data = Runtime(hass, entry, client)
+
+    async def iot_class(hass, entity_id):
+        return "cloud_push" if entity_id == "conversation.synthetic_cloud" else None
+
+    with patch(
+        "custom_components.assist_live.diagnostics.entity_iot_class",
+        side_effect=iot_class,
+    ):
+        result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["agents"] == [{"iot_class": "cloud_push", "destination": "cloud"}]
+    assert "conversation.synthetic_cloud" not in json.dumps(result)
+
+
+async def test_diagnostics_do_not_change_fallback_metadata_or_repair(
+    pipeline_hass,  # noqa: F811
+    client,
+):
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+    from custom_components.assist_live.repairs import fallback_issue
+    from custom_components.assist_live.tts import AssistLiveTTS
+
+    hass = pipeline_hass
+    fallback = "tts.contract_tts"
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": {}})
+    runtime = entry.runtime_data = Runtime(hass, entry, client)
+    metadata = {"entity_id": fallback, "languages": []}
+    runtime.fallback_metadata["tts"] = metadata
+    forwarder = AssistLiveTTS(
+        "satellite-a",
+        "device-a",
+        client,
+        runtime.ledger,
+        fallback,
+        entry.entry_id,
+        metadata,
+    )
+    forwarder.hass = hass
+    runtime.tts["device-a"] = forwarder
+    fallback_issue(hass, entry.entry_id, "tts", fallback, True)
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert ir.async_get(hass).async_get_issue(
+        "assist_live", f"{entry.entry_id}_fallback_tts_unavailable"
+    )
+    assert metadata == {"entity_id": fallback, "languages": []}
+    assert sum(result["tts_fallback"].values()) == 1
+
+
 @pytest.mark.parametrize("failure", [TimeoutError(), OSError(), "unhealthy"])
 async def test_diagnostics_health_outage_and_recovery(hass, client, failure):
     from assist_live_client.models import HealthCapabilities, TTSVoice
@@ -242,7 +332,7 @@ async def test_diagnostics_exclude_all_content_and_private_configuration(hass, c
         data={
             **planted,
             "satellites": {"device-a": "satellite-a"},
-            "pipelines": {"device-a": "pipeline-a"},
+            "pipeline_selects": {"device-a": "select.pipeline_a"},
         },
     )
     runtime = Runtime(hass, entry, client)
@@ -258,12 +348,15 @@ async def test_diagnostics_exclude_all_content_and_private_configuration(hass, c
         "width": 2,
     }
     entry.runtime_data = runtime
+    hass.states.async_set("select.pipeline_a", "Pipeline A")
     with (
         patch(
             "custom_components.assist_live.diagnostics.assist_pipeline.async_get_pipelines",
             return_value=[
                 SimpleNamespace(
-                    id="pipeline-a", conversation_engine=planted["conversation_entity"]
+                    id="pipeline-a",
+                    name="Pipeline A",
+                    conversation_engine=planted["conversation_entity"],
                 )
             ],
         ) as pipelines,
@@ -305,7 +398,7 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
             "satellites": {"device-a": "satellite-a"},
             "fallback_stt": "stt.standard",
             "fallback_tts": "tts.standard",
-            "pipelines": {"device-a": "pipeline-a"},
+            "pipeline_selects": {"device-a": "select.pipeline_a"},
         },
         options={
             "local_only": True,
@@ -346,6 +439,7 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
         "width": 2,
     }
     entry.runtime_data = runtime
+    hass.states.async_set("select.pipeline_a", "Pipeline A")
 
     async def iot(hass, entity_id):
         return "cloud_push" if entity_id == "conversation.agent" else None
@@ -359,7 +453,9 @@ async def test_diagnostics_show_actual_turn_services_and_agent_boundary(hass, cl
             "custom_components.assist_live.diagnostics.assist_pipeline.async_get_pipelines",
             return_value=[
                 SimpleNamespace(
-                    id="pipeline-a", conversation_engine="conversation.agent"
+                    id="pipeline-a",
+                    name="Pipeline A",
+                    conversation_engine="conversation.agent",
                 )
             ],
         ),

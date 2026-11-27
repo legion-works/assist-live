@@ -24,7 +24,8 @@ The health speaker destination does not select STT or TTS. The server checks spe
 These checks are not a network firewall.
 They cannot examine the traffic of other HA integrations.
 The local-only guarantee does not include the conversation agent.
-Diagnostics show the selected agent's `iot_class` and destination. They do not stop the agent.
+Diagnostics show the agent's `iot_class` and destination for the pipeline of each configured selector.
+If diagnostics cannot find the pipeline, they show `unknown`. They do not stop the agent.
 
 An unknown fallback must have an explicit local decision before use with `local_only`.
 The options flow stores that decision and its UTC time.

@@ -43,8 +43,8 @@
         "data_description": {
           "device": "The HA device of the voice satellite.",
           "satellite": "The anonymous key that the server provisioned for this device.",
-          "pipeline_select": "The pipeline selector entity of the same device.",
-          "add_another": "If on, the next step adds one more satellite. Use no more than five satellites with one token."
+          "pipeline_select": "Select the HA Assist pipeline control of the same device (registry translation key pipeline or pipeline_n). ESPHome, Wyoming, and VoIP satellites use this control. Setup refuses other controls, such as VAD sensitivity and wake word.",
+          "add_another": "If on, add one more satellite. Setup ends when you add the fifth satellite."
         }
       }
     },
@@ -55,9 +55,8 @@
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
       "invalid_url": "Use an HTTP or HTTPS server URL without user information, a query, or a fragment.",
-      "invalid_satellite": "Select a provisioned key and the pipeline selector of a satellite device.",
-      "binding_used": "This device or key is already in use.",
-      "connection_limit": "Use no more than five satellites for each server token."
+      "invalid_satellite": "Select a provisioned key and a satellite with an HA Assist pipeline control (pipeline or pipeline_n). Select that control, not a VAD or wake word control.",
+      "binding_used": "This device or key is already in use."
     },
     "abort": {
       "already_configured": "An entry for this server and token is configured."
@@ -85,6 +84,18 @@
           "fallback_stt_local": "If on, HA records the fallback STT entity as local when HA cannot find its destination. Do this only after you examine that integration.",
           "fallback_tts_local": "If on, HA records the fallback TTS entity as local when HA cannot find its destination. Do this only after you examine that integration.",
           "fallback_tts_voice": "A voice of the fallback TTS engine. The empty selection uses the default voice of that engine. HA does not send this voice to the server."
+        }
+      },
+      "confirm_local": {
+        "title": "Local destination of a replacement fallback",
+        "description": "A local decision does not apply to a different entity. Check the replacement integration before you record a new decision.",
+        "data": {
+          "fallback_stt_local": "Record the replacement fallback STT as local",
+          "fallback_tts_local": "Record the replacement fallback TTS as local"
+        },
+        "data_description": {
+          "fallback_stt_local": "Select only if the new STT destination is local.",
+          "fallback_tts_local": "Select only if the new TTS destination is local."
         }
       },
       "fallback_voice": {

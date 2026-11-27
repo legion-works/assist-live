@@ -24,18 +24,17 @@ rules:
     status: done
     comment: Each field of each config and options step has a data_description.
   config-flow-test-coverage:
-    status: todo
+    status: done
     comment: >-
-      A measurement before the duplicate-entry flow tests gave 91 % branch
-      coverage of config_flow.py. Some error paths have no test. The coverage
-      is not measured again.
+      The setup and options flow tests give 100 % branch coverage of
+      config_flow.py (92 of 92 branches).
   dependency-transparency:
-    status: todo
+    status: done
     comment: >-
-      assist-live-client has the Apache-2.0 license, and a public GitHub
-      workflow of assist-live-server builds it and publishes it to PyPI.
-      The assist-live-server repository has no Git tag for the PyPI release
-      0.1.0a2, and the workflow does not make a tag necessary.
+      assist-live-client has the Apache-2.0 license. A public workflow in
+      assist-live-server builds and publishes the client to PyPI. The
+      annotated tags client-v0.1.0a1 and client-v0.1.0a2 in assist-live-server
+      mark the published commits.
   docs-actions:
     status: exempt
     comment: The integration has no HA `actions`.

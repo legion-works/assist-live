@@ -764,6 +764,7 @@ def test_package_file_set_is_explicit():
         "manifest.json",
         "quality_scale.yaml",
         "repairs.py",
+        "routing.py",
         "sensor.py",
         "settings.py",
         "strings.json",

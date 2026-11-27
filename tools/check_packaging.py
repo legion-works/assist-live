@@ -26,6 +26,7 @@ PACKAGE_FILES = {
     "manifest.json",
     "quality_scale.yaml",
     "repairs.py",
+    "routing.py",
     "sensor.py",
     "settings.py",
     "strings.json",

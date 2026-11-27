@@ -45,7 +45,7 @@ def request_key(url: str) -> tuple[str, str, int | None, str] | None:
         return None
     # The key uses the encoded host, as the aiohttp connector does. Reading the
     # decoded host can raise UnicodeError for a malformed international name.
-    if not request.absolute or not request.raw_host or not request.scheme:
+    if not request.raw_host:
         return None
     return (request.scheme, request.raw_host, request.port, request.raw_path)
 
@@ -183,6 +183,7 @@ def valid_satellite(hass: HomeAssistant, device: str, pipeline_select: str) -> b
         selected
         and selected.domain == "select"
         and selected.device_id == device
+        and selected.translation_key in {"pipeline", "pipeline_n"}
         and any(
             e.domain == "assist_satellite" and e.device_id == device
             for e in registry.entities.values()
@@ -322,12 +323,12 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                 )
             ):
                 errors["base"] = "binding_used"
-            elif len(self.satellites) >= 5:
-                errors["base"] = "connection_limit"
             else:
                 self.satellites[device] = satellite
                 self.selects[device] = user_input["pipeline_select"]
-                if not user_input.get("add_another", False):
+                if len(self.satellites) == 5 or not user_input.get(
+                    "add_another", False
+                ):
                     return self.async_create_entry(
                         title="assist-live",
                         data={
@@ -360,26 +361,50 @@ class AssistLiveOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
         self.settings = effective_settings(entry)
+        self._confirm_fields: list[str] = []
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
+        return await self._step_init(user_input, confirmed=False)
+
+    async def _step_init(
+        self, user_input: dict[str, Any] | None, *, confirmed: bool
+    ) -> config_entries.ConfigFlowResult:
         settings = self.settings
         errors = {}
         if user_input is not None:
+            previous = settings.copy()
+            saved = effective_settings(self.entry)
             settings.update(user_input)
+            reconfirm = []
+            if not confirmed:
+                for field in ("fallback_stt", "fallback_tts"):
+                    checkbox = f"{field}_local"
+                    if settings.get(checkbox) and any(
+                        source.get(checkbox) and source[field] != settings[field]
+                        for source in (saved, previous)
+                    ):
+                        settings[checkbox] = False
+                        reconfirm.append(field)
+            if previous["fallback_tts"] != settings["fallback_tts"]:
+                settings[CONF_FALLBACK_TTS_VOICE] = ""
             errors = fallback_errors(self.hass, settings)
             if not errors:
+                self._confirm_fields = [
+                    f"{field}_local"
+                    for field in reconfirm
+                    if destination(await entity_iot_class(self.hass, settings[field]))
+                    == "unknown"
+                ]
+                if self._confirm_fields:
+                    return await self.async_step_confirm_local()
                 errors = {
                     f"{field}_local": error
                     for field, error in (await mode_errors(self.hass, settings)).items()
                 }
             if not errors:
-                if (
-                    settings["fallback_tts"]
-                    != effective_settings(self.entry)["fallback_tts"]
-                ):
-                    settings[CONF_FALLBACK_TTS_VOICE] = ""
+                if settings["fallback_tts"] != saved["fallback_tts"]:
                     return await self.async_step_fallback_voice()
                 if settings.get(CONF_FALLBACK_TTS_VOICE, "") not in fallback_voices(
                     self.hass, settings["fallback_tts"]
@@ -410,6 +435,21 @@ class AssistLiveOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
+    async def async_step_confirm_local(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        if user_input is not None:
+            return await self._step_init(user_input, confirmed=True)
+        return self.async_show_form(
+            step_id="confirm_local",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(field, default=False): bool
+                    for field in self._confirm_fields
+                }
+            ),
+        )
+
     async def async_step_fallback_voice(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
@@ -421,7 +461,7 @@ class AssistLiveOptionsFlow(config_entries.OptionsFlow):
             if fallback_errors(self.hass, settings) or await mode_errors(
                 self.hass, settings
             ):
-                return await self.async_step_init(settings)
+                return await self._step_init(settings, confirmed=True)
             if settings.get(CONF_FALLBACK_TTS_VOICE, "") not in voices:
                 errors[CONF_FALLBACK_TTS_VOICE] = "invalid_fallback_voice"
             else:

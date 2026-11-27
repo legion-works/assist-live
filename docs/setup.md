@@ -10,7 +10,10 @@ Before you install the integration, make sure that you have these items:
 - HA 2026.10.1 or a subsequent version.
 - An assist-live server, its URL, and an integration token. The server is in the `assist-live-server` repository.
 - A standard HA STT entity and a standard TTS entity for fallback.
-- For each satellite, an HA device with an `assist_satellite` entity and a pipeline selector entity.
+- For each satellite, an HA device with an `assist_satellite` entity and an HA Assist pipeline control.
+
+Setup accepts only satellites with the HA Assist pipeline control. ESPHome, Wyoming, and VoIP satellites use this control.
+Its entity registry translation key is `pipeline` or `pipeline_n`.
 
 No release is available. To install the integration from the repository:
 
@@ -25,7 +28,7 @@ No release is available. To install the integration from the repository:
 3. Give the integration token access to those keys.
 4. Open **Settings > Devices & services > Add integration** and select **assist-live**. Record the server URL and integration token.
 5. Select the standard fallback engines. An assist-live engine cannot be a fallback.
-6. For each device, select its provisioned key and its pipeline selector.
+6. For each device, select its provisioned key and its HA Assist pipeline control. Setup refuses other controls, such as VAD sensitivity and wake word.
 
 Use TLS or an isolated network for the server access token.
 HTTP sends the token without encryption. The config flow shows a warning before an HTTP connection.
@@ -34,6 +37,7 @@ An invalid URL has a different error from a connection failure.
 
 Use each device and key only one time in an entry.
 Use no more than five satellites with one token.
+Setup ends when you add the fifth satellite.
 The server has 16 audio and event connection slots for each token.
 Each satellite can use one event connection and two audio connections.
 
@@ -64,7 +68,8 @@ The TTS entity supplies server voices as HA `Voice` objects.
 The selected pipeline voice goes unchanged to the server.
 Select `fallback_tts_voice` independently in the integration options, or use the fallback engine's default voice.
 Do not select one assist-live pipeline on two satellites.
-A repair issue shows when two selectors use the same owned pipeline.
+A repair issue shows when two configured selectors use the same assist-live pipeline, also across entries.
+This check includes the **Preferred** option.
 
 If automatic setup gives no pipeline, make one in the HA voice assistant settings.
 Select the STT and TTS entities of the same satellite.
@@ -186,7 +191,7 @@ HA removes the STT, TTS, and latency sensor entities of that entry.
 The integration stops the event subscriptions and closes the server connections of that entry.
 The other entries continue to operate.
 
-When HA unloads or reloads an entry, the integration writes its turn store.
+When HA stops or reloads an entry, the integration writes its turn store.
 If that write is not satisfactory, the integration keeps the turn state in memory for the next setup of the entry. An HA restart clears this state from memory.
 
 To remove the integration files, first delete each assist-live entry.

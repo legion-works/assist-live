@@ -35,6 +35,12 @@ STT name hints also use three non-public HA functions:
 
 Contract tests examine their signatures and behavior on each HA version in CI.
 
+Repairs and diagnostics read the preferred pipeline with the non-public import `homeassistant.components.assist_pipeline.pipeline.async_get_pipeline`.
+The function is at `assist_pipeline/pipeline.py:248` in [2026.10.1](https://github.com/home-assistant/core/blob/2026.10.1/homeassistant/components/assist_pipeline/pipeline.py#L248), [2026.10.4](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/assist_pipeline/pipeline.py#L248), and [2026.11.2](https://github.com/home-assistant/core/blob/2026.11.2/homeassistant/components/assist_pipeline/pipeline.py#L248).
+HA 2026.10.1 and 2026.10.4 do not export the function in `assist_pipeline.__all__`.
+HA 2026.11.2 exports it at [`assist_pipeline/__init__.py:67`](https://github.com/home-assistant/core/blob/2026.11.2/homeassistant/components/assist_pipeline/__init__.py#L67).
+[`tests/test_pipeline_lookup_contract.py`](../tests/test_pipeline_lookup_contract.py) checks the signature, the preferred pipeline result, and the errors for a missing pipeline or store.
+
 HA developer documentation also gives two public entity-interface types that their component modules do not export through `__all__`:
 
 - [`SpeechAudioProcessing`](https://developers.home-assistant.io/docs/core/entity/stt/#audio-processing) from `homeassistant.components.stt.models`.

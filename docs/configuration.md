@@ -28,6 +28,8 @@ HA refuses missing engines and assist-live entities as fallbacks.
 The same destination checks apply at setup and in the options flow.
 A local decision stays with its entity ID, not with the STT or TTS field.
 The integration removes decisions for entities that are not selected.
+If the local checkbox is on and the replacement has an unknown destination, HA shows a different step for the new decision.
+Check the replacement's destination before you select its local checkbox.
 
 A fallback entity change reloads the integration. The next turn uses the new engines.
 A mode or voice change without an entity change does not reload the integration or stop the current turn.

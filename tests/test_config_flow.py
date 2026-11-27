@@ -94,6 +94,29 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
     client.close.assert_awaited_once()
 
 
+async def test_user_refuses_stt_when_the_component_is_not_ready(
+    hass, available_fallbacks
+):
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    with patch(
+        "homeassistant.components.stt.async_get_speech_to_text_entity",
+        side_effect=KeyError("stt component"),
+    ):
+        result = await flow.async_step_user(
+            {
+                "url": "https://server.example",
+                "token": "test-only",
+                "fallback_stt": "stt.standard",
+                "fallback_tts": "tts.standard",
+            }
+        )
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"fallback_stt": "invalid_fallback_entity"}
+
+
 @pytest.mark.parametrize(
     ("first", "second", "same"),
     [
@@ -401,20 +424,108 @@ async def test_refused_url_is_invalid_not_already_configured(
     assert len(hass.config_entries.async_entries("assist_live")) == 1
 
 
-async def test_malformed_url_has_its_own_error(hass, available_fallbacks):
+@pytest.mark.parametrize("url", ["not-a-server", "https://[broken"])
+async def test_malformed_url_has_its_own_error(hass, available_fallbacks, url):
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()
     flow.hass = hass
     result = await flow.async_step_user(
         {
-            "url": "not-a-server",
+            "url": url,
             "token": "test-only",
             "fallback_stt": "stt.standard",
             "fallback_tts": "tts.standard",
         }
     )
     assert result["errors"] == {"base": "invalid_url"}
+
+
+@pytest.mark.parametrize("failure", ["empty", "protocol", "missing_host"])
+async def test_user_reports_unusable_bindings(hass, available_fallbacks, failure):
+    from assist_live_client.protocol import ProtocolError
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    MockConfigEntry(domain="assist_live", data={"token": "test-only"}).add_to_hass(hass)
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    url = "https:///no-host" if failure == "missing_host" else "https://server.example"
+    user = {
+        "url": url,
+        "token": "test-only",
+        "fallback_stt": "stt.standard",
+        "fallback_tts": "tts.standard",
+    }
+    if failure == "missing_host":
+        result = await flow.async_step_user(user)
+    else:
+        with patch(
+            "assist_live_client.AssistLiveClient.bindings",
+            return_value=[],
+            side_effect=ProtocolError("invalid bindings")
+            if failure == "protocol"
+            else None,
+        ):
+            result = await flow.async_step_user(user)
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "cannot_connect"}
+    assert not flow.bindings
+
+
+@pytest.mark.parametrize(
+    ("iot_class", "load_fails", "error"),
+    [
+        ("local_push", False, None),
+        ("cloud_push", False, "cloud_destination"),
+        (123, False, "unknown_destination"),
+        (None, True, "unknown_destination"),
+    ],
+)
+async def test_user_checks_fallback_manifest_before_accepting_local_only(
+    hass, available_fallbacks, iot_class, load_fails, error
+):
+    from types import SimpleNamespace
+
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    registry = er.async_get(hass)
+    stt = registry.async_get_or_create("stt", "test", "standard").entity_id
+    tts = registry.async_get_or_create("tts", "test", "standard").entity_id
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.async_get_integration",
+            return_value=SimpleNamespace(manifest={"iot_class": iot_class}),
+            side_effect=HomeAssistantError("integration missing")
+            if load_fails
+            else None,
+        ),
+        patch(
+            "assist_live_client.AssistLiveClient.bindings",
+            return_value=[{"satellite": "satellite-a"}],
+        ),
+    ):
+        result = await flow.async_step_user(
+            {
+                "url": "https://server.example",
+                "token": "test-only",
+                "fallback_stt": stt,
+                "fallback_tts": tts,
+                "local_only": True,
+            }
+        )
+    if error is None:
+        assert result["step_id"] == "satellite"
+    else:
+        assert result["step_id"] == "user"
+        assert result["errors"] == {"fallback_stt": error, "fallback_tts": error}
 
 
 @pytest.mark.parametrize("url", ["http://server.example", "HTTP://server.example"])
@@ -468,6 +579,95 @@ async def test_binding_cannot_be_reused_by_another_entry(hass):
             }
         )
     assert result["errors"] == {"base": "binding_used"}
+
+
+@pytest.mark.parametrize(
+    ("domain", "device_matches", "has_satellite", "translation_key", "valid"),
+    [
+        ("select", True, True, "vad_sensitivity", False),
+        ("select", True, True, "wake_word", False),
+        ("select", True, True, "pipeline", True),
+        ("select", True, True, "pipeline_n", True),
+        ("sensor", True, True, "pipeline", False),
+        ("select", False, True, "pipeline", False),
+        ("select", True, False, "pipeline", False),
+        (None, True, True, None, False),
+    ],
+)
+async def test_satellite_form_requires_a_pipeline_control(
+    hass, domain, device_matches, has_satellite, translation_key, valid
+):
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    source = MockConfigEntry(domain="esphome")
+    source.add_to_hass(hass)
+    devices = dr.async_get(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=source.entry_id, identifiers={("esphome", "synthetic")}
+    )
+    other = devices.async_get_or_create(
+        config_entry_id=source.entry_id, identifiers={("esphome", "other")}
+    )
+    registry = er.async_get(hass)
+    if has_satellite:
+        registry.async_get_or_create(
+            "assist_satellite", "esphome", "satellite", device_id=device.id
+        )
+    entity_id = "select.missing"
+    if domain is not None:
+        entity_id = registry.async_get_or_create(
+            domain,
+            "esphome",
+            "selector",
+            device_id=device.id if device_matches else other.id,
+            translation_key=translation_key,
+        ).entity_id
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    flow.settings = {"url": "https://server.example", "token": "test-only"}
+    flow.bindings = {"satellite-a"}
+    result = await flow.async_step_satellite(
+        {"device": device.id, "satellite": "satellite-a", "pipeline_select": entity_id}
+    )
+    if valid:
+        assert result["type"] == "create_entry"
+        assert result["data"]["pipeline_selects"] == {device.id: entity_id}
+    else:
+        assert result.get("errors") == {"base": "invalid_satellite"}
+        assert not flow.satellites
+
+
+async def test_fifth_binding_finishes_even_if_add_another_is_checked(hass):
+    from custom_components.assist_live.config_flow import AssistLiveConfigFlow
+
+    flow = AssistLiveConfigFlow()
+    flow.hass = hass
+    flow.handler = "assist_live"
+    flow.settings = {"url": "https://server.example", "token": "test-only"}
+    flow.bindings = {f"satellite-{index}" for index in range(6)}
+    with patch(
+        "custom_components.assist_live.config_flow.valid_satellite", return_value=True
+    ):
+        for index in range(5):
+            result = await flow.async_step_satellite(
+                {
+                    "device": f"device-{index}",
+                    "satellite": f"satellite-{index}",
+                    "pipeline_select": f"select.pipeline_{index}",
+                    "add_another": True,
+                }
+            )
+            if index < 4:
+                assert result["step_id"] == "satellite" and not result["errors"]
+    assert result["type"] == "create_entry"
+    assert result["data"]["satellites"] == {
+        f"device-{index}": f"satellite-{index}" for index in range(5)
+    }
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -1031,6 +1231,41 @@ async def test_corrupt_store_keeps_valid_entries(hass, client, runtime_entry):
             "turns": [],
             "cursors": {"satellite-a": 7},
         }
+    finally:
+        await runtime.stop()
+
+
+async def test_cursor_over_wire_limit_restarts_only_its_subscription(
+    hass, client, runtime_entry
+):
+    import asyncio
+
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.assist_live import Runtime
+
+    cursors = {}
+    subscribed = asyncio.Event()
+
+    async def events(satellite, *, after_event_id):
+        cursors[satellite] = after_event_id
+        if len(cursors) == 2:
+            subscribed.set()
+        await asyncio.Event().wait()
+        yield
+
+    client.events = events
+    runtime = Runtime(hass, runtime_entry, client)
+    maximum = (1 << 64) - 1
+    saved = {"cursors": {"satellite-a": maximum + 1, "satellite-b": maximum}}
+    with patch.object(runtime.store, "async_load", return_value=saved):
+        await runtime.start()
+    try:
+        await subscribed.wait()
+        assert cursors == {"satellite-a": 0, "satellite-b": maximum}
+        assert ir.async_get(hass).async_get_issue(
+            "assist_live", f"{runtime_entry.entry_id}_invalid_stored_state"
+        )
     finally:
         await runtime.stop()
 

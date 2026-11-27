@@ -41,6 +41,7 @@ from .repairs import (
     stored_state_issue,
     update_issues,
 )
+from .routing import selected_pipelines
 from .settings import FallbackMetadata, effective_settings
 from .stt_hints import STTHints
 
@@ -268,7 +269,7 @@ class Runtime:
             cursors = {}
             invalid = True
         for key, value in cursors.items():
-            if key in satellites and type(value) is int and value >= 0:
+            if key in satellites and type(value) is int and 0 <= value < 1 << 64:
                 self.cursors[key] = value
             else:
                 invalid = True
@@ -411,26 +412,54 @@ class Runtime:
                 ]
                 self._store_retry_due = self.clock() + max(delays, default=30)
         await self.refresh_health()
+        entry_selectors = self.entry.data.get("pipeline_selects", {})
+        if not entry_selectors:
+            update_issues(self.hass, self.entry.entry_id, self._healthy, [], set())
+            return
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
+        entries = {
+            entry.entry_id: entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        }
+        entries[self.entry.entry_id] = self.entry
+        selectors = {
+            device: entity_id
+            for entry in entries.values()
+            for device, entity_id in entry.data.get("pipeline_selects", {}).items()
+        }
+        resolved = selected_pipelines(self.hass, selectors.values(), pipelines)
+        owned = {
+            pipeline_id
+            for entry in entries.values()
+            for pipeline_id in entry.data.get("pipelines", {}).values()
+        }
+        entry_selections = {
+            pipeline.id
+            for entity_id in entry_selectors.values()
+            if (pipeline := resolved.get(entity_id)) is not None
+        }
         registry = er.async_get(self.hass)
-        forwarding_names = {
-            p.name
+        forwarding_ids = {
+            p.id
             for p in pipelines
-            if p.id in self.entry.data.get("pipelines", {}).values()
-            or any(
-                engine_id is not None
-                and (entity := registry.async_get(engine_id)) is not None
-                and entity.platform == DOMAIN
-                for engine_id in (p.stt_engine, p.tts_engine)
+            if p.id in entry_selections
+            and (
+                p.id in owned
+                or any(
+                    engine_id is not None
+                    and (entity := registry.async_get(engine_id)) is not None
+                    and entity.platform == DOMAIN
+                    for engine_id in (p.stt_engine, p.tts_engine)
+                )
             )
         }
         selected = [
-            state.state
-            for entity_id in self.entry.data.get("pipeline_selects", {}).values()
-            if (state := self.hass.states.get(entity_id)) is not None
+            pipeline.id
+            for entity_id in selectors.values()
+            if (pipeline := resolved.get(entity_id)) is not None
         ]
         update_issues(
-            self.hass, self.entry.entry_id, self._healthy, selected, forwarding_names
+            self.hass, self.entry.entry_id, self._healthy, selected, forwarding_ids
         )
 
     async def stop(self) -> None:

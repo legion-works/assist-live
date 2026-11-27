@@ -245,7 +245,7 @@ def test_bootstrap_rejects_invalid_boundary(tmp_path, change):
         ROOT,
         root,
         ignore=shutil.ignore_patterns(
-            ".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"
+            ".git", ".venv*", "__pycache__", ".pytest_cache", ".ruff_cache"
         ),
     )
     if change == "document":
@@ -273,7 +273,7 @@ def test_bootstrap_accepts_exact_release_requirement(tmp_path):
         ROOT,
         root,
         ignore=shutil.ignore_patterns(
-            ".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"
+            ".git", ".venv*", "__pycache__", ".pytest_cache", ".ruff_cache"
         ),
     )
     path = root / "custom_components/assist_live/manifest.json"
@@ -360,7 +360,7 @@ def bootstrap_copy(tmp_path):
         root,
         ignore=shutil.ignore_patterns(
             ".git",
-            ".venv",
+            ".venv*",
             "__pycache__",
             ".pytest_cache",
             ".ruff_cache",

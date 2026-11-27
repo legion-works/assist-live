@@ -1,7 +1,7 @@
 import io
 import json
 import wave
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from assist_live_client.models import TTSAudio, TTSFormat, TTSSentenceEnd
@@ -432,7 +432,8 @@ async def test_diagnostics_has_counts_and_buffering_without_content(
 
     capable(client)
     interrupted(client, completed=0)
-    forward = entity(client, ledger, StreamingFallback())
+    fallback = StreamingFallback()
+    forward = entity(client, ledger, fallback)
     forward.hass = hass
     response = await forward.async_stream_tts_audio(
         TTSAudioRequest("en", {"voice": "voice-2"}, text())
@@ -450,7 +451,11 @@ async def test_diagnostics_has_counts_and_buffering_without_content(
         hints=SimpleNamespace(status={}, failures=0),
         speaker_policy_violations=0,
     )
-    result = await async_get_config_entry_diagnostics(hass, entry)
+    with patch(
+        "custom_components.assist_live.diagnostics.fallback_engine",
+        return_value=fallback,
+    ):
+        result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["failures"]["tts_failed"] == 1
     assert result["tts_fallback"] == {"streaming": 1, "full_file": 0}
     serialized = json.dumps(result)
@@ -492,7 +497,11 @@ async def test_full_file_fallback_is_reported(client, ledger, hass):
         hints=SimpleNamespace(status={}, failures=0),
         speaker_policy_violations=0,
     )
-    result = await async_get_config_entry_diagnostics(hass, entry)
+    with patch(
+        "custom_components.assist_live.diagnostics.fallback_engine",
+        return_value=fallback,
+    ):
+        result = await async_get_config_entry_diagnostics(hass, entry)
     assert result["tts_fallback"] == {"streaming": 0, "full_file": 1}
 
 

@@ -5,11 +5,13 @@ from typing import Any
 from homeassistant.components import assist_pipeline
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from . import AssistLiveConfigEntry
 from .config_flow import destination, entity_iot_class
+from .routing import selected_pipelines
 from .settings import effective_settings
-from .tts import AssistLiveTTS
+from .tts import AssistLiveTTS, fallback_engine
 
 # The loaded output also has no address, token, entity ID, or device ID.
 # The voices and pipelines keys use device IDs.
@@ -71,8 +73,11 @@ async def async_get_config_entry_diagnostics(
     streaming = full_file = 0
     for entity in runtime.tts.values():
         if isinstance(entity, AssistLiveTTS):
-            engine = entity.resolve_fallback()
-            if engine is None:
+            try:
+                engine = fallback_engine(hass, entity.fallback_entity_id)
+            except HomeAssistantError:
+                continue
+            if not engine.available:
                 continue
             if engine.async_supports_streaming_input():
                 streaming += 1
@@ -100,17 +105,27 @@ async def async_get_config_entry_diagnostics(
             "iot_class": safe_label(iot_class) if iot_class else None,
         }
     agents = []
-    if settings.get("pipelines"):
-        pipelines = {p.id: p for p in assist_pipeline.async_get_pipelines(hass)}
-        for pipeline_id in settings["pipelines"].values():
-            if pipeline := pipelines.get(pipeline_id):
-                value = await entity_iot_class(hass, pipeline.conversation_engine)
-                agents.append(
-                    {
-                        "iot_class": safe_label(value) if value else None,
-                        "destination": destination(value),
-                    }
-                )
+    selectors = settings.get("pipeline_selects", {})
+    selected = (
+        selected_pipelines(
+            hass, selectors.values(), assist_pipeline.async_get_pipelines(hass)
+        )
+        if selectors
+        else {}
+    )
+    for device in settings.get("satellites", {}):
+        pipeline = selected.get(selectors.get(device))
+        value = (
+            await entity_iot_class(hass, pipeline.conversation_engine)
+            if pipeline is not None
+            else None
+        )
+        agents.append(
+            {
+                "iot_class": safe_label(value) if value else None,
+                "destination": destination(value),
+            }
+        )
     turns = []
     for record in runtime.ledger.latest.values():
         turns.append(

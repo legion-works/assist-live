@@ -4758,3 +4758,17 @@ A new health response with the same voice list clears a repair for a voice on th
 | `task check` | Exit 0, `2221 passed, 1 skipped` |
 | `task ha-minimum` | Exit 0, `2221 passed, 1 skipped` |
 | `task ha-2026-11` | Exit 0, `2222 passed` |
+
+## Satellite routing and configuration checks (2026-11-27 UTC)
+
+The repair finds a shared forwarding pipeline across entries. If no pipeline has the name from the selector state, the repair and diagnostics use the preferred pipeline.
+Setup refuses VAD and wake-word controls in the pipeline selector field. It ends when you add the fifth satellite.
+The pipeline lookup contract checks the preferred pipeline result and the errors for a missing pipeline or store.
+
+A replacement fallback with an unknown destination cannot use the previous entity's local decision.
+An event cursor above the protocol limit does not prevent a subscription. The other satellite keeps its correct cursor.
+Diagnostics report the selected pipeline's agent without changing fallback metadata or repair issues.
+Diagnostics show entry data after HA stops the entry or after a setup error.
+
+The setup and options flow tests give 100 % coverage of `config_flow.py`, with 92 of 92 branches.
+Bootstrap tests copy the project files without the Python virtual environments. They do not copy the HA 2026.11 test environment.

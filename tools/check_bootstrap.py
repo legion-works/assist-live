@@ -128,7 +128,6 @@ def check_bootstrap(root: str | Path) -> list[str]:
                     "cannot_connect",
                     "invalid_satellite",
                     "binding_used",
-                    "connection_limit",
                 ):
                     if not value["config"]["error"][error]:
                         raise ValueError("empty runtime error")
