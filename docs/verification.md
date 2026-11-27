@@ -4783,6 +4783,7 @@ The pipeline probe uses a new connection to remove temporary pipelines if it doe
 The virtual timer check uses the conversation response to make sure that cancellation was satisfactory.
 The package check makes sure that the archive has all listed integration files.
 The CI check makes sure that the HA and test plugin versions come from the matrix member.
+The transcript tests stop the write after the marker rename and after the data rename. After recovery, they check the pin and check for temporary files.
 
 ## Drift pass 42 corrections (2026-11-27 UTC)
 

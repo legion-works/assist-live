@@ -297,6 +297,42 @@ def test_changed_data_with_unchanged_pin_is_refused(tmp_path, capsys):
     assert "digest mismatch" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("step", ["marker", "data"])
+def test_recover_update_after_replacement(tmp_path, monkeypatch, step):
+    module = api()
+    labels, _ = dataset(1)
+    pending = records([reference(labels[0], pending=True)])
+    final = records([reference(labels[0])])
+    path = tmp_path / "correct_transcripts.jsonl"
+    pin = path.with_suffix(".sha256")
+    marker = tmp_path / f".{path.name}.pending"
+    module.write_data(path, pending)
+    old_pin = pin.read_bytes()
+    destination = marker if step == "marker" else path
+    expected = pending if step == "marker" else final
+    real_replace = Path.replace
+
+    def interrupted_replace(source, target):
+        result = real_replace(source, target)
+        if target == destination:
+            raise KeyboardInterrupt
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", interrupted_replace)
+        with pytest.raises(KeyboardInterrupt):
+            module.write_data(path, final)
+
+    assert marker.is_file()
+    assert pin.read_bytes() == old_pin
+    assert module.load_corpus(path) == expected
+    module.recover_update(path)
+    assert module.load_corpus(path) == expected
+    assert module.check_digest(path)
+    assert not marker.exists()
+    assert not list(tmp_path.glob(".stage-*"))
+
+
 @pytest.mark.parametrize("tamper", [False, True])
 def test_review_command_recovers_interruption_before_pin_replacement(
     tmp_path, monkeypatch, capsys, tamper
