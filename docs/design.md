@@ -92,7 +92,10 @@ The server gives HTTP 401 for an incorrect token.
 From client `0.1.0a3`, that result is `ProtocolError(kind="unauthorized")`, and other refusals stay `refused`.
 If setup or a subsequent server request gets `unauthorized`, the integration starts the HA reauthentication flow and continues, so that the fallback engines answer turns.
 The reauthentication flow gets a new token for the same server URL and reads the bindings with it.
+It refuses a token that a different entry uses for the same server.
 Then it stores the token and reloads the entry.
+
+HA keeps one reauthentication flow for each entry, and the integration makes no different repair issue for the token.
 The config flow shows `invalid_auth` for an incorrect token.
 
 HA can set up the fallback engines after assist-live, and an engine can go out of service when its integration reloads.
@@ -155,6 +158,8 @@ The counter `turn_opens_dropped` counts removed refused opens, not events.
 Maintenance removes a pending open if the satellite has a newer turn.
 It reports `stale_turn_open` and adds the open to `turn_opens_dropped`.
 It removes the pending events for that open and adds them to `timing_events_dropped`.
+The server also uses the HA clock to compare open times.
+If the HA clock moves back, a turn that opens before the clock gets back to the earlier time is `incomplete` on the server.
 
 Diagnostics give `counters_since_utc_ns`, the time when these counters started.
 If this time changes, the integration started its counters again, and a report does not compare the two values.

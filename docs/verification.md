@@ -4750,7 +4750,7 @@ A new health response with the same voice list clears a repair for a voice on th
 | Regression cases on `6b7aae3` | 14 test failures |
 | Regression cases with the corrections | `14 passed` |
 | Scratch mutations | One test failure for each of the eight mutations |
-| Active text after TTS failure on `398bd0a` | 2 test failures |
+| Active text after TTS failure on the first reviewed version of this change | 2 test failures |
 | Active text with the new wait | `2 passed` |
 | Total text wait mutation | 2 test failures |
 | Active text with a 300 ms event loop pause and a test clock | `2 passed` |
@@ -4783,3 +4783,11 @@ The pipeline probe uses a new connection to remove temporary pipelines if it doe
 The virtual timer check uses the conversation response to make sure that cancellation was satisfactory.
 The package check makes sure that the archive has all listed integration files.
 The CI check makes sure that the HA and test plugin versions come from the matrix member.
+
+## Drift pass 42 corrections (2026-11-27 UTC)
+
+A read-only drift review of the open changes asked for these documentation corrections:
+- The reauthentication record names the refusal of a token that a different entry uses, one flow for each entry, and no different repair issue.
+- The `server_unhealthy` fallback cause names a timing-store fault.
+- The turn records name the HA clock rule for late turn opens.
+- The `dependency-transparency` evidence: on 2026-11-27, `git ls-remote --tags origin 'client-v*'` in assist-live-server showed the annotated tags `client-v0.1.0a1` at `f3c1341` and `client-v0.1.0a2` at `477a594` on the public remote. The client publish workflow published those versions from those commits.

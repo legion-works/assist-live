@@ -181,7 +181,7 @@ The log does not contain error messages, addresses, tokens, transcripts, or repl
 |---|---|
 | `health_timeout` | The health deadline expired. |
 | `health_error` | The health request did not complete correctly. |
-| `server_unhealthy` | Health reports an unhealthy server. |
+| `server_unhealthy` | Health reports an unhealthy server. This also occurs when the server reports `unavailable.timing_store`, because the server cannot open a turn without its timing store. |
 | `stt_unsupported` | The server does not report an STT function. |
 | `tts_unsupported` | The server does not report a TTS function. |
 | `not_local_only` | The server does not report local-only mode. |
