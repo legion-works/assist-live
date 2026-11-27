@@ -37,6 +37,7 @@ from tools.corpus import (
 )
 from tools.ha_websocket import ha_session
 from tools.measurement import LOSS_FLAGS, capture_loss, loss_window
+from tools.private_evidence import external_output, write_private_jsonl
 from tools.test_environment import (
     validate_intent_action_evidence,
     validate_run_evidence,
@@ -1079,6 +1080,7 @@ async def run(
     args: argparse.Namespace, selector: ProfileSelector | None = None
 ) -> list[Row]:
     profiles = check_options(args)
+    output = external_output(args.output)
     rows = load_corpus(args.labels)
     frozen = frozen_corpus(args.labels, args.labels.parent / "corpus.sha256", rows)
     if not frozen and args.limit is None:
@@ -1212,9 +1214,7 @@ async def run(
                     else:
                         row["failures"].append("SAMPLE_" + type(error).__name__.upper())
                 pending.append((label, row))
-                args.output.write_text(
-                    "".join(json.dumps(item) + "\n" for _, item in pending)
-                )
+                write_private_jsonl(output, (item for _, item in pending))
         await asyncio.sleep(1.0)
         loss_end = await capture_loss(loss_session, **loss_options)
         loss_end["settle_ms"] = 1000
@@ -1249,7 +1249,7 @@ async def run(
             row["failures"].extend(errors)
             row["complete"] = False
         completed.append(row)
-        args.output.write_text("".join(json.dumps(item) + "\n" for _, item in pending))
+    write_private_jsonl(output, completed)
     return completed
 
 
@@ -1257,9 +1257,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         rows = asyncio.run(run(args))
-        args.output.write_text(
-            "".join(json.dumps(row, allow_nan=False) + "\n" for row in rows)
-        )
     except (ReplayError, OSError, ValueError) as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1

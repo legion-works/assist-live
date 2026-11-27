@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 
 import pytest
 
@@ -124,8 +125,10 @@ def dataset(count=2, phase="p0", latency=500, *, offset=0, set_name="replay"):
             if phase == "p1" and item["source"] == "integration":
                 item["source"] = "server"
         row["events"][2]["t_utc_ns"] = 11_500_000_000 + latency * 1_000_000
+        speech = event("speech_start", 1150, row["turn_id"], "server")
+        speech["data"]["onset_ms"] = 100
+        row["events"].append(speech)
         for stage, ms in (
-            ("speech_start", 1100),
             ("end_candidate", 1400),
             ("tts_first_text", 1700),
         ):
@@ -179,20 +182,36 @@ def test_report_speech_latency_uses_audio_start_without_changing_mic_open(histor
     if history is not None:
         mic["data"]["pre_roll_ms"] = history
     speech = next(item for item in row["events"] if item["stage"] == "speech_start")
-    speech["t_utc_ns"] = mic["t_utc_ns"] + (100 - (history or 0)) * 1_000_000
+    speech.update(t_utc_ns=mic["t_utc_ns"] + 150_000_000, data={"onset_ms": 100})
     before = copy.deepcopy(row)
     steps = group_timings([row])["steps"]
-    assert steps["mic_to_speech"]["p50_ms"] == 100
+    assert steps["mic_to_speech"]["p50_ms"] == 100, "ACOUSTIC_ONSET_NOT_DETECTION"
     assert steps["wake_to_mic"]["p50_ms"] == 1000
     assert timing(row, "mic_open")["t_utc_ns"] == mic["t_utc_ns"]
     assert steps["mic_to_speech"]["quality"] == {"estimate": 1}
-    assert steps["mic_to_speech"]["uncertainty_p90_ms"] == 4
+    assert steps["mic_to_speech"]["uncertainty_p90_ms"] == 36
+    assert steps["speech_to_candidate"]["p50_ms"] == 300 + (history or 0)
+    assert steps["speech_start_to_playback"]["p50_ms"] == 900 + (history or 0)
+    assert steps["speech_start_to_playback"]["uncertainty_p90_ms"] == 36
     if history:
         assert steps["mic_to_speech"]["methods"] == {
-            "mic_open minus pre_roll_ms;recorded-event": 1
+            "mic_open minus pre_roll_ms;turn_audio_start plus onset_ms": 1
         }
     assert row == before
     assert build(rows, dataset(1)[0])["sample_count"] == 1
+
+
+@pytest.mark.parametrize("data", [{}, {"onset_ms": -1}, {"onset_ms": True}])
+def test_no_acoustic_step_without_valid_stored_onset(data):
+    from tools.report import group_timings
+
+    _, rows = dataset(1)
+    speech = next(item for item in rows[0]["events"] if item["stage"] == "speech_start")
+    speech["data"] = data
+    steps = group_timings(rows)["steps"]
+    for step in ("mic_to_speech", "speech_to_candidate", "speech_start_to_playback"):
+        assert steps[step]["missing"] == 1
+    assert steps["last_voice_to_playback"]["n"] == 1
 
 
 @pytest.mark.parametrize("history", [-1, 1001, True, 1.5, "300", None])
@@ -645,6 +664,34 @@ def test_word_error_rate_counts_substitutions_insertions_and_deletions():
     assert word_errors("ONE, two", "one two three") == (1, 2)
 
 
+@pytest.mark.parametrize("option", ["output", "markdown"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_report_refuses_repository_output(option, alias, tmp_path, monkeypatch, capsys):
+    from tools import private_evidence, report
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    monkeypatch.setattr(private_evidence, "ROOT", root)
+    output_dir = root
+    if alias:
+        output_dir = tmp_path / "alias"
+        output_dir.symlink_to(root, target_is_directory=True)
+    paths = {
+        name: tmp_path / name
+        for name in ("labels", "runs", "calibration", "native", "output", "markdown")
+    }
+    paths[option] = output_dir / option
+    args = ["p0", "--split", "held_out"]
+    for name, path in paths.items():
+        args.extend([f"--{name}", str(path)])
+
+    assert report.main(args) == 1
+    assert "evidence output must be outside the repository" in capsys.readouterr().out
+    assert not list(root.iterdir())
+    assert not paths["output"].exists()
+    assert not paths["markdown"].exists()
+
+
 def test_cli_check_writes_reports_only_after_validating(tmp_path, capsys):
     from tools.report import main
 
@@ -671,7 +718,13 @@ def test_cli_check_writes_reports_only_after_validating(tmp_path, capsys):
     args = ["p0", "--split", "held_out", "--check", "--markdown", str(markdown)]
     for key, path in paths.items():
         args.extend(["--" + key, str(path)])
-    assert main(args) == 0
+    previous = os.umask(0o022)
+    try:
+        assert main(args) == 0
+    finally:
+        os.umask(previous)
+    assert paths["output"].stat().st_mode & 0o777 == 0o600, "PRIVATE_REPORT_MODE"
+    assert markdown.stat().st_mode & 0o777 == 0o600, "PRIVATE_MARKDOWN_MODE"
     assert "PASS P0" in capsys.readouterr().out
     assert "last_voice_to_playback" in markdown.read_text()
     paths["output"].unlink()

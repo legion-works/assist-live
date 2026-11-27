@@ -68,6 +68,11 @@ Their gates give unsatisfactory results, also when the recognized text agrees wi
 
 ## Uncertainty
 
+The report adds the recorded `onset_ms` to the turn audio start to estimate the first voice sample.
+This time is not the detector event time.
+The estimate uses the device clock uncertainty plus one detector frame (32 ms).
+Without an onset value, the report does not give a first-voice step for that turn.
+
 A step adds the uncertainty of its two endpoints.
 A host event with measured quality and no uncertainty contributes 0 ms.
 A device event must include the uncertainty of its conversion to host time.

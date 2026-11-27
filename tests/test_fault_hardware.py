@@ -284,6 +284,15 @@ def hardware_row():
     return row
 
 
+def test_playback_failure_cannot_pass_with_healthy_trial_evidence():
+    row = hardware_row()
+    row["stage"] = "after-final"
+    set_reasons(row, "after-final")
+    assert fault_runner.trial_status(row) == "passed"
+    row["failures"] = ["PLAYBACK_FAILED"]
+    assert fault_runner.trial_status(row) == "failed", "HARDWARE_PLAYBACK_FAILURE_VETO"
+
+
 @pytest.mark.parametrize("stopped_ns", [20_000_000_000, 20_000_000_001])
 def test_after_final_stop_must_complete_before_reply_end(stopped_ns):
     row = hardware_row()

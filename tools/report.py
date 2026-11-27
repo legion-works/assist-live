@@ -28,6 +28,7 @@ from tools.fault_runner import fault_gate
 from tools.measurement import LOSS_FLAGS, endpoint_uncertainty, loss_window
 from tools.metrics import rate
 from tools.native_matrix import validate_native_matrix
+from tools.private_evidence import external_output, write_private
 from tools.result_text import words
 from tools.test_environment import intent_matches, validate_intent_action_evidence
 
@@ -35,8 +36,8 @@ Row = dict[str, Any]
 REQUIRED = RUN_FIELDS
 STEPS = {
     "wake_to_mic": ("wake_detected", "mic_open"),
-    "mic_to_speech": ("turn_audio_start", "speech_start"),
-    "speech_to_candidate": ("speech_start", "end_candidate"),
+    "mic_to_speech": ("turn_audio_start", "acoustic_speech_start"),
+    "speech_to_candidate": ("acoustic_speech_start", "end_candidate"),
     "candidate_to_decision": ("end_candidate", "end_decision"),
     "decision_to_final": ("end_decision", "stt_final"),
     "agent": ("stt_final", "tts_first_text"),
@@ -44,7 +45,7 @@ STEPS = {
     "delivery": ("tts_first_byte", "playback_start"),
     "playback": ("playback_start", "playback_end"),
     "end_decision_to_playback": ("end_decision", "playback_start"),
-    "speech_start_to_playback": ("speech_start", "playback_start"),
+    "speech_start_to_playback": ("acoustic_speech_start", "playback_start"),
     "last_voice_to_playback": ("last_voice", "playback_start"),
     "last_voice_to_tts_first_byte": ("last_voice", "tts_first_byte"),
 }
@@ -160,6 +161,20 @@ def timing(row: Row, stage: str) -> Row | None:
             **mic,
             "t_utc_ns": mic["t_utc_ns"] - history * 1_000_000,
             "method": "mic_open minus pre_roll_ms" if history else "recorded-event",
+        }
+    if stage == "acoustic_speech_start":
+        speech = timing(row, "speech_start")
+        audio = timing(row, "turn_audio_start")
+        data = speech.get("data") if speech is not None else None
+        onset = data.get("onset_ms") if isinstance(data, dict) else None
+        if audio is None or type(onset) is not int or onset < 0:
+            return None
+        uncertainty = endpoint_uncertainty(audio)
+        return {
+            "t_utc_ns": audio["t_utc_ns"] + onset * 1_000_000,
+            "quality": "estimate",
+            "uncertainty_ms": uncertainty + 32 if uncertainty is not None else None,
+            "method": "turn_audio_start plus onset_ms",
         }
     if stage == "last_voice":
         if row["alignment"] is None:
@@ -847,6 +862,8 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--latency-profile", choices=("safe",), default="safe")
     args = parser.parse_args(argv)
     try:
+        output = external_output(args.output)
+        markdown_output = external_output(args.markdown) if args.markdown else None
         labels = load_corpus(args.labels)
         if not frozen_corpus(args.labels, args.labels.parent / "corpus.sha256", labels):
             raise ReplayError("BLOCKED corpus not frozen")
@@ -870,9 +887,9 @@ def main(argv: list[str] | None = None) -> int:
             faults=json.loads(args.faults.read_text()) if args.phase == "p1" else None,
             correct_transcripts=correct_transcripts,
         )
-        args.output.write_text(json.dumps(report, indent=2) + "\n")
-        if args.markdown:
-            args.markdown.write_text(markdown(report))
+        write_private(output, (json.dumps(report, indent=2) + "\n",))
+        if markdown_output is not None:
+            write_private(markdown_output, (markdown(report),))
         names = {
             "completeness": "P0 completeness>=95%"
             if args.phase == "p0"

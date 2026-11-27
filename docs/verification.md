@@ -4785,6 +4785,18 @@ The package check makes sure that the archive has all listed integration files.
 The CI check makes sure that the HA and test plugin versions come from the matrix member.
 The transcript tests stop the write after the marker rename and after the data rename. After recovery, they check the pin and check for temporary files.
 
+## Measurement and fault tool checks (2026-11-27 UTC)
+
+- The text test sends the timer cancel command after a phase error. If the cancel command gives an error, the output shows its type, also when the error has no message.
+- The replay commands for acceptance include the HA counter inputs.
+- A hardware fault trial with `PLAYBACK_FAILED` gives an unsatisfactory result.
+- The report uses the recorded onset for first-voice steps.
+- Replay, recorder, and report files go to locations external to the repository. The tools also refuse a `symlink` destination in the repository. They replace the files only after a complete write and give file access only to the owner. This includes the JSON and Markdown reports.
+
+The regression cases use synthetic data. They do not show hardware acceptance.
+
+The WebSocket and report test files gave 161 satisfactory results with HA 2026.10.4.
+
 ## Drift pass 42 corrections (2026-11-27 UTC)
 
 A read-only drift review of the open changes asked for these documentation corrections:

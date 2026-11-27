@@ -79,6 +79,9 @@ Device playback, LED feedback, and physical mute stay unobserved without hardwar
 
 ## P0 report
 
+The report output paths must refer to locations external to the repository.
+Only the file owner can read or write the output files.
+
 First complete [device replay and calibration](device-replay.md) with the frozen held-out corpus.
 Use the forwarding baseline with standard HA STT and non-streaming TTS engines.
 Record engine versions, voice, endpoint settings, audio format, and hardware class with one immutable baseline configuration ID.
@@ -112,8 +115,11 @@ Acoustic values keep their estimated quality and measurement uncertainty.
 The `mic_to_speech` step starts at the turn-audio start, not the microphone-open event.
 Its start is `mic_open.t_utc_ns - data.pre_roll_ms * 1000000` in nanoseconds.
 This includes voice in the audio history before the microphone-open event.
-The step keeps the microphone event's quality and uncertainty.
 For nonzero history, its method is `mic_open minus pre_roll_ms`.
+
+The step start keeps the microphone event's quality and uncertainty.
+The step end uses the recorded onset, so the step has `estimate` quality.
+See [uncertainty](measurement-rules.md#uncertainty) for the sum of the two endpoint uncertainties.
 
 A missing history field means 0. Invalid history causes refusal before statistics.
 

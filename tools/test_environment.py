@@ -16,6 +16,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.ha_websocket import HA_URL, checked_ha_url, ha_session, require_ha_session
+from tools.private_evidence import external_output, write_private_jsonl
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures"
@@ -510,6 +511,8 @@ async def run_live(
     *,
     remove: bool = False,
 ) -> list[str]:
+    if output is not None:
+        output = external_output(output)
     origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
     if not isinstance(token, str) or not token:
@@ -607,44 +610,58 @@ async def run_live(
             )
             await command("subscribe_events", event_type="assist_live_test_record")
             for phase in ("P0", "P1"):
-                for group, rows in groups.items():
-                    for row in rows:
-                        before = len(pending)
-                        result = await command(
+                phase_error: BaseException | None = None
+                try:
+                    for group, rows in groups.items():
+                        for row in rows:
+                            before = len(pending)
+                            result = await command(
+                                "conversation/process",
+                                text=row["transcript"],
+                                language="en",
+                                agent_id=f"conversation.assist_live_{group}",
+                                device_id=device_id,
+                            )
+                            # A public command drains events queued before its result.
+                            await command("conversation/agent/list")
+                            if len(pending) != before + 1:
+                                failures.append(f"{row['id']}: missing agent record")
+                                continue
+                            record = pending[-1]
+                            record.update(
+                                recording_id=row["id"],
+                                phase=phase,
+                                run_id="text-validation",
+                                baseline_configuration_id="text-validation",
+                            )
+                            errors = validate_run_evidence(record)
+                            errors += validate_intent_action_evidence(record, row)
+                            if (
+                                result["response"]["speech"]["plain"]["speech"]
+                                != record["reply"]
+                            ):
+                                errors.append("reply differs")
+                            failures.extend(f"{row['id']}: {error}" for error in errors)
+                            records.append(record)
+                except BaseException as error:
+                    phase_error = error
+                    raise
+                finally:
+                    try:
+                        await command(
                             "conversation/process",
-                            text=row["transcript"],
+                            text="cancel all timers",
                             language="en",
-                            agent_id=f"conversation.assist_live_{group}",
+                            agent_id="conversation.home_assistant",
                             device_id=device_id,
                         )
-                        # A public command drains events queued before its result.
-                        await command("conversation/agent/list")
-                        if len(pending) != before + 1:
-                            failures.append(f"{row['id']}: missing agent record")
-                            continue
-                        record = pending[-1]
-                        record.update(
-                            recording_id=row["id"],
-                            phase=phase,
-                            run_id="text-validation",
-                            baseline_configuration_id="text-validation",
-                        )
-                        errors = validate_run_evidence(record)
-                        errors += validate_intent_action_evidence(record, row)
-                        if (
-                            result["response"]["speech"]["plain"]["speech"]
-                            != record["reply"]
-                        ):
-                            errors.append("reply differs")
-                        failures.extend(f"{row['id']}: {error}" for error in errors)
-                        records.append(record)
-                await command(
-                    "conversation/process",
-                    text="cancel all timers",
-                    language="en",
-                    agent_id="conversation.home_assistant",
-                    device_id=device_id,
-                )
+                    except Exception as cleanup_error:
+                        if phase_error is None:
+                            raise
+                        cause = type(cleanup_error).__name__
+                        if detail := str(cleanup_error).strip():
+                            cause = f"{cause}: {detail}"
+                        phase_error.add_note(f"timer cleanup failed: {cause}")
             for row_id in {record["recording_id"] for record in records}:
                 pair = [
                     record for record in records if record["recording_id"] == row_id
@@ -655,24 +672,19 @@ async def run_live(
                 ):
                     failures.append(f"{row_id}: P0 and P1 differ")
     if output is not None:
-        if output.resolve().is_relative_to(ROOT):
-            raise ValueError("test records must stay external to the repository")
-        output.write_text(
-            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-        )
+        write_private_jsonl(output, records)
     return failures
 
 
 async def record_device(
     token_file: Path, output: Path, count: int, run_id: str, config: str
 ) -> list[str]:
+    output = external_output(output)
     if count <= 0 or not run_id or not config or output.exists():
         raise ValueError(
             "new output, positive count, run ID, and baseline "
             "configuration are necessary"
         )
-    if output.resolve().is_relative_to(ROOT):
-        raise ValueError("test records must stay external to the repository")
     origin = checked_ha_url(URL)
     token = json.loads(token_file.read_text())["token"]
     records: list[dict[str, Any]] = []
@@ -707,9 +719,7 @@ async def record_device(
                     if any(item["turn_id"] == record["turn_id"] for item in records):
                         return ["duplicate device turn"]
                     records.append(record)
-                    output.write_text(
-                        "".join(json.dumps(item) + "\n" for item in records)
-                    )
+                    write_private_jsonl(output, records)
     return []
 
 
@@ -782,6 +792,8 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.CalledProcessError,
     ) as error:
         print(f"FAIL virtual test environment: {type(error).__name__}: {error}")
+        for note in getattr(error, "__notes__", ()):
+            print(f"FAIL {note}")
         return 1
     print("PASS virtual intent coverage")
     print("PASS short and long groups")

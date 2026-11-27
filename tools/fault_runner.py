@@ -230,8 +230,11 @@ def trial_status(trial: Row) -> str:
 def acceptable(trial: Row) -> bool:
     if trial.get("scope") == "hardware":
         events = trial.get("events", [])
+        failures = trial.get("failures", [])
         if (
-            not isinstance(events, list)
+            not isinstance(failures, list)
+            or "PLAYBACK_FAILED" in failures
+            or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)
             or sum(event.get("stage") == "run-end" for event in events) != 1
             or any(event.get("stage") == "error" for event in events)

@@ -40,8 +40,12 @@ The clock files contain one of these JSON objects:
 WARNING: Get consent from each person in the room before microphone capture.
 Use an isolated room without household voice.
 The capture adapter keeps PCM in memory and clears its buffer after each sample.
-The output contains timing values, sample indices, transcripts, intents, and operation records, not microphone audio.
 Do not save or publish ambient audio without written consent that includes public test-audio use.
+
+The output contains timing values, sample indices, transcripts, intents, and operation records, not microphone audio.
+The output path must refer to a location external to the repository.
+Replay and the device recorder replace each output file only after the new file is complete.
+Only the file owner can read or write the file.
 Check output for personal data before publication.
 
 Use only the isolated [virtual intent environment](virtual-intents.md).
@@ -126,11 +130,13 @@ Acceptance validation refuses them.
 A frozen corpus manifest that agrees with the corpus records and each recording hash is necessary for acceptance.
 The current corpus is not frozen.
 The tool refuses acceptance with `BLOCKED corpus not frozen` until corpus collection and voice-boundary checks are complete.
-These commands use hardware:
+These commands use hardware.
+Set `HA_URL`, `HA_TOKEN_FILE`, `INTEGRATION_ENTRY`, and `DEVICE_LOSS_ENTITY` for the same device and HA instance.
+See [counter sources](measurement-rules.md#missing-events).
 
 ```sh
-uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --acceptance --output "$RUNROOT/p0-runs.jsonl"
-uv run python tools/device_replay.py --phase p1 --profiles safe,fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --acceptance --output "$RUNROOT/p1-runs.jsonl"
+uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p0-runs.jsonl"
+uv run python tools/device_replay.py --phase p1 --profiles safe,fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-runs.jsonl"
 ```
 
 Without `--limit`, replay also uses acceptance mode when `--acceptance` is missing.

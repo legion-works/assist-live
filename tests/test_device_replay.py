@@ -1,9 +1,12 @@
 import asyncio
 import copy
+import errno
 import hashlib
 import json
 import math
+import os
 import random
+import shlex
 import struct
 import subprocess
 import sys
@@ -216,6 +219,46 @@ def test_acceptance_refuses_limit():
     with pytest.raises(ReplayError, match="LIMIT_NOT_ALLOWED_IN_ACCEPTANCE"):
         check_options(options("--acceptance", "--limit", "2"))
     assert check_options(options("--limit", "2")) == ["baseline"]
+
+
+def test_documented_acceptance_commands_supply_ha_counter_sources():
+    procedures = (ROOT / "docs/testing/device-replay.md").read_text().splitlines()
+    commands = [
+        parser().parse_args(shlex.split(line)[4:])
+        for line in procedures
+        if line.startswith("uv run python tools/device_replay.py ")
+        and "--acceptance" in line
+    ]
+    assert {args.phase for args in commands} == {"p0", "p1"}
+    for args in commands:
+        assert all(
+            (
+                args.ha_url,
+                args.ha_token_file,
+                args.integration_entry,
+                args.device_loss_entity,
+            )
+        ), f"ACCEPTANCE_COUNTER_SOURCES_{args.phase.upper()}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", [False, True])
+async def test_replay_refuses_repository_output_before_corpus_load(
+    alias, tmp_path, monkeypatch
+):
+    args = options()
+    args.output = ROOT / "forbidden-evidence.jsonl"
+    if alias:
+        link = tmp_path / "link"
+        link.symlink_to(ROOT, target_is_directory=True)
+        args.output = link / args.output.name
+
+    def no_corpus(*args):
+        pytest.fail("REPLAY_OUTPUT_CHECK_PRECEDES_CORPUS_LOAD")
+
+    monkeypatch.setattr("tools.device_replay.load_corpus", no_corpus)
+    with pytest.raises(ValueError, match="outside the repository"):
+        await run(args)
 
 
 @pytest.mark.parametrize(
@@ -680,7 +723,7 @@ async def test_acceptance_requires_frozen_corpus_smoke_does_not(tmp_path, capsys
     labels = tmp_path / "labels.jsonl"
     labels.write_text(json.dumps(label) + "\n")
     args = options()
-    args.labels = labels
+    args.labels, args.output = labels, tmp_path / "runs.jsonl"
     with pytest.raises(ReplayError, match="BLOCKED corpus not frozen"):
         await run(args)
     args.limit = 2
@@ -1283,8 +1326,9 @@ def test_alignment_uncertainty_uses_the_shared_boundary_tolerance(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replace_failure", [False, True])
 async def test_one_failed_attempt_of_three_is_written_and_not_dropped(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, replace_failure
 ):
     labels = [
         {
@@ -1361,7 +1405,31 @@ async def test_one_failed_attempt_of_three_is_written_and_not_dropped(
     monkeypatch.setattr("tools.device_replay.replay_sample", replay)
     args = options()
     args.labels, args.output = tmp_path / "labels.jsonl", tmp_path / "runs.jsonl"
-    rows = await run(args)
+    if replace_failure:
+        replace = Path.replace
+
+        def reject_second(source, target):
+            if target == args.output and args.output.exists():
+                assert source.parent == args.output.parent
+                assert source.stat().st_mode & 0o777 == 0o600
+                raise OSError(errno.ENOSPC, "synthetic replacement failure")
+            return replace(source, target)
+
+        monkeypatch.setattr(Path, "replace", reject_second)
+        with pytest.raises(OSError, match="synthetic replacement failure"):
+            await run(args)
+        checkpoint = json.loads(args.output.read_text())
+        assert checkpoint["clip_id"] == "clip-0"
+        assert not checkpoint["failures"]
+        assert not checkpoint["complete"]
+        assert not list(tmp_path.glob("*.tmp"))
+        return
+    previous = os.umask(0o022)
+    try:
+        rows = await run(args)
+    finally:
+        os.umask(previous)
+    assert args.output.stat().st_mode & 0o777 == 0o600, "PRIVATE_REPLAY_MODE"
     assert len(rows) == 3
     assert [row["complete"] for row in rows] == [True, False, True]
     assert "MISSING_DEVICE_PLAYBACK_END" in rows[1]["failures"]

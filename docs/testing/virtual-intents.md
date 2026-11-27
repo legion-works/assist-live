@@ -97,11 +97,12 @@ A timer record shows a native `started` callback, not a completed timer.
 Only an `action_done` HA response can satisfy the operation check.
 Missing fields, empty operation records, and text streams that are not complete cause failure.
 The tool compares each timer interval with its corpus `intent` value and compares response records across the two phase runs.
-It cancels native timers after each phase run.
+It sends the command to cancel native timers after each phase run, also after an error.
 
 No record is part of default runtime transcript storage.
 Use `--output "$TEST_RECORDS"` to keep JSONL records external to the repository.
 The output contains transcripts. Do not publish it without a data check.
+Only the file owner can read or write the file.
 
 ### Device operation bridge
 
