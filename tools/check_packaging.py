@@ -83,6 +83,9 @@ def check_packaging(root: str | Path) -> list[str]:
                 failures.append(f"test agent package path {name}")
             if name not in PACKAGE_FILES:
                 failures.append(f"unexpected package file {name}")
+        for name in sorted(PACKAGE_FILES):
+            if not (package / name).is_file():
+                failures.append(f"package file {name}")
         manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
         hacs = json.loads((root / "hacs.json").read_text(encoding="utf-8"))
         for field, expected in {
@@ -128,14 +131,6 @@ def check_packaging(root: str | Path) -> list[str]:
             failures.append("HACS homeassistant")
         if set(hacs) - {"name", "homeassistant"}:
             failures.append("HACS fields")
-        for name in (
-            "__init__.py",
-            "config_flow.py",
-            "strings.json",
-            "translations/en.json",
-        ):
-            if not (package / name).is_file():
-                failures.append(f"package file {name}")
         strings = json.loads((package / "strings.json").read_text(encoding="utf-8"))
         english = json.loads(
             (package / "translations/en.json").read_text(encoding="utf-8")

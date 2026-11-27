@@ -8,10 +8,15 @@ import tempfile
 import wave
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, BinaryIO, TypeGuard
+from typing import TYPE_CHECKING, Any, BinaryIO, TypeGuard
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
+
+if TYPE_CHECKING or __package__:
+    from .file_staging import stage_file
+else:
+    from file_staging import stage_file
 
 Row = dict[str, Any]
 LICENSES = {"CC0-1.0", "CC-BY-4.0"}
@@ -615,29 +620,23 @@ def fetch(
                     continue
                 if archive_path not in verified:
                     cache.mkdir(parents=True, exist_ok=True)
-                    if not archive_path.exists():
-                        with tempfile.TemporaryFile(dir=cache) as temporary:
+                    if archive_path.exists():
+                        with archive_path.open("rb") as cached:
+                            digest = hashlib.file_digest(cached, "sha256").hexdigest()
+                        if digest != item["source_revision"]:
+                            raise ValueError("archive hash mismatch")
+                    else:
+                        with stage_file(archive_path) as temporary:
                             with urlopen(url, timeout=30) as response:
                                 if not public_source(response.geturl()):
-                                    failures.append(f"row {number} source_uri redirect")
-                                    continue
+                                    raise ValueError("source_uri redirect")
                                 copy_limited(response, temporary, max_download_bytes)
                             temporary.seek(0)
                             digest = hashlib.file_digest(
                                 temporary, "sha256"
                             ).hexdigest()
                             if digest != item["source_revision"]:
-                                failures.append(f"row {number} archive hash mismatch")
-                                continue
-                            temporary.seek(0)
-                            with archive_path.open("wb") as output:
-                                while chunk := temporary.read(1024 * 1024):
-                                    output.write(chunk)
-                    with archive_path.open("rb") as cached:
-                        digest = hashlib.file_digest(cached, "sha256").hexdigest()
-                    if digest != item["source_revision"]:
-                        failures.append(f"row {number} archive hash mismatch")
-                        continue
+                                raise ValueError("archive hash mismatch")
                     verified.add(archive_path)
                 with zipfile.ZipFile(archive_path) as bundle:
                     record = next(
@@ -690,7 +689,8 @@ def fetch(
                 failures.append(f"row {number} fetched audio hash mismatch")
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
+            with stage_file(path) as temporary:
+                temporary.write(data)
         except ValueError as error:
             failures.append(f"row {number} {error}")
         except RuntimeError:

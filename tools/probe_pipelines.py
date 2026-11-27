@@ -6,7 +6,7 @@ import json
 import re
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,7 +19,15 @@ if __package__ in (None, ""):
 from tools.ha_websocket import checked_ha_url, ha_session
 
 Command = Callable[..., Awaitable[Any]]
+Connect = Callable[[], AbstractAsyncContextManager[Command]]
 ROOT = Path(__file__).resolve().parents[1]
+COMMAND_ERRORS = (
+    OSError,
+    ValueError,
+    KeyError,
+    aiohttp.ClientError,
+    aiohttp.WSMessageTypeError,
+)
 
 
 def pipeline_fields(
@@ -84,62 +92,85 @@ def validate_report(path: Path) -> list[str]:
 
 
 async def probe_cycle(
-    command: Command, stt_engine: str, tts_engine: str, tts_voice: str
+    connect: Connect, stt_engine: str, tts_engine: str, tts_voice: str
 ) -> list[str]:
-    before = await command("assist_pipeline/pipeline/list")
-    voices = await command("tts/engine/voices", engine_id=tts_engine, language="en")
-    if not any(v["voice_id"] == tts_voice for v in voices.get("voices") or []):
-        raise ValueError("selected voice is not in the engine voice list")
-    created = []
+    before = {}
+    attempted: set[str] = set()
     errors = []
     try:
-        for number in (1, 2):
-            fields = pipeline_fields(stt_engine, tts_engine, tts_voice)
-            fields["name"] += f" {uuid4().hex} {number}"
-            pipeline = await command("assist_pipeline/pipeline/create", **fields)
-            created.append(pipeline["id"])
-            found = await command(
-                "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
+        async with connect() as command:
+            before = await command("assist_pipeline/pipeline/list")
+            voices = await command(
+                "tts/engine/voices", engine_id=tts_engine, language="en"
             )
-            if any(found.get(key) != value for key, value in fields.items()):
-                errors.append("create/get: pipeline fields differ")
-            await command(
-                "assist_pipeline/pipeline/update",
-                pipeline_id=pipeline["id"],
-                **{**fields, "tts_voice": None},
-            )
-            found = await command(
-                "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
-            )
-            if found["tts_voice"] is not None:
-                errors.append("update/get: voice did not clear")
-            await command(
-                "assist_pipeline/pipeline/update",
-                pipeline_id=pipeline["id"],
-                **fields,
-            )
-            found = await command(
-                "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
-            )
-            if any(found.get(key) != value for key, value in fields.items()):
-                errors.append("update/get: pipeline fields differ")
-    finally:
-        for pipeline_id in created:
-            try:
-                await command(
-                    "assist_pipeline/pipeline/delete", pipeline_id=pipeline_id
+            if not any(v["voice_id"] == tts_voice for v in voices.get("voices") or []):
+                raise ValueError("selected voice is not in the engine voice list")
+            for number in (1, 2):
+                fields = pipeline_fields(stt_engine, tts_engine, tts_voice)
+                fields["name"] += f" {uuid4().hex} {number}"
+                attempted.add(fields["name"])
+                pipeline = await command("assist_pipeline/pipeline/create", **fields)
+                found = await command(
+                    "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
                 )
-            except ValueError, aiohttp.ClientError, TimeoutError:
-                errors.append("cleanup: pipeline delete failed")
-        after = await command("assist_pipeline/pipeline/list")
-        if {p["id"] for p in before["pipelines"]} != {
-            p["id"] for p in after["pipelines"]
-        }:
-            errors.append("cleanup: pipeline IDs differ")
-        if before["preferred_pipeline"] != after["preferred_pipeline"]:
-            errors.append("preferred pipeline changed")
+                if any(found.get(key) != value for key, value in fields.items()):
+                    errors.append("create/get: pipeline fields differ")
+                await command(
+                    "assist_pipeline/pipeline/update",
+                    pipeline_id=pipeline["id"],
+                    **{**fields, "tts_voice": None},
+                )
+                found = await command(
+                    "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
+                )
+                if found["tts_voice"] is not None:
+                    errors.append("update/get: voice did not clear")
+                await command(
+                    "assist_pipeline/pipeline/update",
+                    pipeline_id=pipeline["id"],
+                    **fields,
+                )
+                found = await command(
+                    "assist_pipeline/pipeline/get", pipeline_id=pipeline["id"]
+                )
+                if any(found.get(key) != value for key, value in fields.items()):
+                    errors.append("update/get: pipeline fields differ")
+    finally:
+        if attempted:
+            try:
+                async with connect() as command:
+                    errors.extend(await reconcile(command, before, attempted))
+            except COMMAND_ERRORS as cleanup_error:
+                errors.append(
+                    "cleanup: cannot verify pipeline list "
+                    f"({type(cleanup_error).__name__})"
+                )
+            if errors:
+                print(f"Probe names: {', '.join(sorted(attempted))}")
         for error in errors:
             print(f"FAIL {error}")
+    return errors
+
+
+async def reconcile(
+    command: Command, before: dict[str, Any], names: set[str]
+) -> list[str]:
+    errors = []
+    before_ids = {p["id"] for p in before["pipelines"]}
+    current = await command("assist_pipeline/pipeline/list")
+    for pipeline in current["pipelines"]:
+        if pipeline["name"] in names and pipeline["id"] not in before_ids:
+            try:
+                await command(
+                    "assist_pipeline/pipeline/delete", pipeline_id=pipeline["id"]
+                )
+            except COMMAND_ERRORS:
+                errors.append(f"cleanup: pipeline delete failed ({pipeline['id']})")
+    after = await command("assist_pipeline/pipeline/list")
+    if before_ids != {p["id"] for p in after["pipelines"]}:
+        errors.append("cleanup: pipeline IDs differ")
+    if before["preferred_pipeline"] != after["preferred_pipeline"]:
+        errors.append("preferred pipeline changed")
     return errors
 
 
@@ -161,14 +192,9 @@ async def connect_authenticated(
         yield ws
 
 
-async def run_live(
-    url: str, token_file: Path, stt_engine: str, tts_engine: str, tts_voice: str
-) -> list[str]:
-    origin = checked_ha_url(url)
-    token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
-    if not isinstance(token, str) or not token:
-        raise ValueError("token file requires a token string")
-    async with connect_authenticated(origin + "/api/websocket", token) as ws:
+@asynccontextmanager
+async def connect_command(url: str, token: str) -> AsyncIterator[Command]:
+    async with connect_authenticated(url, token) as ws:
         counter = 0
 
         async def command(kind: str, **fields: Any) -> Any:
@@ -183,7 +209,22 @@ async def run_live(
                             raise ValueError(f"WebSocket command failed: {kind}")
                         return response.get("result")
 
-        return await probe_cycle(command, stt_engine, tts_engine, tts_voice)
+        yield command
+
+
+async def run_live(
+    url: str, token_file: Path, stt_engine: str, tts_engine: str, tts_voice: str
+) -> list[str]:
+    origin = checked_ha_url(url)
+    token = json.loads(token_file.read_text(encoding="utf-8"))["token"]
+    if not isinstance(token, str) or not token:
+        raise ValueError("token file requires a token string")
+    return await probe_cycle(
+        lambda: connect_command(origin + "/api/websocket", token),
+        stt_engine,
+        tts_engine,
+        tts_voice,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -222,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.tts_voice,
             )
         )
-    except (OSError, ValueError, KeyError, aiohttp.ClientError, TimeoutError) as error:
+    except COMMAND_ERRORS as error:
         print(f"FAIL live probe: {type(error).__name__}: {error}")
         return 1
     if not errors:

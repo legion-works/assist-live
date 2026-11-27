@@ -617,6 +617,47 @@ def test_fetch_archive_member_and_reuse_verified_cache(
     assert (tmp_path / "second" / item["audio_path"]).read_bytes() == data
 
 
+@pytest.mark.parametrize("artifact", ["archive", "audio"])
+def test_interrupted_fetch_leaves_final_name_available_for_retry(
+    tmp_path, monkeypatch, archive_bundle, artifact
+):
+    from pathlib import Path
+
+    from tools import corpus
+
+    item, payload, data = archive_bundle
+    cache = tmp_path / "cache"
+    root = tmp_path / "audio"
+    audio = root / item["audio_path"]
+    archive = cache / f"{item['source_revision']}.zip"
+    target, content = (archive, payload) if artifact == "archive" else (audio, data)
+    real_open, real_replace = Path.open, Path.replace
+
+    def interrupted_open(path, mode="r", *args, **kwargs):
+        if path == target and mode == "wb":
+            with real_open(path, mode) as stream:
+                stream.write(content[:8])
+            raise KeyboardInterrupt
+        return real_open(path, mode, *args, **kwargs)
+
+    def interrupted_replace(path, destination):
+        if destination == target:
+            assert path.parent == target.parent
+            assert path.read_bytes() == content
+            raise KeyboardInterrupt
+        return real_replace(path, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", interrupted_open)
+        patch.setattr(Path, "replace", interrupted_replace)
+        with pytest.raises(KeyboardInterrupt):
+            corpus.fetch([item], root, cache=cache)
+    assert not target.exists(), "interruption stranded the final name"
+    assert not list(target.parent.iterdir()), "interruption left staging files"
+    assert corpus.fetch([item], root, cache=cache) == []
+    assert audio.read_bytes() == data
+
+
 @pytest.mark.parametrize("change", ["archive", "member", "cache"])
 def test_archive_hashes_checked_before_member_write(tmp_path, archive_bundle, change):
     from tools import corpus

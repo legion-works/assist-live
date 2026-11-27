@@ -297,6 +297,53 @@ def test_changed_data_with_unchanged_pin_is_refused(tmp_path, capsys):
     assert "digest mismatch" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("tamper", [False, True])
+def test_review_command_recovers_interruption_before_pin_replacement(
+    tmp_path, monkeypatch, capsys, tamper
+):
+    module = api()
+    labels, _ = dataset(1)
+    path = tmp_path / "correct_transcripts.jsonl"
+    pin = path.with_suffix(".sha256")
+    label = labels[0]
+    rows = records([reference(label, pending=True)])
+    module.write_data(path, rows)
+    old_pin = pin.read_bytes()
+    common = ["--labels", str(write_labels(tmp_path, labels)), "--data", str(path)]
+    real_open, real_replace = Path.open, Path.replace
+
+    def interrupted_open(file, mode="r", *args, **kwargs):
+        if file == pin and mode == "w":
+            raise KeyboardInterrupt
+        return real_open(file, mode, *args, **kwargs)
+
+    def interrupted_replace(file, destination):
+        if destination == pin:
+            raise KeyboardInterrupt
+        return real_replace(file, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", interrupted_open)
+        patch.setattr(Path, "replace", interrupted_replace)
+        with pytest.raises(KeyboardInterrupt):
+            module.main(["mark-unintelligible", *common, "--id", label["id"]])
+    assert pin.read_bytes() == old_pin
+    assert json.loads(path.read_text().splitlines()[1])["status"] == "unintelligible"
+    if tamper:
+        path.write_text(path.read_text() + "\n")
+        assert module.main(["check", *common]) == 1
+        assert "digest mismatch" in capsys.readouterr().out
+        assert pin.read_bytes() == old_pin
+    else:
+        assert module.main(["check", *common]) == 0
+        assert module.check_digest(path)
+        assert {p.name for p in tmp_path.iterdir()} == {
+            path.name,
+            pin.name,
+            "labels.jsonl",
+        }
+
+
 @pytest.mark.parametrize(
     "change",
     [

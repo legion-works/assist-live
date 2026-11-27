@@ -4772,3 +4772,14 @@ Diagnostics show entry data after HA stops the entry or after a setup error.
 
 The setup and options flow tests give 100 % coverage of `config_flow.py`, with 92 of 92 branches.
 Bootstrap tests copy the project files without the Python virtual environments. They do not copy the HA 2026.11 test environment.
+
+## Corpus, probe, and build checks
+
+Corpus fetch checks each hash before it renames a temporary file to its archive or audio name.
+If the process stops before the rename, you can run the command again.
+The transcript check can repair the pin when the data has a digest from the pending update.
+
+The pipeline probe uses a new connection to remove temporary pipelines if it does not get a response or the socket closes.
+The virtual timer check uses the conversation response to make sure that cancellation was satisfactory.
+The package check makes sure that the archive has all listed integration files.
+The CI check makes sure that the HA and test plugin versions come from the matrix member.

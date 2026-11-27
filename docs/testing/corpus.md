@@ -303,6 +303,10 @@ uv run --locked python tools/correct_transcripts.py import --labels tests/data/l
 
 Import checks the export version, fields, unique known IDs, audio hashes, and row digests before a write.
 The review commands also check the data pin before use.
+If a write stops, run `correct_transcripts.py check` with the same `--labels` and `--data` paths.
+The command can repair the pin with a digest from the pending update file.
+It rejects data with a digest that is not in that file.
+Run one transcript command at a time for each data file.
 
 For `status=final`, import rejects empty text and text with no tokens from `words`.
 For `status=unintelligible`, correct text must be null.
@@ -453,7 +457,8 @@ The download size limit is `268435456` bytes (256 MiB), above the pinned archive
 The archive and HTTPS WAV downloads use this limit.
 `--max-download-bytes` sets a different positive limit.
 The tool stops the stream if the next byte is more than the limit.
-It does not keep an archive or audio file that is not complete.
+It checks each hash before it renames a temporary file to its archive or audio name.
+If the process stops before the rename, you can run the command again.
 `fetch --licenses` selects the license records. Its default is `tests/data/LICENSES.json` relative to the tool repository.
 
 It checks files that are available without replacement.

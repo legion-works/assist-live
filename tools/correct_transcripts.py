@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 
 from tools.annotate_corpus import audio_info
 from tools.corpus import Row, load_corpus, text
+from tools.file_staging import stage_file
 from tools.result_text import words
 
 FIELDS = {"id", "audio_sha256", "correct_transcript", "status", "source", "engines"}
@@ -208,11 +209,76 @@ def check_digest(path: Path) -> bool:
         return False
 
 
+def read_optional(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def replace_bytes(path: Path, data: bytes) -> None:
+    with stage_file(path) as temporary:
+        temporary.write(data)
+
+
+def pin_bytes(path: Path, digest: str) -> bytes:
+    return f"{digest}  {path.name}\n".encode()
+
+
+def update_marker(path: Path) -> Path:
+    return path.with_name(f".{path.name}.pending")
+
+
+def recover_update(path: Path) -> None:
+    marker = update_marker(path)
+    pending = read_optional(marker)
+    if pending is None:
+        return
+    digests = json.loads(pending)
+    if not isinstance(digests, list) or len(digests) != 2:
+        raise ValueError("invalid correct transcript update marker")
+    previous, next_digest = digests
+    if (
+        (
+            previous is not None
+            and (not isinstance(previous, str) or not SHA256.fullmatch(previous))
+        )
+        or not isinstance(next_digest, str)
+        or not SHA256.fullmatch(next_digest)
+    ):
+        raise ValueError("invalid correct transcript update marker")
+    data = read_optional(path)
+    actual = hashlib.sha256(data).hexdigest() if data is not None else None
+    pin = path.with_suffix(".sha256")
+    current_pin = read_optional(pin)
+    old_pin = pin_bytes(path, previous) if previous is not None else None
+    new_pin = pin_bytes(path, next_digest)
+    if actual == next_digest and current_pin in (old_pin, new_pin):
+        if current_pin != new_pin:
+            replace_bytes(pin, new_pin)
+    elif actual != previous or current_pin != old_pin:
+        raise ValueError("correct transcript digest mismatch during update recovery")
+    marker.unlink()
+
+
 def write_data(path: Path, rows: list[Row]) -> None:
-    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
-    path.with_suffix(".sha256").write_text(
-        hashlib.sha256(path.read_bytes()).hexdigest() + "  " + path.name + "\n"
+    recover_update(path)
+    data = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows).encode()
+    previous_data = read_optional(path)
+    previous = (
+        hashlib.sha256(previous_data).hexdigest() if previous_data is not None else None
     )
+    pin = path.with_suffix(".sha256")
+    if read_optional(pin) != (
+        pin_bytes(path, previous) if previous is not None else None
+    ):
+        raise ValueError("correct transcript digest mismatch")
+    digest = hashlib.sha256(data).hexdigest()
+    marker = update_marker(path)
+    replace_bytes(marker, json.dumps([previous, digest]).encode())
+    replace_bytes(path, data)
+    replace_bytes(pin, pin_bytes(path, digest))
+    marker.unlink()
 
 
 PAGE = r"""<!doctype html>
@@ -427,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         labels = load_corpus(args.labels)
+        recover_update(args.data)
         rows = (
             from_engines(labels, load_corpus(args.engine_a), load_corpus(args.engine_b))
             if args.command == "from-engines"

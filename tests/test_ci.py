@@ -146,6 +146,8 @@ def test_completion_requires_ha_2026_11_output():
         ("override-command", "HA component requirements command"),
         ("intents", "HA component requirements command"),
         ("matrix", "HA matrix"),
+        ("ha-env", "HA version environment"),
+        ("plugin-env", "HA version environment"),
         ("output", "HA member outputs"),
         ("local-command", "HA 2026.11.2 Taskfile.yml"),
         ("override-file", "HA 2026.11.2 override"),
@@ -190,6 +192,10 @@ def test_ci_rejects_weakened_ha_2026_11_member(
         step["run"] = step["run"].replace("2026.10.27", "2026.10.6")
     elif mutation == "matrix":
         ha["strategy"]["matrix"]["include"].pop()
+    elif mutation == "ha-env":
+        step["env"]["HA_VERSION"] = "2026.10.4"
+    elif mutation == "plugin-env":
+        step["env"]["PLUGIN_VERSION"] = "0.13.375"
     elif mutation == "output":
         del ha["outputs"]["compatibility"]
     elif mutation == "local-command":

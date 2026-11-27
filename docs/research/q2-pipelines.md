@@ -193,6 +193,10 @@ The token file must contain a JSON `token` string.
 The script has no default server or credential path and accepts only the isolated loopback test address.
 Do not keep the token file in the repository. Do not put tokens in command arguments.
 
+For cleanup, the probe opens a new connection to the same address.
+It lists the pipelines and deletes new entries with probe names from this run.
+It then checks that the pipeline IDs and preferred pipeline did not change.
+
 ## Sources
 
 Access date for all sources: 2026-10-24.

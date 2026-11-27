@@ -40,3 +40,8 @@ def test_release_archive_passes_its_extracted_packaging_check(tmp_path):
     assert result.returncode == 0, (
         f"release_archive_packaging_failed\n{result.stdout}\n{result.stderr}"
     )
+    from tools.check_packaging import check_packaging
+
+    extracted = tmp_path / "package"
+    (extracted / "custom_components/assist_live/stt_fallback.py").unlink()
+    assert "package file stt_fallback.py" in check_packaging(extracted)

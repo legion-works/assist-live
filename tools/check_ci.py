@@ -235,14 +235,18 @@ def check_jobs(path: str | Path) -> set[str]:
         )
         if len(compilers) != 1 or not 0 <= compilers[0] < first_uv:
             failures.append(f"source build compilers {name}")
-    command = next(
-        (
-            step.get("run", "")
-            for step in ha.get("steps", [])
-            if step.get("name") == "Test all contracts on the exact HA version"
-        ),
-        "",
-    )
+    test_steps = [
+        step
+        for step in ha.get("steps", [])
+        if step.get("name") == "Test all contracts on the exact HA version"
+    ]
+    test_step = test_steps[0] if test_steps else {}
+    if len(test_steps) != 1 or test_step.get("env") != {
+        "HA_VERSION": "${{ matrix.ha }}",
+        "PLUGIN_VERSION": "${{ matrix.plugin }}",
+    }:
+        failures.append("HA version environment")
+    command = test_step.get("run", "")
     required = [
         "uv",
         "run",

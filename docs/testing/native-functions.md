@@ -68,6 +68,7 @@ These checks use only the isolated instance from [Virtual intent tests](virtual-
 They start and cancel native timers through the public conversation API.
 An announcement service response without a satellite target is not proof of announcement playback.
 The output includes virtual entity state before and after the calls and the timer cleanup result.
+Timer cleanup is satisfactory only with HTTP status `200` and a conversation `response_type` of `action_done`.
 
 ```sh
 uv run python tools/native_matrix.py --matrix docs/testing/native-functions.md --virtual --token-file "$ASSIST_LIVE_TEST_TOKEN_FILE" --labels tests/data/labels.jsonl --output "$RUNROOT/native-virtual.json" --check

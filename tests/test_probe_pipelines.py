@@ -1,10 +1,14 @@
 import asyncio
+import json
+from contextlib import asynccontextmanager
 from functools import partial
 
 import pytest
-from aiohttp import WSMessage, web
+from aiohttp import WSMessage, WSMessageTypeError, web
 from aiohttp.test_utils import TestServer
 
+from tools import probe_pipelines
+from tools.ha_websocket import HA_URL
 from tools.probe_pipelines import connect_authenticated
 
 TOKEN = "example-test-credential"
@@ -107,3 +111,81 @@ async def test_authenticates_without_websocket_redirect() -> None:
     assert [message.json() for message in messages] == [
         {"type": "auth", "access_token": TOKEN}
     ]
+
+
+@pytest.mark.parametrize("lost_on", ["create", "get", None])
+async def test_live_probe_reconciles_pipeline_on_a_fresh_socket(
+    tmp_path, monkeypatch, lost_on
+):
+    token_file = tmp_path / "credential.json"
+    token_file.write_text(json.dumps({"token": TOKEN}))
+    connections = []
+    pipelines = {
+        "existing": {"id": "existing", "name": "Pipeline contract probe same-name 1"}
+    }
+    monkeypatch.setattr(
+        probe_pipelines, "uuid4", lambda: type("Identifier", (), {"hex": "same-name"})()
+    )
+    active_connections = set()
+
+    class Socket:
+        failed = False
+
+        async def send_json(self, message):
+            if self.failed:
+                raise ConnectionResetError("socket closed")
+            self.message = message
+
+        async def receive_json(self):
+            operation = self.message["type"].rsplit("/", 1)[-1]
+            match operation:
+                case "list":
+                    result = {
+                        "pipelines": list(pipelines.values()),
+                        "preferred_pipeline": "existing",
+                    }
+                case "voices":
+                    result = {"voices": [{"voice_id": "voice"}]}
+                case "create":
+                    key = self.message["name"].rsplit(" ", 1)[-1]
+                    result = pipelines[key] = {
+                        **{k: v for k, v in self.message.items() if k != "type"},
+                        "id": key,
+                    }
+                case "update":
+                    pipelines[self.message["pipeline_id"]]["tts_voice"] = self.message[
+                        "tts_voice"
+                    ]
+                    result = None
+                case "delete":
+                    del pipelines[self.message["pipeline_id"]]
+                    result = None
+                case "get":
+                    result = pipelines[self.message["pipeline_id"]]
+                case _:
+                    pytest.fail(f"unexpected operation {operation}")
+            if operation == lost_on:
+                self.failed = True
+                raise WSMessageTypeError("response lost")
+            return {"id": self.message["id"], "success": True, "result": result}
+
+    @asynccontextmanager
+    async def connect(url, token):
+        assert not active_connections
+        connections.append((url, token))
+        socket = Socket()
+        active_connections.add(socket)
+        try:
+            yield socket
+        finally:
+            active_connections.remove(socket)
+
+    monkeypatch.setattr(probe_pipelines, "connect_authenticated", connect)
+    args = (HA_URL, token_file, "stt.test", "tts.test", "voice")
+    if lost_on is None:
+        assert await probe_pipelines.run_live(*args) == []
+    else:
+        with pytest.raises(WSMessageTypeError, match="response lost"):
+            await probe_pipelines.run_live(*args)
+    assert set(pipelines) == {"existing"}, "probe pipeline was stranded"
+    assert connections == [(HA_URL + "/api/websocket", TOKEN)] * 2

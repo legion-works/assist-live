@@ -245,7 +245,17 @@ async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
                 },
             ) as response:
                 cleanup_status = response.status
-                await response.read()
+                cleanup_response_type = None
+                if cleanup_status == 200:
+                    try:
+                        body = await response.json()
+                    except aiohttp.ContentTypeError, ValueError:
+                        body = None
+                    result = body.get("response") if isinstance(body, dict) else None
+                    if isinstance(result, dict) and isinstance(
+                        kind := result.get("response_type"), str
+                    ):
+                        cleanup_response_type = kind
             async with session.get(origin + "/api/states") as response:
                 states = await response.json()
             after = {
@@ -257,13 +267,16 @@ async def run_virtual(token_file: Path, labels: Path) -> list[dict[str, Any]]:
             {
                 "function": "timers",
                 "scope": "virtual",
-                "passed": not failures and cleanup_status == 200 and before == after,
+                "passed": not failures
+                and cleanup_response_type == "action_done"
+                and before == after,
                 "detail": "Native timer callback and labelled interval through "
                 "the public conversation API.",
                 "failures": failures,
                 "state_before": before,
                 "state_after": after,
                 "cleanup_http_status": cleanup_status,
+                "cleanup_response_type": cleanup_response_type,
             }
         ]
         async with session.post(

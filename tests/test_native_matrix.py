@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_missing_native_observations_fail():
     from tools.native_matrix import validate_native_matrix
 
@@ -125,8 +128,6 @@ def test_external_observations_and_cli_never_invent_values(
 async def test_virtual_subset_refuses_another_target_before_reading_a_token(
     tmp_path, monkeypatch
 ):
-    import pytest
-
     from tools import native_matrix
 
     monkeypatch.setattr(native_matrix, "URL", "http://example.invalid:18123")
@@ -134,6 +135,79 @@ async def test_virtual_subset_refuses_another_target_before_reading_a_token(
         await native_matrix.run_virtual(
             tmp_path / "not-read.json", tmp_path / "not-read.jsonl"
         )
+
+
+@pytest.mark.parametrize(
+    "status,result,passed",
+    [
+        (200, {"response": {"response_type": "action_done"}}, True),
+        (200, {"response": {"response_type": "error"}}, False),
+        (200, {"response_type": "action_done"}, False),
+        (500, {"response": {"response_type": "action_done"}}, False),
+    ],
+)
+async def test_virtual_timer_requires_successful_cancellation(
+    tmp_path, monkeypatch, status, result, passed
+):
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    from tools import native_matrix
+
+    class Response:
+        def __init__(self, status, data):
+            self.status = status
+            self.data = data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def json(self):
+            return self.data
+
+        async def read(self):
+            return b""
+
+    class Session:
+        def get(self, url):
+            if url.endswith("/config"):
+                return Response(200, {"version": "2026.10.3"})
+            assert url.endswith("/states")
+            return Response(
+                200,
+                [
+                    {"entity_id": "light.virtual_light", "state": "off"},
+                    {
+                        "entity_id": "conversation.assist_live_short",
+                        "attributes": {"virtual_device_id": "test-device"},
+                    },
+                ],
+            )
+
+        def post(self, url, *, json):
+            if url.endswith("/conversation/process"):
+                assert json["text"] == "cancel all timers"
+                assert json["device_id"] == "test-device"
+                return Response(status, result)
+            assert url.endswith("/assist_satellite/announce")
+            return Response(400, {})
+
+    @asynccontextmanager
+    async def session(**_):
+        yield Session()
+
+    monkeypatch.setattr(native_matrix, "ha_session", session)
+    monkeypatch.setattr(native_matrix, "run_live", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        native_matrix, "load_corpus", lambda _: [{"intent": {"name": "HassStartTimer"}}]
+    )
+    credential = tmp_path / "credential.json"
+    credential.write_text('{"token": "test-credential"}')
+    timer, _ = await native_matrix.run_virtual(credential, tmp_path / "labels.jsonl")
+    assert timer["passed"] is passed
 
 
 def test_native_observation_time_requires_a_time_zone(monkeypatch):
