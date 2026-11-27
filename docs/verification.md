@@ -4899,3 +4899,29 @@ The contract test checks that `assist-live-client==0.1.0a2` accepts each value i
 Before the change and without the filter, the two listener tests found `ValueError: invalid event data` in the HA callback log.
 The three suites had the same 21 failures in the archive and public-tree checks.
 The suite runner had no Gitleaks or repository Git metadata.
+
+## P1 pause position rule (2026-11-27 UTC)
+
+The replay runner uses the stored server sample position if the HA debug WAV fits the external capture.
+The runner uses the clock rule when the position or WAV is missing or the fit is not satisfactory.
+The P1 report counts rows by rule.
+
+| Check | Result |
+|---|---|
+| Position rule tests with the clock-only code at `d3e7ea7` | `10 failed` |
+| Replay, report, and fault tests with the position rule | `699 passed` |
+| Position rule tests with the position uncertainty removed | `1 failed, 9 passed` |
+| Full suite without Gitleaks and Git metadata | `21 failed, 2308 passed, 1 skipped` |
+
+The removed uncertainty changed a cut to a non-cut at the pause end.
+The tests used simulated device events and synthetic audio data.
+No test used a live device.
+
+The first voice check compares the fitted WAV onset with the first voice on the capture.
+The report counts pause decisions for each `profile` and does not count trials without a decision in these totals.
+
+| Check | Result |
+|---|---|
+| First voice and pause count tests before the changes | `8 failed, 1 passed` |
+| Replay, report, and fault tests with the changes | `707 passed` |
+| First voice tests without the first voice check | `5 failed, 2 passed` |

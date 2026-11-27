@@ -59,17 +59,30 @@ Wrong-action checks use the two sets, as specified in the design.
 
 The P1 runner replays the held-out `pause` rows for `safe` and `fast`.
 The pause criteria use `safe`.
+
+For `pause_rule: position`, the runner fits the HA STT debug WAV for the turn to the external capture.
+It uses server `speech_start` data `onset_ms` to find the first voice from the fitted WAV start.
+This estimate must agree with the first voice on the capture to 50 ms plus the uncertainty of the WAV fit.
+
+It adds the server's `end_sample` to the fitted start of that WAV.
+It uses the capture fit to find the last end in `pause_intervals_ms`.
+It adds the uncertainty of the WAV fit and the capture fit to that end.
+It rounds a fraction in that margin to the next integer sample and does not use server clock uncertainty.
+The runner writes `pause_cut: true` if the decision position is before that limit, and `false` at or after it.
+
+The clock rule uses `no_end_sample`, `no_debug_recording`, `fit_failed`, or `fit_inconsistent` as its `pause_rule_reason`.
+The runner gives `fit_inconsistent` when the first voice estimates do not agree or if data for the check is missing.
 The runner subtracts the time of `last_voice_sample` from the aligned last-voice time to get the start of the recording.
 It applies the replay-to-server clock offset to the recording start and the first voice time.
 The interval to receive audio is the server `speech_start` time minus the first voice time on that clock.
 
-`end_decision` gives a clock time, not an audio stream position.
 The runner subtracts the `alignment` uncertainty from the decision time and adds the interval to the last end in `pause_intervals_ms`.
 It writes `pause_cut: true` if the adjusted decision time is before the adjusted pause end, and `false` at or after that end.
-With the audio stream position in `end_decision`, the runner can compare positions without a clock estimate.
 
 If the runner cannot compare the times, it records `complete: false` and `MISSING_PAUSE_MAPPING` or `MISSING_PAUSE_DELAY_ESTIMATE`.
 The report counts that trial as a cut.
+The runner keeps `pause_rule_reason` but does not record a rule for that trial.
+The P1 report gives counts of `position` and `clock` decisions for each `profile`.
 Volunteer pause recordings are necessary for P1 acceptance.
 
 ## Correct transcripts

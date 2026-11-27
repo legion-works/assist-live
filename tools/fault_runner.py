@@ -37,6 +37,7 @@ from tools.native_matrix import (
 from tools.probe_pipelines import Command, pipeline_fields
 from tools.result_text import words
 from tools.test_environment import FIXTURES, URL, expected_operations, intent_matches
+from tools.turn_audio import docker_command
 
 Row = dict[str, Any]
 STAGES = ("before", "speech", "pause", "after-final")
@@ -510,22 +511,7 @@ def fault_sample(
 
 class TestServer:
     async def docker(self, *args: str) -> str:
-        process = await asyncio.create_subprocess_exec(
-            "docker",
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            async with asyncio.timeout(45):
-                stdout, _ = await process.communicate()
-        except BaseException:
-            process.kill()
-            await process.wait()
-            raise
-        if process.returncode != 0:
-            raise ValueError("isolated server container command failed")
-        return stdout.decode().strip()
+        return await docker_command(*args)
 
     async def stop(self) -> None:
         await self.docker("stop", "--time", "0", CONTAINER)

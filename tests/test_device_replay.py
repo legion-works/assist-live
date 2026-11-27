@@ -30,6 +30,7 @@ from tools.device_replay import (
     check_options,
     frozen_corpus,
     parser,
+    pause_cut,
     replay_sample,
     run,
     sample_errors,
@@ -115,6 +116,125 @@ def sample():
             "reply_end_utc_ns": 13_000_000_000,
         },
     }
+
+
+def pause_fit_case(decision_data, fit_complete):
+    row = sample()
+    row["phase"] = "p1"
+    speech = event("speech_start", 100, source="server")
+    speech["data"]["onset_ms"] = 100
+    row["events"] = [
+        speech,
+        {**event("end_decision", 900, source="server"), "data": decision_data},
+    ]
+    row["alignment"].update(
+        first_voice_utc_ns=10_000_000_000,
+        last_voice_utc_ns=10_750_000_000,
+        last_voice_sample=13400,
+        uncertainty_ms=100.01,
+        clock_uncertainty_ms=100,
+        acoustic_uncertainty_ms=0.01,
+        command_offset_samples=1400,
+    )
+    if fit_complete is not None:
+        row["pause_fit"] = {
+            "offset_samples": -200,
+            "reference_samples": 16000,
+            "uncertainty_samples": 2,
+            "complete": fit_complete,
+        }
+    label = {
+        "last_voice_sample": 12000,
+        "sample_rate": 16000,
+        "pause_intervals_ms": [[100, 400]],
+    }
+    return row, label
+
+
+@pytest.mark.parametrize(
+    ("decision_data", "fit_complete", "cut", "rule", "reason"),
+    [
+        ({"end_sample": 7999}, True, True, "position", None),
+        ({"end_sample": 8002}, True, True, "position", None),
+        ({"end_sample": 8003}, True, False, "position", None),
+        ({"end_sample": 9000}, True, False, "position", None),
+        ({"end_sample": 7999}, False, False, "clock", "fit_failed"),
+        ({"end_sample": 7999}, None, False, "clock", "no_debug_recording"),
+        ({"end_sample": 16001}, True, False, "clock", "fit_failed"),
+        ({}, True, False, "clock", "no_end_sample"),
+        ({"end_sample": True}, True, False, "clock", "no_end_sample"),
+        ({"end_sample": -1}, True, False, "clock", "no_end_sample"),
+    ],
+    ids=[
+        "cut",
+        "uncertain",
+        "boundary",
+        "after",
+        "bad-fit",
+        "no-wav",
+        "outside-wav",
+        "old",
+        "bool",
+        "negative",
+    ],
+)
+def test_pause_rule_uses_fitted_audio_position(
+    decision_data, fit_complete, cut, rule, reason
+):
+    row, label = pause_fit_case(decision_data, fit_complete)
+    assert pause_cut(row, label) is cut
+    assert row["pause_rule"] == rule
+    assert row.get("pause_rule_reason") == reason
+
+
+@pytest.mark.parametrize(
+    ("fit_shift", "onset_ms", "consistent"),
+    [
+        (802, 100, True),
+        (803, 100, False),
+        (-803, 100, False),
+        (0, None, False),
+        (0, True, False),
+    ],
+    ids=["at-limit", "late", "early", "missing-onset", "invalid-onset"],
+)
+def test_pause_position_requires_consistent_first_voice(
+    fit_shift, onset_ms, consistent
+):
+    row, label = pause_fit_case({"end_sample": 6500}, True)
+    row["pause_fit"]["offset_samples"] += fit_shift
+    row["events"][0]["data"] = {} if onset_ms is None else {"onset_ms": onset_ms}
+    assert pause_cut(row, label) is consistent
+    assert row["pause_rule"] == ("position" if consistent else "clock")
+    assert row.get("pause_rule_reason") == (None if consistent else "fit_inconsistent")
+
+
+@pytest.mark.parametrize(
+    ("fit_complete", "reason"),
+    [(True, "fit_inconsistent"), (None, "no_debug_recording")],
+)
+def test_pause_rule_is_not_written_when_clock_cannot_decide(fit_complete, reason):
+    row, label = pause_fit_case({"end_sample": 6500}, fit_complete)
+    del row["alignment"]["first_voice_utc_ns"]
+    with pytest.raises(ReplayError, match="^MISSING_PAUSE_DELAY_ESTIMATE$"):
+        pause_cut(row, label)
+    assert "pause_rule" not in row
+    assert row["pause_rule_reason"] == reason
+
+
+def test_pause_fit_accepts_stream_start_before_capture():
+    from tools.turn_audio import correlate
+
+    rng = random.Random(128)
+    command = struct.pack(
+        "<12000h", *(rng.randrange(-8000, 8000) for _ in range(12000))
+    )
+    stream = bytes(800) + command
+    external = command + bytes(3200)
+    assert correlate(external, stream)["complete"] is False
+    fit = correlate(external, stream, allow_early_start=True)
+    assert fit["complete"] is True
+    assert fit["offset_samples"] == -400
 
 
 def test_websocket_only_run_is_not_p0():
@@ -757,7 +877,7 @@ async def test_real_profile_selector_is_explicitly_unavailable():
 async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     tmp_path, monkeypatch, include_pauses
 ):
-    from tools.report import build_report
+    from tools.report import build_report, markdown
 
     label, replay_capture = bundle(tmp_path)
     corpus = [label]
@@ -772,6 +892,9 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             ("after", 1450),
             ("missing", None),
             ("no-delay", 1450),
+            ("position", 1450),
+            ("no-wav", 1450),
+            ("fit-failed", 1450),
         ):
             corpus.append(
                 {
@@ -828,6 +951,43 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             pass
 
     records = []
+    listings = {}
+    copies = []
+    debug_source = "/config/pipeline_recordings/device/Pipeline/new/01_stt-test.wav"
+
+    async def debug_docker(action, *args):
+        assert args[0].split(":", 1)[0] == "test-ha"
+        if action == "cp":
+            assert args[0] == f"test-ha:{debug_source}"
+            target = Path(args[1])
+            assert target.stat().st_mode & 0o777 == 0o600
+            assert target.parent.stat().st_mode & 0o777 == 0o700
+            target.write_bytes((tmp_path / "pause.wav").read_bytes())
+            copies.append(target)
+            return ""
+        assert action == "exec"
+        if args[-1] == debug_source:
+            return hashlib.sha256((tmp_path / "pause.wav").read_bytes()).hexdigest()
+        assert args[-1] == "/config/pipeline_recordings/device/Pipeline"
+        count = listings[len(records)] = listings.get(len(records), 0) + 1
+        clip_id = corpus[(len(records) - 1) % len(decisions)]["id"]
+        sources = [debug_source] if count == 2 and clip_id != "no-wav" else []
+        return json.dumps(sources)
+
+    def fit(external, debug, *, allow_early_start):
+        assert allow_early_start is True
+        assert len(external) == len(pause_capture.samples) * 2
+        assert debug and any(debug)
+        clip_id = corpus[(len(records) - 1) % len(decisions)]["id"]
+        return {
+            "complete": clip_id == "position",
+            "offset_samples": -200,
+            "uncertainty_samples": 4,
+            "reference_samples": 16000,
+        }
+
+    monkeypatch.setattr("tools.device_replay.docker_command", debug_docker)
+    monkeypatch.setattr("tools.device_replay.correlate", fit)
 
     async def capture_loss_without_network(*args, **kwargs):
         from tools.measurement import capture_loss
@@ -854,11 +1014,15 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             clip_id = corpus[index]["id"]
             if corpus[index]["set"] == "pause" and clip_id != "no-delay":
                 detected_ms = 1560 if clip_id == "boundary" else 1600
-                internal.insert(0, event("speech_start", detected_ms, turn, "server"))
+                speech = event("speech_start", detected_ms, turn, "server")
+                speech["data"]["onset_ms"] = 163
+                internal.insert(0, speech)
             if stamp is not None:
                 internal.append(
                     {**event("end_decision", 0, turn, owner), "t_utc_ns": stamp}
                 )
+                if clip_id in ("position", "no-wav", "fit-failed"):
+                    internal[-1]["data"]["end_sample"] = 14000
             super().__init__(
                 items,
                 items + internal,
@@ -893,6 +1057,9 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     args = options("--phase", "p1", "--profiles", "safe,fast", "--limit", "1")
     if include_pauses:
         args.limit = None
+        args.ha_container = "test-ha"
+        args.ha_device_id = "device"
+        args.ha_pipeline_name = "Pipeline"
     args.labels, args.audio_root = labels, tmp_path
     args.output = tmp_path / "runs.jsonl"
     args.clock_record = clock_record
@@ -912,17 +1079,31 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             assert trials["uncertain"]["pause_cut"] is True
             assert trials["boundary"]["pause_cut"] is False
             assert trials["after"]["pause_cut"] is False
+            assert trials["after"]["pause_rule_reason"] == "no_end_sample"
+            assert trials["position"]["pause_cut"] is True
+            assert trials["position"]["pause_rule"] == "position"
+            for name, reason in (
+                ("no-wav", "no_debug_recording"),
+                ("fit-failed", "fit_failed"),
+            ):
+                assert trials[name]["pause_cut"] is False
+                assert trials[name]["pause_rule"] == "clock"
+                assert trials[name]["pause_rule_reason"] == reason
             assert all(
                 trials[key]["complete"]
                 for key in ("cut", "uncertain", "boundary", "after")
             )
             assert "pause_cut" not in trials["missing"]
+            assert "pause_rule" not in trials["missing"]
             assert trials["missing"]["complete"] is False
             assert "MISSING_PAUSE_MAPPING" in trials["missing"]["failures"]
             assert "pause_cut" not in trials["no-delay"]
+            assert "pause_rule" not in trials["no-delay"]
             assert trials["no-delay"]["complete"] is False
             assert "MISSING_PAUSE_DELAY_ESTIMATE" in trials["no-delay"]["failures"]
             assert "pause_cut" not in trials[label["id"]]
+        assert len(copies) == 4
+        assert all(not path.parent.exists() for path in copies)
         report = build_report(
             "p1",
             written,
@@ -939,10 +1120,17 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             },
         )
         assert report["gates"]["pause_coverage"] is True
-        assert report["pauses"]["denominator"] == 6
-        assert report["executable_prefix_cuts"]["denominator"] == 6
+        assert report["pauses"]["denominator"] == 9
+        assert report["executable_prefix_cuts"]["denominator"] == 9
         assert (
-            report["pauses"]["count"] == report["executable_prefix_cuts"]["count"] == 4
+            report["pauses"]["count"] == report["executable_prefix_cuts"]["count"] == 5
+        )
+        assert report["pause_rules"] == {
+            profile: {"position": 1, "clock": 6} for profile in selector.calls
+        }
+        rendered = markdown(report)
+        assert (
+            "| safe | position | 1 |" in rendered and "| fast | clock | 6 |" in rendered
         )
         assert report["gates"]["pauses"] is False
     else:
@@ -961,6 +1149,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     records.clear()
     selector.calls.clear()
     args.phase, args.profiles = "p0", None
+    args.ha_container = args.ha_device_id = args.ha_pipeline_name = None
     rows = await run(args)
     assert all(row["set"] == "replay" for row in rows)
     assert [row["profile"] for row in rows] == ["baseline"]

@@ -679,6 +679,19 @@ def build_report(
                 raise ReplayError("MISSING_PAUSE_OBSERVATION")
             cuts.append(row.get("pause_cut", True))
         pause = pause_gate(sum(cuts), len(cuts))
+        pause_rules = {
+            profile: {
+                rule: sum(
+                    row.get("pause_rule") == rule
+                    for row in primary
+                    if row["profile"] == profile
+                    and by_id[row["clip_id"]].get("set") == "pause"
+                    and type(row.get("pause_cut")) is bool
+                )
+                for rule in ("position", "clock")
+            }
+            for profile in profiles
+        }
         prefix = [
             row for row in pauses if by_id[row["clip_id"]].get("executable_prefix")
         ]
@@ -756,6 +769,7 @@ def build_report(
         result.update(
             latency=latency,
             pauses=pause,
+            pause_rules=pause_rules,
             executable_prefix_cuts=prefix_result,
             accuracy=accuracy,
             wrong_actions=wrong,
@@ -820,6 +834,11 @@ def markdown(report: Row) -> str:
     lines.extend(["", "| Split | Unintelligible recordings |", "|---|---:|"])
     for split, count in report["unintelligible"].items():
         lines.append(f"| {split} | {count} |")
+    if (pause_rules := report.get("pause_rules")) is not None:
+        lines.extend(["", "| Profile | Pause rule | Rows |", "|---|---|---:|"])
+        for profile, counts in pause_rules.items():
+            for rule, count in counts.items():
+                lines.append(f"| {profile} | {rule} | {count} |")
     qualification = report.get("faults", {}).get("qualification")
     if qualification is not None:
         lines.extend(

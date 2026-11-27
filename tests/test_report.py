@@ -1116,6 +1116,40 @@ def test_pause_minimum_is_inclusive(acceptance, count, passed):
     assert report["gates"]["pause_samples"] is passed
 
 
+def test_pause_rule_counts_are_per_profile_and_exclude_undecided_rows():
+    from tools.report import markdown
+
+    labels, rows = dataset(4, "p1", set_name="pause")
+    rows[0]["pause_rule"] = "position"
+    rows[1].update(
+        pause_rule="clock", complete=False, failures=["MISSING_PAUSE_MAPPING"]
+    )
+    del rows[1]["pause_cut"]
+    for row in rows[2:]:
+        row.update(profile="fast", pause_rule="clock")
+    report = build(
+        rows,
+        labels,
+        baseline={
+            "schema_version": 1,
+            "phase": "p0",
+            "accepted": True,
+            "baseline_config_id": rows[0]["baseline_config_id"],
+            "calibration_revision": rows[0]["calibration_revision"],
+            "profiles": {"baseline": {"reply_groups": {}}},
+        },
+    )
+    assert report["pauses"]["count"] == 1
+    assert report["pauses"]["denominator"] == 2
+    assert report["pause_rules"] == {
+        "safe": {"position": 1, "clock": 0},
+        "fast": {"position": 0, "clock": 2},
+    }
+    rendered = markdown(report)
+    assert "| safe | position | 1 |" in rendered
+    assert "| fast | clock | 2 |" in rendered
+
+
 @pytest.mark.parametrize("correct,passed", [(189, False), (190, True)])
 def test_accuracy_threshold_is_inclusive(acceptance, correct, passed):
     labels, rows, baseline, faults = copy.deepcopy(acceptance)

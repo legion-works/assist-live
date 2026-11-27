@@ -8,10 +8,12 @@ import ipaddress
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import struct
 import sys
+import tempfile
 import time
 import wave
 from collections.abc import AsyncGenerator
@@ -41,6 +43,13 @@ from tools.private_evidence import external_output, write_private_jsonl
 from tools.test_environment import (
     validate_intent_action_evidence,
     validate_run_evidence,
+)
+from tools.turn_audio import (
+    copy_recording,
+    correlate,
+    docker_command,
+    read_pcm,
+    recording_files,
 )
 
 Row = dict[str, Any]
@@ -304,43 +313,98 @@ def internal_stage_errors(row: Row, events: list[Row]) -> list[str]:
     ]
 
 
+def pause_fit_matches_onset(
+    alignment: Row, starts: list[Row], offset: int, fit_uncertainty: int
+) -> bool:
+    data = starts[0].get("data") if len(starts) == 1 else None
+    onset_ms: object = data.get("onset_ms") if isinstance(data, dict) else None
+    first_voice_ns: object = alignment.get("first_voice_utc_ns")
+    last_voice_ns: object = alignment.get("last_voice_utc_ns")
+    last_voice_sample: object = alignment.get("last_voice_sample")
+    if (
+        type(onset_ms) is not int
+        or onset_ms < 0
+        or type(first_voice_ns) is not int
+        or type(last_voice_ns) is not int
+        or type(last_voice_sample) is not int
+    ):
+        return False
+    ns_per_sample = 62_500
+    fitted_voice_ns = (
+        last_voice_ns + (offset + onset_ms * 16 - last_voice_sample) * ns_per_sample
+    )
+    return abs(fitted_voice_ns - first_voice_ns) <= (
+        BOUNDARY_TOLERANCE_MS * 1_000_000 + fit_uncertainty * ns_per_sample
+    )
+
+
 def pause_cut(row: Row, label: Row) -> bool:
     alignment = row.get("alignment")
     clock = row.get("server_clock")
-    if (
-        not isinstance(alignment, dict)
-        or alignment.get("method") != ACOUSTIC_METHOD
-        or not valid_server_clock(clock)
-    ):
-        raise ReplayError("MISSING_PAUSE_MAPPING")
     decision, errors = owned_internal_event(
-        row["events"], row["turn_id"], "end_decision", row["phase"]
+        row.get("events", []), row.get("turn_id"), "end_decision", row.get("phase")
     )
+    end_sample = server_end_sample(decision) if not errors else None
+    row["pause_rule_reason"] = (
+        "no_end_sample"
+        if end_sample is None
+        else row.get("pause_fit_reason", "no_debug_recording")
+    )
+    if not isinstance(alignment, dict) or alignment.get("method") != ACOUSTIC_METHOD:
+        raise ReplayError("MISSING_PAUSE_MAPPING")
+    uncertainty_ms = alignment.get("uncertainty_ms")
+    if not finite(uncertainty_ms) or uncertainty_ms < 0:
+        raise ReplayError("MISSING_PAUSE_MAPPING")
+    starts = [
+        item
+        for item in turn_events(row.get("events", []), row.get("turn_id"))
+        if item.get("stage") == "speech_start" and item.get("source") == "server"
+    ]
+    fit = row.get("pause_fit")
+    if end_sample is not None and isinstance(fit, dict):
+        row["pause_rule_reason"] = "fit_failed"
+        offset: object = fit.get("offset_samples")
+        fit_uncertainty = fit.get("uncertainty_samples")
+        debug_samples = fit.get("reference_samples")
+        command_offset: object = alignment.get("command_offset_samples")
+        acoustic_uncertainty_ms = alignment.get("acoustic_uncertainty_ms")
+        if (
+            fit.get("complete") is True
+            and type(offset) is int
+            and type(debug_samples) is int
+            and end_sample <= debug_samples
+            and type(fit_uncertainty) is int
+            and fit_uncertainty >= 0
+            and type(command_offset) is int
+            and finite(acoustic_uncertainty_ms)
+            and 0 <= acoustic_uncertainty_ms <= uncertainty_ms
+        ):
+            if pause_fit_matches_onset(alignment, starts, offset, fit_uncertainty):
+                pause_end: int = command_offset + math.ceil(
+                    label["pause_intervals_ms"][-1][1] * 16
+                )
+                uncertainty_samples = math.ceil(
+                    acoustic_uncertainty_ms * 16 + fit_uncertainty
+                )
+                row["pause_rule"] = "position"
+                del row["pause_rule_reason"]
+                return offset + end_sample < pause_end + uncertainty_samples
+            row["pause_rule_reason"] = "fit_inconsistent"
+
     decision_ns = decision.get("t_utc_ns") if decision is not None else None
     last_voice_ns = alignment.get("last_voice_utc_ns")
-    uncertainty_ms = alignment.get("uncertainty_ms")
     if (
         errors
         or type(decision_ns) is not int
         or type(last_voice_ns) is not int
-        or not finite(uncertainty_ms)
-        or uncertainty_ms < 0
+        or not valid_server_clock(clock)
     ):
         raise ReplayError("MISSING_PAUSE_MAPPING")
     clock_offset_ns: int = clock["offset_ns"]
     first_voice_ns = alignment.get("first_voice_utc_ns")
-    starts = [
-        item.get("t_utc_ns")
-        for item in turn_events(row["events"], row["turn_id"])
-        if item.get("stage") == "speech_start" and item.get("source") == "server"
-    ]
-    if (
-        len(starts) != 1
-        or type(starts[0]) is not int
-        or type(first_voice_ns) is not int
-    ):
+    speech_start_ns = starts[0].get("t_utc_ns") if len(starts) == 1 else None
+    if type(speech_start_ns) is not int or type(first_voice_ns) is not int:
         raise ReplayError("MISSING_PAUSE_DELAY_ESTIMATE")
-    speech_start_ns: int = starts[0]
     delay_ns = speech_start_ns - (first_voice_ns + clock_offset_ns)
     if delay_ns < 0 or speech_start_ns > decision_ns:
         raise ReplayError("MISSING_PAUSE_DELAY_ESTIMATE")
@@ -349,10 +413,20 @@ def pause_cut(row: Row, label: Row) -> bool:
     )
     clip_start_ns = last_voice_ns - last_voice_offset_ns + clock_offset_ns
     pause_end_ms: int | float = label["pause_intervals_ms"][-1][1]
-    return (
+    cut = (
         decision_ns - clip_start_ns - math.ceil(uncertainty_ms * 1_000_000)
         < pause_end_ms * 1_000_000 + delay_ns
     )
+    row["pause_rule"] = "clock"
+    return cut
+
+
+def server_end_sample(decision: Row | None) -> int | None:
+    if decision is None or decision.get("source") != "server":
+        return None
+    data = decision.get("data")
+    position = data.get("end_sample") if isinstance(data, dict) else None
+    return position if type(position) is int and position >= 0 else None
 
 
 def operation_evidence_errors(row: Row) -> list[str]:
@@ -741,6 +815,46 @@ class DeviceEvents(Protocol):
     async def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class DebugRecordings:
+    container: str
+    device_id: str
+    pipeline_name: str
+    scratch: Path
+
+    async def files(self) -> set[str]:
+        return await recording_files(
+            docker_command, self.container, self.device_id, self.pipeline_name
+        )
+
+    async def read_new(self, before: set[str]) -> bytes | None:
+        sources = await self.files() - before
+        if len(sources) != 1:
+            return None
+        with tempfile.TemporaryDirectory(dir=self.scratch) as directory:
+            path, _ = await copy_recording(
+                docker_command, self.container, Path(directory), sources.pop()
+            )
+            return read_pcm(path)
+
+
+async def fit_pause_recording(
+    debug: DebugRecordings, before: set[str], capture: Capture
+) -> Row:
+    try:
+        pcm = await debug.read_new(before)
+        if pcm is None:
+            return {"pause_fit_reason": "no_debug_recording"}
+        external = struct.pack(
+            f"<{len(capture.samples)}h",
+            *(min(32767, round(sample * 32768)) for sample in capture.samples),
+        )
+        fit = await asyncio.to_thread(correlate, external, pcm, allow_early_start=True)
+    except ValueError, OSError, TimeoutError, EOFError, wave.Error, struct.error:
+        return {"pause_fit_reason": "fit_failed"}
+    return {"pause_fit": fit}
+
+
 class ProfileSelector(Protocol):
     async def select(self, profile: str) -> None: ...
 
@@ -925,6 +1039,7 @@ async def replay_sample(
     capture: AudioCapture,
     source: DeviceEvents,
     phase: str = "p1",
+    debug: DebugRecordings | None = None,
 ) -> Row:
     audio_errors = check_audio([label], audio_root)
     if audio_errors:
@@ -934,6 +1049,10 @@ async def replay_sample(
         raise ReplayError("INVALID_SERVER_CLOCK")
     path = resolve_audio(audio_root, label["audio_path"])
     reference, _ = load_audio(path)
+    before = None
+    if debug is not None and phase == "p1" and label["set"] == "pause":
+        with contextlib.suppress(ValueError, OSError, TimeoutError):
+            before = await debug.files()
     mark = time.time_ns()
     host = {"mark_start_utc_ns": mark, "mark_start_monotonic_ns": time.monotonic_ns()}
     events: list[Row] = []
@@ -976,16 +1095,24 @@ async def replay_sample(
         recording = await capture.finish()
         try:
             alignment = align_capture(recording, reference, label["last_voice_sample"])
+            alignment["acoustic_uncertainty_ms"] = alignment["uncertainty_ms"]
             alignment["clock_uncertainty_ms"] = clock["uncertainty_ms"]
             alignment["uncertainty_ms"] += clock["uncertainty_ms"]
+            stored = await source.turn(turn_id)
+            exported = await source.export(server_since)
+            check_events(exported, turn_id)
+            if stored.get("turn_type") != "voice" or stored.get("turn_id") != turn_id:
+                raise ReplayError("UNMATCHED_TURN")
+            events = exported
+            pause_fit: Row = {}
+            if debug is not None and before is not None:
+                decision, errors = owned_internal_event(
+                    events, turn_id, "end_decision", phase
+                )
+                if not errors and server_end_sample(decision) is not None:
+                    pause_fit = await fit_pause_recording(debug, before, recording)
         finally:
             recording.samples.clear()
-        stored = await source.turn(turn_id)
-        exported = await source.export(server_since)
-        check_events(exported, turn_id)
-        if stored.get("turn_type") != "voice" or stored.get("turn_id") != turn_id:
-            raise ReplayError("UNMATCHED_TURN")
-        events = exported
         final, _ = owned_internal_event(events, turn_id, "stt_final", phase)
         transcript = final.get("data", {}).get("transcript") if final else None
         return {
@@ -995,6 +1122,7 @@ async def replay_sample(
             "alignment": alignment,
             "host_timing": host,
             "server_clock": dict(clock),
+            **pause_fit,
             **{
                 stage: next(
                     (
@@ -1118,6 +1246,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--ha-token-file", type=Path)
     result.add_argument("--integration-entry")
     result.add_argument("--device-loss-entity")
+    result.add_argument("--ha-container")
+    result.add_argument("--ha-device-id")
+    result.add_argument("--ha-pipeline-name")
     return result
 
 
@@ -1130,6 +1261,14 @@ def check_options(args: argparse.Namespace) -> list[str]:
         raise ReplayError("PROFILES_P1_ONLY")
     if args.phase == "p1" and args.profiles != "safe,fast":
         raise ReplayError("P1_REQUIRES_SAFE_FAST")
+    debug = (args.ha_container, args.ha_device_id, args.ha_pipeline_name)
+    if any(part is not None for part in debug) and (
+        args.phase != "p1"
+        or not all(debug)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.ha_container)
+        or any(Path(part).parts != (part,) or part == ".." for part in debug[1:])
+    ):
+        raise ReplayError("INVALID_HA_DEBUG_RECORDING_SCOPE")
     return ["baseline"] if args.phase == "p0" else ["safe", "fast"]
 
 
@@ -1181,6 +1320,13 @@ async def run(
     )
     token = json.loads(Path(os.environ["ASSIST_LIVE_TOKEN_FILE"]).read_text())["token"]
     pending: list[tuple[Row, Row]] = []
+    debug = (
+        DebugRecordings(
+            args.ha_container, args.ha_device_id, args.ha_pipeline_name, output.parent
+        )
+        if args.ha_container is not None
+        else None
+    )
     loss_options: dict[str, Any] = {
         "satellites": [os.environ["ASSIST_LIVE_SATELLITE"]],
         "ha_url": args.ha_url,
@@ -1262,6 +1408,7 @@ async def run(
                             client, os.environ["ASSIST_LIVE_SATELLITE"], clock
                         ),
                         args.phase,
+                        debug,
                     )
                     row.update(sample)
                     if row["turn_id"] is not None and any(

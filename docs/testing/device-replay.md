@@ -157,8 +157,33 @@ The P1 row keeps that P0 transcript as `baseline_transcript`.
 For `safe` and `fast`, the runner uses the held-out `replay` and `pause` rows.
 A P0 transcript is not necessary for a pause row.
 
-The runner uses the server clock time of `end_decision`, not the audio stream position.
-It calculates an interval from the first voice in the capture to the server `speech_start`.
+To use the position rule, set `--ha-container`, `--ha-device-id`, and `--ha-pipeline-name` for the same isolated HA device and pipeline as the replay.
+Enable the HA debug WAV files as in the [fault runner](fault-runner.md).
+Do not start other runs on that device and pipeline during a trial.
+The runner looks for one new STT debug WAV in that scope for each pause trial.
+It copies the WAV to a private temporary directory in the output directory, checks its hash, and removes the copy after it reads it.
+It does not remove the HA recording or include audio in the output.
+
+The server event `end_decision` can give `end_sample`, the number of 16 kHz mono samples at the decision.
+The runner fits the HA debug WAV to the external capture with the same correlation and window checks as the fault runner.
+The WAV can start before the external capture, but its end must be in the capture and all three fit windows must agree.
+
+The runner adds `speech_start` data `onset_ms` to the fitted WAV start.
+This first voice estimate must agree with the start of voice on the capture.
+The maximum difference is 50 ms plus the uncertainty of the WAV fit.
+
+The runner adds `end_sample` to the fitted WAV start.
+It uses the capture fit to find the last end in `pause_intervals_ms`.
+
+It adds the uncertainty of the WAV fit and the capture fit to the pause end.
+It rounds a fraction in that margin to the next integer sample.
+It writes `pause_rule: position` and counts the observation as a cut only if the decision is before that limit.
+
+If the sample position is missing or invalid, the runner uses the clock rule with `pause_rule_reason: no_end_sample`.
+It also uses the clock rule with `no_debug_recording` if there is no unique new WAV, or `fit_failed` if it cannot fit or use that WAV.
+It uses `fit_inconsistent` if the first voice times do not agree or if data for the check is missing.
+
+For the clock rule, the runner calculates an interval from the first voice in the capture to the server `speech_start`.
 This interval is not only the time to receive audio. It also includes the command-start check: 250 ms of voice and one 32 ms detector frame. If the voice starts in the first 400 ms of the turn, it also includes the time to the end of the start guard.
 
 The runner subtracts the `alignment` uncertainty from the decision time and adds the interval to the last pause end.
@@ -168,10 +193,10 @@ This rule is correct only if the time to receive audio at the end decision is no
 The audio queue can become longer after the command start.
 If the increase is more than the command-start check, the runner can write `pause_cut: false` for a turn that ended in the pause.
 
-If the runner cannot compare the times, it writes `complete: false` without `pause_cut`.
+The runner writes `pause_rule: clock` only if it calculates `pause_cut`.
+If it cannot compare the times, it writes `complete: false` without `pause_cut` or `pause_rule`.
 It gives `MISSING_PAUSE_MAPPING` or `MISSING_PAUSE_DELAY_ESTIMATE`.
-With the audio stream position in `end_decision`, the runner can compare positions without a clock estimate.
-The server must record that position before the first P1 run with volunteer pause recordings.
+The P1 report gives one set of counts for `safe` and one for `fast`.
 
 Rows keep the device and host times, event quality, event uncertainty, calibration revision, and external microphone `alignment`.
 Device wake, microphone-open, playback-start, and playback-end records are mandatory.
