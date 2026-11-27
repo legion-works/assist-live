@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
-from contextlib import suppress
 
 from assist_live_client.protocol import ProtocolError
 from pymicro_vad import MicroVad
@@ -99,8 +98,14 @@ class FallbackAudio:
 
     async def aclose(self) -> None:
         self.cancelled.set()
+        caller = asyncio.current_task()
+        assert caller is not None
+        cancelling = caller.cancelling()
         self._producer.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await self._producer
+        except asyncio.CancelledError:
+            if caller.cancelling() > cancelling:
+                raise
         if isinstance(self._source, AsyncGenerator):
             await self._source.aclose()

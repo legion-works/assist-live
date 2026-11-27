@@ -5,6 +5,7 @@ from contextlib import suppress
 from typing import Any
 
 from assist_live_client import AssistLiveClient
+from assist_live_client.models import TurnOpen
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import stt
 from homeassistant.components.stt.models import SpeechAudioProcessing
@@ -29,6 +30,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # No limit. Each turn uses its own server stream, not a shared device connection.
 PARALLEL_UPDATES = 0
+AUDIO_CLOSE_TIMEOUT = 0.2
+TURN_TIMEOUT = 20
 
 
 async def async_setup_entry(
@@ -249,10 +252,35 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
             self.ledger.schedule_events()
             return failed
         audio = FallbackAudio(stream, started=started, cancelled=asyncio.Event())
+        try:
+            result = await self._transcribe(metadata, audio, turn, failed)
+        finally:
+            try:
+                loop = asyncio.get_running_loop()
+                async with asyncio.timeout_at(
+                    min(started + TURN_TIMEOUT, loop.time() + AUDIO_CLOSE_TIMEOUT)
+                ):
+                    await audio.aclose()
+            except Exception as error:
+                _LOGGER.debug("STT audio close failed: %s", type(error).__name__)
+            finally:
+                self.ledger.schedule_events()
+        return result if self._latest_turn(turn) else failed
+
+    def _latest_turn(self, turn: TurnOpen) -> bool:
+        return self.ledger.latest[self.satellite].turn == turn
+
+    async def _transcribe(
+        self,
+        metadata: stt.SpeechMetadata,
+        audio: FallbackAudio,
+        turn: TurnOpen,
+        failed: stt.SpeechResult,
+    ) -> stt.SpeechResult:
         reason: FallbackReason = "server_unhealthy"
         error_class = "None"
         try:
-            async with asyncio.timeout_at(started + 20):
+            async with asyncio.timeout_at(audio.started + TURN_TIMEOUT):
                 if self.ledger.save is not None:
                     await self.ledger.save()
                 try:
@@ -260,6 +288,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                         health = await self.client.health_capabilities(
                             timeout=HEALTH_TIMEOUT
                         )
+                        if not self._latest_turn(turn):
+                            return failed
                         healthy = self.ledger.server_selected(
                             health, "stt", turn.turn_id
                         )
@@ -277,6 +307,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                     )
                     error_class = type(error).__name__
                     healthy = False
+                if not self._latest_turn(turn):
+                    return failed
                 if healthy:
                     connected = await self.ledger.connect(turn)
                     if self.ledger.current(self.satellite) != turn:
@@ -297,6 +329,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                                 async with asyncio.timeout(MESSAGE_DEADLINE):
                                     message = await anext(messages)
                                 if message["type"] == "final":
+                                    if not self._latest_turn(turn):
+                                        return failed
                                     self.ledger.mark(turn.turn_id, "stt_final_received")
                                     speaker_deadline = (
                                         asyncio.get_running_loop().time()
@@ -305,6 +339,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                                     await self.ledger.prepare_speaker_read(
                                         self.satellite
                                     )
+                                    if not self._latest_turn(turn):
+                                        return failed
                                     self._start_speaker_read(
                                         messages, turn.turn_id, speaker_deadline
                                     )
@@ -325,6 +361,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                     ) as error:
                         reason = stream_failure_reason(error)
                         error_class = type(error).__name__
+                if not self._latest_turn(turn):
+                    return failed
                 fallback = self.resolve_fallback()
                 if fallback is None:
                     fallback_issue(
@@ -352,6 +390,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                     server_audio_samples=audio.server_audio_samples,
                     server_audio_last_chunk_samples=audio.server_audio_last_chunk_samples,
                 )
+                if not self._latest_turn(turn):
+                    return failed
 
                 async def local_audio() -> AsyncGenerator[bytes]:
                     async for chunk in audio.local_audio(MicroVad()):
@@ -363,6 +403,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                 result = await fallback.async_process_audio_stream(
                     metadata, local_audio()
                 )
+                if not self._latest_turn(turn):
+                    return failed
                 self.ledger.mark(
                     turn.turn_id,
                     "stt_final"
@@ -377,6 +419,3 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
             _LOGGER.warning("STT turn failed: %s", type(error).__name__)
             self.ledger.mark(turn.turn_id, "stt_failed")
             return failed
-        finally:
-            await audio.aclose()
-            self.ledger.schedule_events()

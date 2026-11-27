@@ -4731,3 +4731,30 @@ The landing gates for commit `82ab94f` gave these results:
 | `task ha-2026-11` | Exit 0, `2206 passed` |
 
 The changelog and the [virtual intents procedure](testing/virtual-intents.md#device-operation-bridge) give the entity names and the sensor lookup after the change to satellite devices.
+
+## STT and TTS failure checks (2026-11-27 UTC)
+
+A refused recovery open lets the server check queued events. It cannot connect a live turn or make a parent turn.
+After a health check error, the next hint send uses the new names.
+An audio source close error or timeout does not replace a complete STT result.
+If a new turn starts during an STT request, HA does not get command text from that request.
+
+TTS reports a failure if there is a fallback error during audio output.
+A text source error is not the end of complete text.
+After a TTS failure, each new text part starts a new 2 s wait. The failure event contains the text that the entity received.
+The continuation point stays at the last complete sentence marker.
+A new health response with the same voice list clears a repair for a voice on that list.
+
+| Check | Result |
+|---|---|
+| Regression cases on `6b7aae3` | 14 test failures |
+| Regression cases with the corrections | `14 passed` |
+| Scratch mutations | One test failure for each of the eight mutations |
+| Active text after TTS failure on `398bd0a` | 2 test failures |
+| Active text with the new wait | `2 passed` |
+| Total text wait mutation | 2 test failures |
+| Active text with a 300 ms event loop pause and a test clock | `2 passed` |
+| Text stalls at the test clock deadline | `2 passed` |
+| `task check` | Exit 0, `2221 passed, 1 skipped` |
+| `task ha-minimum` | Exit 0, `2221 passed, 1 skipped` |
+| `task ha-2026-11` | Exit 0, `2222 passed` |

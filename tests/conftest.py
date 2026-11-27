@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -74,3 +75,47 @@ def drain_timing_events():
             assert not ledger._pending
 
     return drain
+
+
+@pytest.fixture
+def recovery_clock(monkeypatch):
+    from custom_components.assist_live import tts
+
+    class RecoveryClock:
+        now = 0
+        deadline = 0
+        active = None
+        armed = asyncio.Event()
+
+        @asynccontextmanager
+        async def timeout(self, delay):
+            async with asyncio.timeout(None) as timer:
+                self.active = timer
+                self.deadline = self.now + delay
+                self.armed.set()
+                try:
+                    yield
+                finally:
+                    self.active = None
+
+        def advance(self, step):
+            self.now += step
+            if self.active is None or self.now < self.deadline:
+                return False
+            self.active.reschedule(asyncio.get_running_loop().time())
+            return True
+
+    clock = RecoveryClock()
+
+    class Asyncio:
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        def timeout(self, delay):
+            if delay == tts.RECOVERY_TEXT_TIMEOUT:
+                return clock.timeout(delay)
+            return asyncio.timeout(delay)
+
+    monkeypatch.setattr(tts, "RECOVERY_TEXT_TIMEOUT", 100)
+    monkeypatch.setattr(tts, "asyncio", Asyncio())
+    return clock

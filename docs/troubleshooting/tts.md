@@ -64,7 +64,10 @@ The entity requests positions only when that flag is `true`.
 Each `sentence_end` can give `text_end`, a Unicode code-point count from the start of the request text.
 The position gives the end of a sentence in the text. It does not give a position in the audio.
 
-The entity finishes the text input and gives the fallback `full_text[text_end:].lstrip()` from the last marker.
+After an audio failure, each new text part starts a new 2 s wait.
+If the text input ends with no error, the entity gives the fallback `full_text[text_end:].lstrip()` from the last marker.
+If there is a text input error, the entity stops the audio and reports a failure.
+The same rule applies if the entity gets no new text or end of input in 2 s.
 If the server stops during the next sentence, fallback starts that sentence again and speaks the remaining text.
 If the provider sends a marker late, fallback can speak more than one sentence again.
 The entity sends server audio without a wait for the next marker.
@@ -92,17 +95,18 @@ The integration does not run the conversation or the device operation again.
 
 ## Failure events and notifications
 
-An unsuccessful continuation marks `tts_failed` and fires `assist_live_tts_failed`.
-The event data contains `satellite` and the full reply in `text`.
-The full reply is not part of diagnostics or timing records.
+If there is a fallback error or fallback cannot continue the audio, the entity records `tts_failed` and fires `assist_live_tts_failed`.
+The event data contains `satellite` and the reply in `text`.
+After a text input error or timeout, the event contains only the text that the entity received.
+Diagnostics and timing records do not contain this text.
 
 If the server stops after all sentences are complete, the listener heard the full reply.
 The integration counts this condition in the diagnostics counter `late_server_failures`.
 It keeps the type-only error log, but it does not mark `tts_failed`, fire the failure event, or send a notification.
 
 The config flow has a `notify_tts_failure` setting, with a default of `false`.
-When this setting is on, an unsuccessful continuation calls the public `persistent_notification.create` service.
-The call uses `message` for the full reply and `title` for `assist-live TTS failed`.
+When this setting is on, the entity calls the public `persistent_notification.create` service after a TTS failure.
+The call uses `message` for the event text and `title` for `assist-live TTS failed`.
 It supplies no target and no `notification_id`. HA makes a different notification for each failure.
 
 The notification stays in the HA frontend until an operator dismisses it.

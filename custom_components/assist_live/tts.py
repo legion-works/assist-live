@@ -2,7 +2,6 @@ import asyncio
 import logging
 import struct
 from collections.abc import AsyncGenerator
-from contextlib import suppress
 
 from assist_live_client import AssistLiveClient
 from assist_live_client.models import (
@@ -41,6 +40,7 @@ PARALLEL_UPDATES = 0
 EARLY_START_DELAY = 1.0
 EARLY_START_RATE = 22050
 EARLY_START_PCM = bytes(5513 * 2)
+RECOVERY_TEXT_TIMEOUT = 2.0
 
 
 def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEntity:
@@ -208,15 +208,18 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
             if isinstance(health, HealthCapabilities)
             else None,
         )
-        if key == self._swept_voices:
+        sweep = key != self._swept_voices
+        if not sweep and not self._refused_voices:
             return
         self._swept_voices = key
         ids = {voice.id for voice in voices}
+        if not sweep:
+            ids.intersection_update(self._refused_voices)
         for voice in ids:
             # Only a subsequent health response can clear a refused voice.
             if (
                 voice not in self._refused_voices
-                or self.ledger.last_health is not self._refused_voices[voice]
+                or health is not self._refused_voices[voice]
             ):
                 self._voice_issue(voice, False)
 
@@ -302,7 +305,6 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         failure = HomeAssistantError(
                             "TTS text limit is 16384 characters"
                         )
-                        self.ledger.mark(turn.turn_id, "tts_failed")
                         return
                     size += len(part)
                     if not buffer:
@@ -310,6 +312,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                     async with changed:
                         buffer.append(part)
                         changed.notify_all()
+            except Exception:
+                failure = HomeAssistantError("TTS text source failed")
             finally:
                 async with changed:
                     done = True
@@ -319,9 +323,10 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
 
         async def cleanup() -> None:
             producer.cancel()
-            with suppress(asyncio.CancelledError):
-                await producer
-            self.ledger.schedule_events()
+            try:
+                await asyncio.gather(producer, return_exceptions=True)
+            finally:
+                self.ledger.schedule_events()
 
         async def capture() -> AsyncGenerator[str]:
             offset = 0
@@ -340,9 +345,40 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                     offset += 1
                 yield part
 
-        async def fresh() -> AsyncGenerator[str]:
-            async for part in capture():
-                yield part
+        async def finish_text() -> tuple[str, bool]:
+            async with changed:
+                seen = len(buffer)
+
+                def advanced() -> bool:
+                    return done or len(buffer) > seen
+
+                while not done:
+                    try:
+                        async with asyncio.timeout(RECOVERY_TEXT_TIMEOUT):
+                            await changed.wait_for(advanced)
+                    except TimeoutError:
+                        if not advanced():
+                            break
+                    seen = len(buffer)
+            return "".join(buffer), done and failure is None
+
+        async def report_failure(text: str) -> None:
+            self.ledger.mark(turn.turn_id, "tts_failed")
+            if self.hass is None:
+                return
+            self.hass.bus.async_fire(
+                "assist_live_tts_failed", {"satellite": self.satellite, "text": text}
+            )
+            if self.notify_tts_failure:
+                try:
+                    await self.hass.services.async_call(
+                        "persistent_notification",
+                        "create",
+                        {"title": "assist-live TTS failed", "message": text},
+                        blocking=True,
+                    )
+                except Exception as error:
+                    _LOGGER.warning("TTS notification failed: %s", type(error).__name__)
 
         async def fallback(
             parts: AsyncGenerator[str] | None = None,
@@ -388,7 +424,7 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 TTSAudioRequest(
                     fallback_language,
                     options,
-                    fresh() if parts is None else parts,
+                    capture() if parts is None else parts,
                 )
             )
 
@@ -541,7 +577,7 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
             assert server is not None and wav_header is not None
             invalid = False
             received_audio = first_audio is not None
-            full: str | None = None
+            finished_text: tuple[str, bool] | None = None
             try:
                 if early_start:
                     # The first read is internal.
@@ -560,9 +596,12 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                             step, pending = pending, None
                             item = await step
                     except StopAsyncIteration:
+                        if failure is not None:
+                            raise failure from None
                         if early_start and not received_audio:
-                            full = "".join([part async for part in fresh()])
-                            if full.strip():
+                            finished_text = await finish_text()
+                            full, complete = finished_text
+                            if not complete or full.strip():
                                 raise ProtocolError(
                                     "TTS stream ended before audio", kind="closed"
                                 ) from None
@@ -598,10 +637,11 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 ):
                     self._voice_issue(voice, True)
                 _LOGGER.warning("TTS stream failed: %s", type(error).__name__)
-                if full is None:
-                    full = "".join([part async for part in fresh()])
+                full, complete = (
+                    await finish_text() if finished_text is None else finished_text
+                )
                 before_audio = early_start and not received_audio
-                if before_audio and not full.strip():
+                if complete and before_audio and not full.strip():
                     return
                 suffix = (
                     full
@@ -609,7 +649,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                     else (full[text_end:].lstrip() if text_end is not None else None)
                 )
                 if (
-                    (before_audio or not invalid)
+                    complete
+                    and (before_audio or not invalid)
                     and suffix is not None
                     and audio_format is not None
                 ):
@@ -634,23 +675,7 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         _LOGGER.warning(
                             "TTS fallback failed: %s", type(fallback_error).__name__
                         )
-                self.ledger.mark(turn.turn_id, "tts_failed")
-                self.hass.bus.async_fire(
-                    "assist_live_tts_failed",
-                    {"satellite": self.satellite, "text": full},
-                )
-                if self.notify_tts_failure:
-                    try:
-                        await self.hass.services.async_call(
-                            "persistent_notification",
-                            "create",
-                            {"title": "assist-live TTS failed", "message": full},
-                            blocking=True,
-                        )
-                    except Exception as notify_error:
-                        _LOGGER.warning(
-                            "TTS notification failed: %s", type(notify_error).__name__
-                        )
+                await report_failure(full)
                 return
             finally:
                 try:
@@ -660,27 +685,16 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
 
         if not healthy:
             try:
+                if failure is not None:
+                    raise failure
                 response = await fallback()
-            except HomeAssistantError:
-                full = "".join([part async for part in fresh()])
-                self.ledger.mark(turn.turn_id, "tts_failed")
-                self.hass.bus.async_fire(
-                    "assist_live_tts_failed",
-                    {"satellite": self.satellite, "text": full},
-                )
-                if self.notify_tts_failure:
-                    try:
-                        await self.hass.services.async_call(
-                            "persistent_notification",
-                            "create",
-                            {"title": "assist-live TTS failed", "message": full},
-                            blocking=True,
-                        )
-                    except Exception as notify_error:
-                        _LOGGER.warning(
-                            "TTS notification failed: %s", type(notify_error).__name__
-                        )
-                await cleanup()
+            except Exception as error:
+                try:
+                    _LOGGER.warning("TTS fallback failed: %s", type(error).__name__)
+                    full, _ = await finish_text()
+                    await report_failure(full)
+                finally:
+                    await cleanup()
                 raise
             except BaseException:
                 await cleanup()
@@ -694,6 +708,13 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                             self.ledger.mark(turn.turn_id, "tts_first_byte")
                             first = False
                         yield chunk
+                    if failure is not None:
+                        raise failure
+                except Exception as error:
+                    _LOGGER.warning("TTS fallback failed: %s", type(error).__name__)
+                    full, _ = await finish_text()
+                    await report_failure(full)
+                    raise
                 finally:
                     await cleanup()
 

@@ -110,6 +110,7 @@ class TurnLedger:
         self.timing_events_dropped = 0
         self.turn_opens_dropped = 0
         self._connected: set[str] = set()
+        self._refused_opens: set[str] = set()
         self.failures: dict[str, int] = {}
         self.fallback_reasons = {
             reason: 0 for reason in get_args(FallbackReason.__value__)
@@ -253,6 +254,7 @@ class TurnLedger:
             for event in self._pending
             if event.turn_id in self.records
             or event.turn_id in self._connected
+            or event.turn_id in self._refused_opens
             or event.turn_id in self._pending_opens
         ]
         retained = self.records.keys() | {event.turn_id for event in self._pending}
@@ -267,9 +269,8 @@ class TurnLedger:
             if turn_id in retained
         }
         # Pending events can outlive the short record-retention window.
-        self._connected.intersection_update(
-            self.records.keys() | {event.turn_id for event in self._pending}
-        )
+        self._connected.intersection_update(retained)
+        self._refused_opens.intersection_update(retained)
 
     def _open(self, satellite: str, kind: Literal["voice", "tts_only"]) -> TurnOpen:
         self.prune()
@@ -581,6 +582,8 @@ class TurnLedger:
             return False
         if turn.turn_id in self._connected:
             return True
+        if turn.turn_id in self._refused_opens:
+            return False
         # Maintenance can open this turn before its entity connects.
         if opened := self._opening.get(turn.turn_id):
             async with asyncio.timeout(10):
@@ -625,9 +628,10 @@ class TurnLedger:
             self._event_sender is not None and not self._event_sender.done()
         ):
             return
-        if any(event.turn_id in self._connected for event in self._pending) or (
-            self._retry_opens and self._pending_opens
-        ):
+        if any(
+            event.turn_id in self._connected or event.turn_id in self._refused_opens
+            for event in self._pending
+        ) or (self._retry_opens and self._pending_opens):
             self._event_sender = self.create_event_task(self.flush())
 
     async def flush(self) -> None:
@@ -667,16 +671,26 @@ class TurnLedger:
                         # A conflicting or too-old open can have accepted events.
                         # The server must check each queued event.
                         self.turn_opens_dropped += 1
+                        self._refused_opens.add(turn.turn_id)
+                        if record := self.records.get(turn.turn_id):
+                            record.open_failure = "open_refused"
+                            record.open_error_class = type(error).__name__
                     except TimeoutError, OSError:
                         self._events_failed = True
                         self._retry_opens = False
                         return
+                    else:
+                        self._connected.add(turn.turn_id)
                     finally:
                         self._opening.pop(turn.turn_id).set()
                     self._pending_opens.pop(turn.turn_id, None)
-                    self._connected.add(turn.turn_id)
             event = next(
-                (e for e in self._pending if e.turn_id in self._connected), None
+                (
+                    e
+                    for e in self._pending
+                    if e.turn_id in self._connected or e.turn_id in self._refused_opens
+                ),
+                None,
             )
             if event is None:
                 if self._retry_opens and any(
@@ -727,6 +741,7 @@ class TurnLedger:
         self._pending.clear()
         self._pending_opens.clear()
         self._fallback_parts.clear()
+        self._refused_opens.clear()
 
     def snapshot(self) -> list[dict[str, str]]:
         return [

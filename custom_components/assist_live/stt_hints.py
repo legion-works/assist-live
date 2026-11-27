@@ -195,10 +195,10 @@ class STTHints:
             try:
                 if self._rebuild:
                     self._rebuild = False
+                    self._ready = False
                     self._health = await self.client.health_capabilities(
                         timeout=HEALTH_TIMEOUT
                     )
-                    self._ready = False
                 if self._health is None or not self._health.stt_hints:
                     for satellite in satellites:
                         self.status[satellite]["last_result"] = "skipped_no_support"

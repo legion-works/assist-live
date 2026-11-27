@@ -401,8 +401,10 @@ If the server sent audio for the next sentence before it stopped, fallback can s
 The entity sends server audio before it gets the next marker.
 
 If the formats do not agree or there is no text position, the entity stops the audio.
-It records `tts_failed` and fires `assist_live_tts_failed` with the full reply text.
-An optional `notify` service receives the full reply.
+If there is a text input error, the entity does not continue the audio.
+After an audio failure, the same rule applies if the entity gets no new text or end of input in 2 s.
+It records `tts_failed` and fires `assist_live_tts_failed` with the text that it received.
+The optional notification contains the same text.
 The integration does not run the conversation or device control again.
 
 ### Reply start before the first server audio
