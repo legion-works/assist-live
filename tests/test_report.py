@@ -57,6 +57,33 @@ def test_internal_stage_defects_count_against_completeness(stage, defect):
     ]
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["tts_last_byte", "tts_sentence", "tts_failed", None],
+    ids=["last-byte", "sentence", "failed", "cache-hit"],
+)
+def test_server_tts_evidence_requires_first_byte(stage):
+    from tools.report import summarize
+
+    _, rows = dataset(2, "p1")
+    row = rows[0]
+    row["events"] = [
+        item
+        for item in row["events"]
+        if item["stage"] not in {"tts_first_byte", "tts_first_text"}
+    ]
+    if stage is not None:
+        row["events"].append(event(stage, 1800, row["turn_id"], "server"))
+
+    summary = summarize(rows)
+    if stage is None:
+        assert summary["completeness"]["rate"] == 1
+        assert summary["failed_turns"] == []
+    else:
+        assert summary["completeness"]["rate"] == 0.5
+        assert summary["failed_turns"][0]["reasons"] == ["MISSING_TTS_FIRST_BYTE"]
+
+
 @pytest.mark.parametrize("parts", [(), ("stt",), ("tts",), ("stt", "tts")])
 def test_p1_stage_ownership_follows_each_fallback_part(parts):
     from tools.device_replay import INTERNAL_STAGE_PARTS

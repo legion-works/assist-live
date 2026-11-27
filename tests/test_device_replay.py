@@ -23,7 +23,6 @@ from tools.device_replay import (
     Capture,
     ClientEvents,
     ReplayError,
-    UnavailableProfileSelector,
     align_capture,
     attach_evidence,
     baseline_for,
@@ -222,6 +221,21 @@ def test_pause_rule_is_not_written_when_clock_cannot_decide(fit_complete, reason
     assert row["pause_rule_reason"] == reason
 
 
+@pytest.mark.parametrize("bad_start", ["duplicate", "negative-delay", "after-decision"])
+def test_pause_clock_refuses_invalid_server_start(bad_start):
+    row, label = pause_fit_case({"end_sample": 6500}, None)
+    if bad_start == "duplicate":
+        row["events"].append(event("speech_start", 110, source="server"))
+    elif bad_start == "negative-delay":
+        row["events"][0]["t_utc_ns"] = row["alignment"]["first_voice_utc_ns"] - 1
+    else:
+        row["events"][0]["t_utc_ns"] = row["events"][1]["t_utc_ns"] + 1
+
+    with pytest.raises(ReplayError, match="^MISSING_PAUSE_DELAY_ESTIMATE$"):
+        pause_cut(row, label)
+    assert "pause_rule" not in row
+
+
 def test_pause_fit_accepts_stream_start_before_capture():
     from tools.turn_audio import correlate
 
@@ -338,7 +352,7 @@ def options(*extra):
 def test_acceptance_refuses_limit():
     with pytest.raises(ReplayError, match="LIMIT_NOT_ALLOWED_IN_ACCEPTANCE"):
         check_options(options("--acceptance", "--limit", "2"))
-    assert check_options(options("--limit", "2")) == ["baseline"]
+    assert check_options(options("--limit", "2")) == "baseline"
 
 
 def test_documented_acceptance_commands_supply_ha_counter_sources():
@@ -350,6 +364,7 @@ def test_documented_acceptance_commands_supply_ha_counter_sources():
         and "--acceptance" in line
     ]
     assert {args.phase for args in commands} == {"p0", "p1"}
+    assert {args.profile for args in commands if args.phase == "p1"} == {"safe", "fast"}
     for args in commands:
         assert all(
             (
@@ -384,8 +399,8 @@ async def test_replay_refuses_repository_output_before_corpus_load(
 @pytest.mark.parametrize(
     "extra,error",
     [
-        (["--profiles", "safe,fast"], "PROFILES_P1_ONLY"),
-        (["--phase", "p1"], "P1_REQUIRES_SAFE_FAST"),
+        (["--profile", "safe"], "PROFILE_P1_ONLY"),
+        (["--phase", "p1"], "P1_REQUIRES_PROFILE"),
         (["--limit", "0"], "INVALID_SMOKE_LIMIT"),
     ],
 )
@@ -867,16 +882,34 @@ async def test_acceptance_requires_frozen_corpus_smoke_does_not(tmp_path, capsys
 
 
 @pytest.mark.asyncio
-async def test_real_profile_selector_is_explicitly_unavailable():
-    with pytest.raises(ReplayError, match="NOT AVAILABLE: device profile selector"):
-        await UnavailableProfileSelector().select("safe")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("include_pauses", [False, True], ids=["smoke", "pause-report"])
-async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
-    tmp_path, monkeypatch, include_pauses
+@pytest.mark.parametrize(
+    ("include_pauses", "before", "after", "error"),
+    [
+        (False, "safe", "safe", None),
+        (True, "safe", "safe", None),
+        (False, None, "safe", "MISSING_TURN_PROFILE"),
+        (False, "fast", "safe", "TURN_PROFILE_MISMATCH"),
+        (False, "http-error", "safe", "TURN_PROFILE_HEALTH_UNAVAILABLE"),
+        (False, "safe", None, "MISSING_TURN_PROFILE"),
+        (True, "safe", "fast", "TURN_PROFILE_MISMATCH"),
+        (False, "safe", "invalid-json", "TURN_PROFILE_HEALTH_UNAVAILABLE"),
+    ],
+    ids=[
+        "smoke",
+        "pause-report",
+        "missing-before",
+        "wrong-before",
+        "http-error-before",
+        "missing-after",
+        "wrong-after",
+        "invalid-json-after",
+    ],
+)
+async def test_p1_replay_verifies_profile_before_and_after_trials(
+    tmp_path, monkeypatch, include_pauses, before, after, error
 ):
+    from aiohttp import ClientResponseError, ClientSession
+
     from tools.report import build_report, markdown
 
     label, replay_capture = bundle(tmp_path)
@@ -951,6 +984,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             pass
 
     records = []
+    block_start = 0
     listings = {}
     copies = []
     debug_source = "/config/pipeline_recordings/device/Pipeline/new/01_stt-test.wav"
@@ -1030,20 +1064,46 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             self.server_clock = clock
             row = copy.deepcopy(baseline)
             row["turn_id"] = turn
+            row["run_id"] = os.environ["ASSIST_LIVE_RUN_ID"]
             records.append(recorder(row))
 
         async def close(self):
             await super().close()
             records_path.write_text(
-                "".join(json.dumps(record) + "\n" for record in records)
+                "".join(json.dumps(record) + "\n" for record in records[block_start:])
             )
 
-    class Selector:
-        def __init__(self):
-            self.calls = []
+    class HealthResponse:
+        def __init__(self, profile):
+            self.profile = profile
 
-        async def select(self, profile):
-            self.calls.append(profile)
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def raise_for_status(self):
+            if self.profile == "http-error":
+                raise ClientResponseError(None, (), status=503)
+
+        async def json(self):
+            if self.profile == "invalid-json":
+                raise ValueError("invalid JSON")
+            if self.profile == "http-error":
+                return {"turn_profile": "safe"}
+            return {} if self.profile is None else {"turn_profile": self.profile}
+
+    health_calls = []
+    replies = iter((before, after, "fast", "fast"))
+
+    def health(self, url, *, headers):
+        assert url == "http://127.0.0.1/health"
+        assert headers == {"Authorization": "Bearer test-only"}
+        health_calls.append(len(records))
+        return HealthResponse(next(replies))
+
+    monkeypatch.setattr(ClientSession, "get", health)
 
     monkeypatch.setattr("tools.device_replay.AssistLiveClient", FakeClient)
     monkeypatch.setattr("tools.device_replay.AlsaOutput", lambda *args: FakeOutput())
@@ -1054,7 +1114,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
         ),
     )
     monkeypatch.setattr("tools.device_replay.ClientEvents", RecordingEvents)
-    args = options("--phase", "p1", "--profiles", "safe,fast", "--limit", "1")
+    args = options("--phase", "p1", "--profile", "safe", "--limit", "1")
     if include_pauses:
         args.limit = None
         args.ha_container = "test-ha"
@@ -1063,16 +1123,50 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
     args.labels, args.audio_root = labels, tmp_path
     args.output = tmp_path / "runs.jsonl"
     args.clock_record = clock_record
-    selector = Selector()
-    rows = await run(args, selector)
+    if error and before != "safe":
+        with pytest.raises(ReplayError, match=f"^{error}$"):
+            await run(args)
+        assert not records and not args.output.exists()
+        assert health_calls == [0]
+        return
+
+    if error:
+        with pytest.raises(ReplayError, match=f"^{error}$"):
+            await run(args)
+        expected = [(item["id"], item["set"]) for item in corpus[: len(decisions)]]
+        assert health_calls == [0, len(expected)]
+        rejected = [json.loads(line) for line in args.output.read_text().splitlines()]
+        assert [(row["clip_id"], row["set"]) for row in rejected] == expected
+        for row in rejected:
+            assert row["complete"] is False
+            assert error in row["failures"]
+            assert "pause_cut" not in row
+            assert "pause_rule" not in row
+        return
+
+    safe_rows = await run(args)
+    safe_output = args.output
+    with pytest.raises(ReplayError, match="STALE_OPERATION_EVIDENCE"):
+        await run(args)
+    records_path.unlink()
+    block_start = len(records)
+    args.profile = "fast"
+    args.output = tmp_path / "fast.jsonl"
+    monkeypatch.setenv("ASSIST_LIVE_RUN_ID", "fast-run")
+    fast_rows = await run(args)
+    rows = safe_rows + fast_rows
+    assert health_calls == [0, len(safe_rows), len(safe_rows), len(rows)]
     assert all(row["loss_counters"]["start"]["observed_utc_ns"] > 0 for row in rows)
     assert all(row["loss_counters"]["end"]["observed_utc_ns"] > 0 for row in rows)
     assert all(row["loss_unavailable"] and row["reset_unknown"] for row in rows)
-    assert selector.calls == ["safe", "fast"]
     if include_pauses:
-        written = [json.loads(line) for line in args.output.read_text().splitlines()]
+        written = [
+            json.loads(line)
+            for path in (safe_output, args.output)
+            for line in path.read_text().splitlines()
+        ]
         assert written == rows
-        for profile in selector.calls:
+        for profile in ("safe", "fast"):
             trials = {row["clip_id"]: row for row in rows if row["profile"] == profile}
             assert trials.keys() == {item["id"] for item in corpus[:-1]}
             assert trials["cut"]["pause_cut"] is True
@@ -1126,7 +1220,7 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             report["pauses"]["count"] == report["executable_prefix_cuts"]["count"] == 5
         )
         assert report["pause_rules"] == {
-            profile: {"position": 1, "clock": 6} for profile in selector.calls
+            profile: {"position": 1, "clock": 6} for profile in ("safe", "fast")
         }
         rendered = markdown(report)
         assert (
@@ -1142,18 +1236,16 @@ async def test_fake_selector_runs_both_p1_profiles_and_p0_without_selection(
             and not row["frozen"]
             for row in rows
         )
-    with pytest.raises(ReplayError, match="STALE_OPERATION_EVIDENCE"):
-        await run(args, Selector())
-
     records_path.unlink()
     records.clear()
-    selector.calls.clear()
-    args.phase, args.profiles = "p0", None
+    block_start = 0
+    health_calls.clear()
+    args.phase, args.profile = "p0", None
     args.ha_container = args.ha_device_id = args.ha_pipeline_name = None
     rows = await run(args)
     assert all(row["set"] == "replay" for row in rows)
     assert [row["profile"] for row in rows] == ["baseline"]
-    assert selector.calls == []
+    assert health_calls == []
 
 
 @pytest.mark.asyncio

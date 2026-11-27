@@ -32,7 +32,8 @@ A test-only event cannot supply a `stage` value for completeness or change its o
 Missing events, duplicate events from the owner, and events from a different owner do not satisfy completeness.
 The report gives the `stage` value after `MISSING_`, `DUPLICATE_`, or `WRONG_OWNER_`.
 
-When the server records `tts_text_received`, it must also record `tts_first_byte` unless TTS changes to the fallback path.
+When the server records a TTS event, it must also record `tts_first_byte` unless TTS changes to the fallback path.
+This rule also applies if the record has only `tts_sentence`, `tts_last_byte`, or `tts_failed`.
 The fallback path uses an integration `fallback_used` event for `tts` and an integration `tts_first_byte` at or after it.
 The TTS entity does not get a reply from the HA cache. If there are no TTS events, the report does not check `tts_first_byte`.
 

@@ -4925,3 +4925,39 @@ The report counts pause decisions for each `profile` and does not count trials w
 | First voice and pause count tests before the changes | `8 failed, 1 passed` |
 | Replay, report, and fault tests with the changes | `707 passed` |
 | First voice tests without the first voice check | `5 failed, 2 passed` |
+
+## P1 replay and TTS event checks (2026-11-27 UTC)
+
+Replay reads `turn_profile` from the test server before and after each P1 run.
+If the first check is not satisfactory, replay does not start the trials.
+If the last check is not satisfactory, no row from that run is complete.
+
+The report checks for `tts_first_byte` when the same turn has a server TTS event.
+On a cache hit without TTS events, the first byte event is not necessary.
+The clock rule tests use constant timestamps and check that replay refuses an incorrect time interval.
+
+| Check | Result |
+|---|---|
+| P1 server setting test at `2c3e7ac` | `1 failed` |
+| TTS and clock rule tests at `2c3e7ac` | `3 failed, 6 passed` |
+| Replay, report, and HA connection tests | `325 passed` |
+| Checks with the last setting check, TTS rule, or duplicate start check removed | `3 failed` |
+| Full suite without Gitleaks and Git metadata | `21 failed, 2332 passed, 1 skipped` |
+| CI, package, and public data tests with those prerequisites | `176 passed` |
+
+The TTS tests found the three failures at the base. The result of the clock rule tests at the base was satisfactory.
+The replay tests use simulated server and device responses. No test used a live device.
+
+## P1 replay error checks (2026-11-27 UTC)
+
+The last `turn_profile` check sets all rows to `complete: false` if the server gives a different value.
+The test checks the error code on each row and checks that replay removes `pause_cut` and `pause_rule`.
+Two tests check for `TURN_PROFILE_HEALTH_UNAVAILABLE`: HTTP 503 before the trials and incorrect JSON after the trials.
+
+| Check | Result |
+|---|---|
+| Replay, report, and HA connection tests | `327 passed` |
+| Set `complete: false` on the first row only | `1 failed` |
+| Keep `pause_cut` or keep `pause_rule` in two different checks | `1 failed` for each check |
+| Remove the HTTP status check | `1 failed` |
+| Make the P1 report input file | Correct row order, mode `0600`, no file replacement |

@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Protocol, TypeGuard, cast
 from urllib.parse import urlsplit
 
+from aiohttp import ClientError, ClientSession
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -299,9 +301,14 @@ def internal_stage_errors(row: Row, events: list[Row]) -> list[str]:
     events = turn_events(events, row.get("turn_id"))
     stages = ["end_decision", "stt_final"]
     if fallback_markers(events, "tts") or any(
-        e.get("stage") == "tts_first_byte"
-        or (e.get("stage") == "tts_text_received" and e.get("source") == "server")
+        stage == "tts_first_byte"
+        or (
+            e.get("source") == "server"
+            and isinstance(stage, str)
+            and stage.startswith("tts_")
+        )
         for e in events
+        if (stage := e.get("stage")) is not None
     ):
         stages.append("tts_first_byte")
     return [
@@ -855,15 +862,6 @@ async def fit_pause_recording(
     return {"pause_fit": fit}
 
 
-class ProfileSelector(Protocol):
-    async def select(self, profile: str) -> None: ...
-
-
-class UnavailableProfileSelector:
-    async def select(self, profile: str) -> None:
-        raise ReplayError("NOT AVAILABLE: device profile selector")
-
-
 class AlsaOutput:
     def __init__(self, device: str = "default") -> None:
         self.device = device
@@ -1232,7 +1230,7 @@ def parser() -> argparse.ArgumentParser:
         description="Device loudspeaker replay; no hardware evidence is bundled."
     )
     result.add_argument("--phase", required=True, choices=("p0", "p1"))
-    result.add_argument("--profiles")
+    result.add_argument("--profile", choices=("safe", "fast"))
     result.add_argument("--labels", type=Path, required=True)
     result.add_argument("--audio-root", type=Path, required=True)
     result.add_argument("--split", choices=("held_out", "tuning"), required=True)
@@ -1252,15 +1250,16 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def check_options(args: argparse.Namespace) -> list[str]:
+def check_options(args: argparse.Namespace) -> str:
     if args.acceptance and args.limit is not None:
         raise ReplayError("LIMIT_NOT_ALLOWED_IN_ACCEPTANCE")
     if args.limit is not None and args.limit <= 0:
         raise ReplayError("INVALID_SMOKE_LIMIT")
-    if args.phase == "p0" and args.profiles is not None:
-        raise ReplayError("PROFILES_P1_ONLY")
-    if args.phase == "p1" and args.profiles != "safe,fast":
-        raise ReplayError("P1_REQUIRES_SAFE_FAST")
+    profile: str | None = args.profile
+    if args.phase == "p0" and profile is not None:
+        raise ReplayError("PROFILE_P1_ONLY")
+    if args.phase == "p1" and profile not in ("safe", "fast"):
+        raise ReplayError("P1_REQUIRES_PROFILE")
     debug = (args.ha_container, args.ha_device_id, args.ha_pipeline_name)
     if any(part is not None for part in debug) and (
         args.phase != "p1"
@@ -1269,13 +1268,31 @@ def check_options(args: argparse.Namespace) -> list[str]:
         or any(Path(part).parts != (part,) or part == ".." for part in debug[1:])
     ):
         raise ReplayError("INVALID_HA_DEBUG_RECORDING_SCOPE")
-    return ["baseline"] if args.phase == "p0" else ["safe", "fast"]
+    return profile or "baseline"
 
 
-async def run(
-    args: argparse.Namespace, selector: ProfileSelector | None = None
-) -> list[Row]:
-    profiles = check_options(args)
+async def verify_turn_profile(
+    session: ClientSession, server_url: str, token: str, profile: str
+) -> None:
+    try:
+        async with asyncio.timeout(30):
+            async with session.get(
+                server_url.rstrip("/") + "/health",
+                headers={"Authorization": "Bearer " + token},
+            ) as response:
+                response.raise_for_status()
+                health = await response.json()
+    except ClientError, TimeoutError, ValueError:
+        raise ReplayError("TURN_PROFILE_HEALTH_UNAVAILABLE") from None
+    active = health.get("turn_profile") if isinstance(health, dict) else None
+    if not isinstance(active, str) or not active:
+        raise ReplayError("MISSING_TURN_PROFILE")
+    if active != profile:
+        raise ReplayError("TURN_PROFILE_MISMATCH")
+
+
+async def run(args: argparse.Namespace) -> list[Row]:
+    profile = check_options(args)
     output = external_output(args.output)
     rows = load_corpus(args.labels)
     frozen = frozen_corpus(args.labels, args.labels.parent / "corpus.sha256", rows)
@@ -1294,8 +1311,6 @@ async def run(
     if not selected:
         raise ReplayError("EMPTY_REPLAY_SPLIT")
     selected = selected[: args.limit]
-    if args.phase == "p1" and selector is None:
-        await UnavailableProfileSelector().select(profiles[0])
     required = (
         "ASSIST_LIVE_URL",
         "ASSIST_LIVE_TOKEN_FILE",
@@ -1308,7 +1323,8 @@ async def run(
     )
     if any(not os.environ.get(key) for key in required):
         raise ReplayError("REPLAY_SETUP_NOT_AVAILABLE")
-    clock = read_server_clock(args.clock_record, os.environ["ASSIST_LIVE_URL"])
+    server_url = os.environ["ASSIST_LIVE_URL"]
+    clock = read_server_clock(args.clock_record, server_url)
     evidence_path = Path(os.environ["ASSIST_LIVE_OPERATION_RECORDS"])
     if evidence_path.exists():
         raise ReplayError("STALE_OPERATION_EVIDENCE")
@@ -1337,102 +1353,93 @@ async def run(
         }
         if args.device_loss_entity
         else {},
-        "server_url": os.environ["ASSIST_LIVE_URL"],
+        "server_url": server_url,
         "server_token": token,
     }
+    profile_error: ReplayError | None = None
     async with (
         ha_session() as loss_session,
-        AssistLiveClient(os.environ["ASSIST_LIVE_URL"], token) as client,
+        AssistLiveClient(server_url, token) as client,
     ):
+        if args.phase == "p1":
+            await verify_turn_profile(loss_session, server_url, token, profile)
         loss_start = await capture_loss(loss_session, **loss_options)
-        for profile in profiles:
-            selection_error = None
-            if selector is not None:
-                try:
-                    await selector.select(profile)
-                except Exception as error:
-                    if not pending:
-                        raise
-                    selection_error = (
-                        "PROFILE_SELECTION_" + type(error).__name__.upper()
-                    )
-            for label in selected:
-                is_pause = label["set"] == "pause"
-                row: Row = {key: None for key in RUN_FIELDS}
-                row.update(
-                    {
-                        "schema_version": 2,
-                        "mode": "smoke" if args.limit is not None else "acceptance",
-                        "phase": args.phase,
-                        "profile": profile,
-                        "clip_id": label["id"],
-                        "set": label["set"],
-                        "audio_sha256": label["audio_sha256"],
-                        "split": args.split,
-                        "frozen": frozen,
-                        "run_id": os.environ["ASSIST_LIVE_RUN_ID"],
-                        "baseline_config_id": config,
-                        "calibration_revision": os.environ[
-                            "ASSIST_LIVE_CALIBRATION_REVISION"
-                        ],
-                        "baseline_transcript": None,
-                        "complete": False,
-                        "failures": [],
-                        "events": [],
-                        "action_trace_complete": False,
-                        "turn_type": "voice",
-                        "server_clock": dict(clock),
-                        "loss_counters": {"start": loss_start, "end": None},
-                        "loss_unavailable": True,
-                    }
+        for label in selected:
+            is_pause = label["set"] == "pause"
+            row: Row = {key: None for key in RUN_FIELDS}
+            row.update(
+                {
+                    "schema_version": 2,
+                    "mode": "smoke" if args.limit is not None else "acceptance",
+                    "phase": args.phase,
+                    "profile": profile,
+                    "clip_id": label["id"],
+                    "set": label["set"],
+                    "audio_sha256": label["audio_sha256"],
+                    "split": args.split,
+                    "frozen": frozen,
+                    "run_id": os.environ["ASSIST_LIVE_RUN_ID"],
+                    "baseline_config_id": config,
+                    "calibration_revision": os.environ[
+                        "ASSIST_LIVE_CALIBRATION_REVISION"
+                    ],
+                    "baseline_transcript": None,
+                    "complete": False,
+                    "failures": [],
+                    "events": [],
+                    "action_trace_complete": False,
+                    "turn_type": "voice",
+                    "server_clock": dict(clock),
+                    "loss_counters": {"start": loss_start, "end": None},
+                    "loss_unavailable": True,
+                }
+            )
+            try:
+                row["baseline_transcript"] = (
+                    baseline_for(label, config, baselines)
+                    if args.phase == "p1" and not is_pause
+                    else None
                 )
-                try:
-                    if selection_error:
-                        raise ReplayError(selection_error)
-                    row["baseline_transcript"] = (
-                        baseline_for(label, config, baselines)
-                        if args.phase == "p1" and not is_pause
-                        else None
-                    )
-                    sample = await replay_sample(
-                        label,
-                        args.audio_root,
-                        Path(os.environ["ASSIST_LIVE_WAKE_AUDIO"]),
-                        AlsaOutput(
-                            os.environ.get("ASSIST_LIVE_OUTPUT_DEVICE", "default")
-                        ),
-                        AlsaCapture(
-                            os.environ.get("ASSIST_LIVE_CAPTURE_DEVICE", "default")
-                        ),
-                        ClientEvents(
-                            client, os.environ["ASSIST_LIVE_SATELLITE"], clock
-                        ),
-                        args.phase,
-                        debug,
-                    )
-                    row.update(sample)
-                    if row["turn_id"] is not None and any(
-                        previous["turn_id"] == row["turn_id"] for _, previous in pending
-                    ):
-                        raise ReplayError("DUPLICATE_REPLAY_TURN")
-                except Exception as error:
-                    if isinstance(error, ReplayError):
-                        row.update(error.partial)
-                        row["failures"].append(str(error))
-                    else:
-                        row["failures"].append("SAMPLE_" + type(error).__name__.upper())
-                    if is_pause:
-                        row["failures"].append("MISSING_PAUSE_MAPPING")
+                sample = await replay_sample(
+                    label,
+                    args.audio_root,
+                    Path(os.environ["ASSIST_LIVE_WAKE_AUDIO"]),
+                    AlsaOutput(os.environ.get("ASSIST_LIVE_OUTPUT_DEVICE", "default")),
+                    AlsaCapture(
+                        os.environ.get("ASSIST_LIVE_CAPTURE_DEVICE", "default")
+                    ),
+                    ClientEvents(client, os.environ["ASSIST_LIVE_SATELLITE"], clock),
+                    args.phase,
+                    debug,
+                )
+                row.update(sample)
+                if row["turn_id"] is not None and any(
+                    previous["turn_id"] == row["turn_id"] for _, previous in pending
+                ):
+                    raise ReplayError("DUPLICATE_REPLAY_TURN")
+            except Exception as error:
+                if isinstance(error, ReplayError):
+                    row.update(error.partial)
+                    row["failures"].append(str(error))
                 else:
-                    if is_pause:
-                        try:
-                            row["pause_cut"] = pause_cut(row, label)
-                        except ReplayError as error:
-                            row["failures"].append(str(error))
-                pending.append((label, row))
-                write_private_jsonl(output, (item for _, item in pending))
+                    row["failures"].append("SAMPLE_" + type(error).__name__.upper())
+                if is_pause:
+                    row["failures"].append("MISSING_PAUSE_MAPPING")
+            else:
+                if is_pause:
+                    try:
+                        row["pause_cut"] = pause_cut(row, label)
+                    except ReplayError as error:
+                        row["failures"].append(str(error))
+            pending.append((label, row))
+            write_private_jsonl(output, (item for _, item in pending))
         await asyncio.sleep(1.0)
         loss_end = await capture_loss(loss_session, **loss_options)
+        if args.phase == "p1":
+            try:
+                await verify_turn_profile(loss_session, server_url, token, profile)
+            except ReplayError as error:
+                profile_error = error
         loss_end["settle_ms"] = 1000
         loss = loss_window(loss_start, loss_end)
         for _, row in pending:
@@ -1447,6 +1454,10 @@ async def run(
         evidence_error = "MISSING_OR_INVALID_OPERATION_EVIDENCE"
     completed = []
     for label, row in pending:
+        if profile_error is not None:
+            row["failures"].append(str(profile_error))
+            row.pop("pause_cut", None)
+            row.pop("pause_rule", None)
         try:
             if evidence_error:
                 raise ReplayError(evidence_error)
@@ -1466,6 +1477,8 @@ async def run(
             row["complete"] = False
         completed.append(row)
     write_private_jsonl(output, completed)
+    if profile_error is not None:
+        raise profile_error
     return completed
 
 

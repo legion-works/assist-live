@@ -138,15 +138,45 @@ See [counter sources](measurement-rules.md#missing-events).
 
 ```sh
 uv run python tools/device_replay.py --phase p0 --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p0-runs.jsonl"
-uv run python tools/device_replay.py --phase p1 --profiles safe,fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-runs.jsonl"
 ```
 
 Without `--limit`, replay also uses acceptance mode when `--acceptance` is missing.
 `--acceptance --limit 2` gives `LIMIT_NOT_ALLOWED_IN_ACCEPTANCE`.
-`--profiles` is for P1 only.
-The P1 `ProfileSelector` adapter is not available at this time.
-It gives `NOT AVAILABLE: device profile selector` rather than pretend to change a setting.
-Tests use a fake selector for the two settings.
+
+### P1 runs by `profile`
+
+Start the isolated test server with `ASSIST_LIVE_TURN_PROFILE=safe`.
+For each run, use a new `ASSIST_LIVE_RUN_ID` in the replay process and the recorder.
+Use a new `ASSIST_LIVE_OPERATION_RECORDS` path and a new output path for each run.
+
+```sh
+uv run python tools/device_replay.py --phase p1 --profile safe --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-safe.jsonl"
+```
+
+After the first run, restart the test server with `ASSIST_LIVE_TURN_PROFILE=fast`.
+Do not change the server during a run.
+Keep the baseline configuration identifier and calibration revision the same in the two runs.
+
+```sh
+uv run python tools/device_replay.py --phase p1 --profile fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-fast.jsonl"
+```
+
+After the two runs, put the server back in its initial configuration.
+Use a run file only if the checks before and after its trials were satisfactory.
+If a check is not satisfactory, do that run again before you make the report.
+Make a new private JSONL file for the [P1 report](native-functions.md#p1-report):
+
+```sh
+sh -c 'umask 077; set -C; cat "$1/p1-safe.jsonl" "$1/p1-fast.jsonl" > "$1/p1-runs.jsonl"' sh "$RUNROOT"
+```
+
+`--profile` is for P1 only. It does not change the server setting.
+Replay reads `turn_profile` from the authenticated server `/health` before and after the trials.
+It gives `MISSING_TURN_PROFILE` if the field is missing or invalid, or `TURN_PROFILE_MISMATCH` if it is different from `--profile`.
+It gives `TURN_PROFILE_HEALTH_UNAVAILABLE` if it cannot read the response.
+
+If the first check is not satisfactory, replay does not start the trials.
+If the last check is not satisfactory, replay sets `complete: false` on all rows in the file and exits with an error.
 
 Run schema version 2 includes the recording hash, partition, phase, `profile`, turn, run, and immutable baseline configuration identifier.
 It includes `recognized_transcript`, `evaluated_intent`, `action_trace`, `action_trace_complete`, reply text, character count, and reply group.
