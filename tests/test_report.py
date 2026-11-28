@@ -327,6 +327,46 @@ def test_linear_interpolation_reply_boundary_quality_and_methods():
     assert report["methods"]["rate_interval"] == "two-sided Clopper-Pearson 95%"
 
 
+@pytest.mark.parametrize("first_byte_ms", [2400, 1900])
+def test_reply_latency_uses_acoustic_start_not_player_start(first_byte_ms):
+    from tools.report import timing
+
+    labels, baseline_rows = dataset(2, latency=1500)
+    baseline = build(baseline_rows, labels)
+    baseline["accepted"] = True
+    _, rows = dataset(2, "p1")
+    row = rows[0]
+    first_byte = next(
+        item for item in row["events"] if item["stage"] == "tts_first_byte"
+    )
+    first_byte["t_utc_ns"] = 10_000_000_000 + first_byte_ms * 1_000_000
+    row["alignment"]["reply_start_utc_ns"] = 12_500_000_000
+    before = copy.deepcopy(row)
+    report = build(rows, labels, baseline=baseline)
+    steps = report["profiles"]["safe"]["reply_groups"]["short"]["steps"]
+    assert timing(row, "playback_start")["t_utc_ns"] == 12_000_000_000
+    assert timing(row, "tts_first_byte") == first_byte
+    assert steps["tts"]["n"] == 1
+    assert steps["delivery"]["missing"] == int(first_byte_ms > 2000)
+    assert steps["delivery"]["p50_ms"] == (None if first_byte_ms > 2000 else 100)
+    assert steps["last_voice_to_playback"]["p50_ms"] == 1000
+    assert not report["latency"]["passed"]
+    assert all(row[key] == value for key, value in before.items())
+
+
+def test_p1_rejects_the_player_start_baseline_schema():
+    from tools.device_replay import ReplayError
+
+    labels, baseline_rows = dataset(2)
+    baseline = build(baseline_rows, labels)
+    _, rows = dataset(2, "p1")
+    baseline["accepted"] = True
+    with pytest.raises(ReplayError, match="BASELINE_REPORT_SCHEMA_MISMATCH.*p0"):
+        build(rows, labels, baseline={**baseline, "schema_version": 1})
+    assert baseline["schema_version"] == 2
+    assert build(rows, labels, baseline=baseline)["schema_version"] == 2
+
+
 def test_clopper_pearson_is_two_sided_not_a_normal_approximation():
     from tools.report import completeness, pause_gate
 
@@ -1158,7 +1198,7 @@ def test_pause_rule_counts_are_per_profile_and_exclude_undecided_rows():
         rows,
         labels,
         baseline={
-            "schema_version": 1,
+            "schema_version": 2,
             "phase": "p0",
             "accepted": True,
             "baseline_config_id": rows[0]["baseline_config_id"],

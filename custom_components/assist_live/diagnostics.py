@@ -131,6 +131,8 @@ async def async_get_config_entry_diagnostics(
         turns.append(
             {
                 "turn_id": record.turn.turn_id,
+                "turn_type": record.turn.turn_type,
+                "opened_utc_ns": record.turn.opened_utc_ns,
                 **(
                     {
                         "server_audio_samples": record.server_audio_samples,
@@ -217,7 +219,12 @@ async def async_get_config_entry_diagnostics(
         "protocol_version": 1,
         "tts_fallback": {"streaming": streaming, "full_file": full_file},
         "stt_hints": {
-            satellite: dict(row) for satellite, row in runtime.hints.status.items()
+            (
+                label
+                if (label := safe_label(satellite)) != "[redacted]"
+                else f"[redacted:{index}]"
+            ): dict(row)
+            for index, (satellite, row) in enumerate(runtime.hints.status.items(), 1)
         },
         "stt_hints_failures": runtime.hints.failures,
         "failures": dict(runtime.ledger.failures),

@@ -101,7 +101,7 @@ After the device and matrix trials, run:
 uv run python tools/report.py p0 --labels tests/data/labels.jsonl --split held_out --runs "$RUNROOT/p0-runs.jsonl" --calibration "$RUNROOT/p0-calibration.json" --native "$RUNROOT/p0-native.json" --output "$RUNROOT/p0-baseline.json" --markdown "$RUNROOT/p0-baseline.md" --check
 ```
 
-Report schema version 1 includes counts, exclusions with causes, missing events, and unsatisfactory trials.
+Report schema version 2 includes counts, exclusions with causes, missing events, and unsatisfactory trials.
 It divides replies into two groups at 60 characters.
 Each recorded step has p50 and p90 values from linear interpolation at `(n-1)*p`.
 Each rate includes its denominator and a two-sided 95% Clopper-Pearson interval.
@@ -134,8 +134,12 @@ They also give the checks for missing events and test-only pipeline observations
 
 Replay `safe` and `fast` against the same baseline configuration and calibration revision.
 Pair baseline transcripts by recording ID and recording hash before word error rate computation.
-The default `safe` setting must decrease p50 last-voice-to-playback latency by a minimum of 40% in each nonempty reply group.
+The default `safe` setting must decrease p50 `last_voice_to_playback` by a minimum of 40% in each nonempty reply group.
+This step ends at the first reply sound in the microphone capture, not at player start.
 The report shows `fast` independently. It does not replace `safe` with `fast`.
+
+If `--baseline` uses report schema version 1, the tool gives `BASELINE_REPORT_SCHEMA_MISMATCH`.
+Run the P0 report command again with the P0 run records before you run the P1 command.
 
 ```sh
 uv run python tools/report.py p1 --labels tests/data/labels.jsonl --split held_out --latency-profile safe --baseline "$RUNROOT/p0-baseline.json" --runs "$RUNROOT/p1-runs.jsonl" --calibration "$RUNROOT/p0-calibration.json" --faults "$RUNROOT/p1-faults.json" --native "$RUNROOT/p1-native.json" --output "$RUNROOT/p1-acceptance.json" --markdown "$RUNROOT/p1-acceptance.md" --check

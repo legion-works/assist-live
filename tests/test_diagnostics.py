@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import ipaddress
 import json
 from datetime import UTC, datetime
@@ -120,6 +122,37 @@ async def test_diagnostics_after_setup_error_give_entry_state_only(
     assert_entry_state_only(
         await get_diagnostics_for_config_entry(hass, hass_client, entry)
     )
+
+
+async def test_diagnostics_do_not_expose_redacted_satellite_identities(hass, client):
+    from custom_components.assist_live import Runtime
+    from custom_components.assist_live.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    satellites = {"test-device-one": "0-test-name", "test-device-two": "1-test-name"}
+    entry = MockConfigEntry(domain="assist_live", data={"satellites": satellites})
+    runtime = entry.runtime_data = Runtime(hass, entry, client)
+    turns = {
+        satellite: runtime.ledger.open_voice(satellite).turn_id
+        for satellite in satellites.values()
+    }
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    dump = json.dumps(diagnostics)
+    identities = [
+        identity
+        for device_id, name in satellites.items()
+        for identity in (name, device_id, f"{turns[name]}:{name}")
+    ]
+    for identity in identities:
+        raw = identity.encode()
+        assert hashlib.sha256(raw).hexdigest() not in dump
+        assert raw.hex() not in dump
+        assert base64.b64encode(raw).decode() not in dump
+    assert all(identity not in dump for identity in identities)
+    assert {turn["turn_id"] for turn in diagnostics["turns"]} == set(turns.values())
+    assert all(turn["satellite"] == "[redacted]" for turn in diagnostics["turns"])
+    assert len(diagnostics["stt_hints"]) == len(satellites)
 
 
 @pytest.mark.parametrize("selection", ["explicit", "manual", "preferred"])

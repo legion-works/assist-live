@@ -263,6 +263,39 @@ def event_ns(event: Row) -> int:
     ) * 1_000_000_000 + elapsed.microseconds * 1000
 
 
+def diagnostic_turns(
+    snapshot: Row, registered_sensor: Row, events: list[Row], previous: str | None
+) -> set[str]:
+    unique_id = registered_sensor.get("unique_id")
+    suffix = "_last_turn_latency"
+    if (
+        registered_sensor.get("platform") != "assist_live"
+        or not isinstance(unique_id, str)
+        or not unique_id.endswith(suffix)
+    ):
+        return set()
+    satellite = unique_id.removesuffix(suffix)
+    bounds = [
+        event["t_utc_ns"]
+        for event in events
+        if event["stage"] in ("run-start", "run-end")
+    ]
+    if len(bounds) != 2:
+        return set()
+    return {
+        record["turn_id"]
+        for record in snapshot["turns"]
+        if isinstance(record, dict)
+        and record.get("satellite") == satellite
+        and satellite != "[redacted]"
+        and record.get("turn_type") == "voice"
+        and isinstance(record.get("turn_id"), str)
+        and record["turn_id"] != previous
+        and type(record.get("opened_utc_ns")) is int
+        and bounds[0] <= record["opened_utc_ns"] <= bounds[1]
+    }
+
+
 async def read_reply_bounds(row: Row) -> None:
     url = os.environ.get("ASSIST_LIVE_URL")
     token_file = os.environ.get("ASSIST_LIVE_TOKEN_FILE")
@@ -893,10 +926,26 @@ class Hardware:
                     ) not in (None, previous):
                         observed_turns.add(attributes["turn_id"])
                     if row["hardware_invalid_reason"] != "no_wake":
+                        turn_source = sensor
+                        if not observed_turns:
+                            link_snapshot = await runner.fallback_snapshot(
+                                session, token_file, pipeline
+                            )
+                            if link_snapshot is not None:
+                                registered_sensor = await command(
+                                    "config/entity_registry/get", entity_id=sensor
+                                )
+                                observed_turns = diagnostic_turns(
+                                    link_snapshot,
+                                    registered_sensor,
+                                    row["events"],
+                                    previous,
+                                )
+                                turn_source = "diagnostics"
                         if len(observed_turns) != 1:
                             raise ValueError("unique hardware turn ID unavailable")
                         row["turn_id"] = observed_turns.pop()
-                        row["turn_id_source"] = sensor
+                        row["turn_id_source"] = turn_source
                         new_files = await self.files(server) - files_before
                         row["recordings_after"] = sorted(new_files | files_before)
                         if len(new_files) != 1:

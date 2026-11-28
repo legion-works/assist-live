@@ -1079,6 +1079,15 @@ def cancel_fakes(tmp_path, monkeypatch):
         "stop_with": None,
         "satellite_state": lambda: "idle",
         "mute_state": lambda: "off",
+        "pipeline_event_time": lambda _: "2026-01-01T00:00:00+00:00",
+        "latency_unique_id": "satellite-a_last_turn_latency",
+        "latency_state": lambda: {
+            "state": "unknown",
+            "attributes": {
+                "turn_type": "voice",
+                "turn_id": "turn-new" if state["gets"] else "previous",
+            },
+        },
     }
 
     async def command(kind, **fields):
@@ -1111,13 +1120,16 @@ def cancel_fakes(tmp_path, monkeypatch):
                 },
                 {
                     "entity_id": "sensor.turn",
-                    "state": "unknown",
-                    "attributes": {
-                        "turn_type": "voice",
-                        "turn_id": "turn-new" if state["gets"] else "previous",
-                    },
+                    **state["latency_state"](),
                 },
             ]
+        if kind == "config/entity_registry/get" and fields == {
+            "entity_id": "sensor.turn"
+        }:
+            return {
+                "unique_id": state["latency_unique_id"],
+                "platform": "assist_live",
+            }
         if kind == "config/entity_registry/list":
             return [
                 {"entity_id": "stt.test", "device_id": "virtual-device"},
@@ -1178,7 +1190,10 @@ def cancel_fakes(tmp_path, monkeypatch):
             state["gets"] += 1
             return {
                 "events": [
-                    {"timestamp": "2026-01-01T00:00:00+00:00", **event}
+                    {
+                        "timestamp": state["pipeline_event_time"](event["type"]),
+                        **event,
+                    }
                     for event in events
                 ]
             }

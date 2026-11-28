@@ -34,6 +34,7 @@ from tools.test_environment import intent_matches, validate_intent_action_eviden
 
 Row = dict[str, Any]
 REQUIRED = RUN_FIELDS
+REPORT_SCHEMA_VERSION = 2
 STEPS = {
     "wake_to_mic": ("wake_detected", "mic_open"),
     "mic_to_speech": ("turn_audio_start", "acoustic_speech_start"),
@@ -46,7 +47,7 @@ STEPS = {
     "playback": ("playback_start", "playback_end"),
     "end_decision_to_playback": ("end_decision", "playback_start"),
     "speech_start_to_playback": ("acoustic_speech_start", "playback_start"),
-    "last_voice_to_playback": ("last_voice", "playback_start"),
+    "last_voice_to_playback": ("last_voice", "acoustic_reply_start"),
     "last_voice_to_tts_first_byte": ("last_voice", "tts_first_byte"),
 }
 
@@ -176,14 +177,16 @@ def timing(row: Row, stage: str) -> Row | None:
             "uncertainty_ms": uncertainty + 32 if uncertainty is not None else None,
             "method": "turn_audio_start plus onset_ms",
         }
-    if stage == "last_voice":
+    if stage in ("last_voice", "acoustic_reply_start"):
         if row["alignment"] is None:
             return None
+        boundary = "reply_start" if stage == "acoustic_reply_start" else "last_voice"
         return {
-            "t_utc_ns": row["alignment"]["last_voice_utc_ns"]
+            "t_utc_ns": row["alignment"][boundary + "_utc_ns"]
             + row["server_clock"]["offset_ns"],
             "quality": "estimate",
             "uncertainty_ms": row["alignment"]["uncertainty_ms"],
+            "method": row["alignment"]["method"],
         }
     if stage in INTERNAL_STAGE_PARTS:
         event, errors = owned_internal_event(
@@ -242,6 +245,8 @@ def group_timings(rows: list[Row]) -> Row:
                 continue
             elapsed = (right["t_utc_ns"] - left["t_utc_ns"]) / 1e6
             if elapsed < 0:
+                if name == "delivery":
+                    continue
                 raise ReplayError("NEGATIVE_TIMING_STEP: " + name)
             values.append(elapsed)
             quality = (
@@ -580,7 +585,7 @@ def build_report(
     config, revision = rows[0]["baseline_config_id"], rows[0]["calibration_revision"]
     native_errors = validate_native_matrix(native)
     result = {
-        "schema_version": 1,
+        "schema_version": REPORT_SCHEMA_VERSION,
         "phase": phase,
         "baseline_config_id": config,
         "calibration_revision": revision,
@@ -654,12 +659,10 @@ def build_report(
         if phase == "p0" or observation_complete(row)
     )
     if phase == "p1":
-        if (
-            baseline is None
-            or baseline.get("schema_version") != 1
-            or baseline.get("phase") != "p0"
-        ):
+        if baseline is None or baseline.get("phase") != "p0":
             raise ReplayError("P0_BASELINE_REQUIRED")
+        if baseline.get("schema_version") != REPORT_SCHEMA_VERSION:
+            raise ReplayError("BASELINE_REPORT_SCHEMA_MISMATCH: run report.py p0 again")
         if (
             baseline.get("baseline_config_id") != config
             or baseline.get("calibration_revision") != revision
@@ -876,7 +879,12 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--check", action="store_true")
         command.add_argument("--correct-transcripts", type=Path)
         if phase == "p1":
-            command.add_argument("--baseline", type=Path, required=True)
+            command.add_argument(
+                "--baseline",
+                type=Path,
+                required=True,
+                help=f"P0 report with schema version {REPORT_SCHEMA_VERSION}",
+            )
             command.add_argument("--faults", type=Path, required=True)
             command.add_argument("--latency-profile", choices=("safe",), default="safe")
     args = parser.parse_args(argv)

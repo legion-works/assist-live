@@ -33,7 +33,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from homeassistant.util.hass_dict import HassEntryKey
 
-from .const import CONF_FALLBACK_TTS_VOICE, DOMAIN, HEALTH_TIMEOUT
+from .const import (
+    CONF_ENDPOINT_GENERATION,
+    CONF_FALLBACK_TTS_VOICE,
+    DOMAIN,
+    HEALTH_TIMEOUT,
+)
 from .ledger import TurnLedger
 from .repairs import (
     event_stream_issue,
@@ -55,6 +60,7 @@ class SavedState(TypedDict):
     version: int
     turns: list[dict[str, str]]
     cursors: dict[str, int]
+    endpoint_generation: NotRequired[int]
     fallback_metadata: NotRequired[dict[str, FallbackMetadata]]
 
 
@@ -68,6 +74,8 @@ class Runtime:
         self.hass = hass
         self.entry = entry
         self.client = client
+        # The entry can change before this runtime saves its final state.
+        self._endpoint_generation: int = entry.data.get(CONF_ENDPOINT_GENERATION, 0)
         self._reauth_deferred = False
         self.auth = ServerAuth(self._start_reauth)
         self._unsaved_state = hass.data.setdefault(_UNSAVED_STATE, {})
@@ -168,6 +176,8 @@ class Runtime:
             "turns": self.ledger.snapshot(),
             "cursors": dict(self.cursors),
         }
+        if self._endpoint_generation:
+            data["endpoint_generation"] = self._endpoint_generation
         if self.fallback_metadata:
             data["fallback_metadata"] = copy.deepcopy(self.fallback_metadata)
         return data
@@ -252,6 +262,7 @@ class Runtime:
         rows: object = []
         cursors: object = {}
         metadata: object = {}
+        generation: object = 0
         if isinstance(saved, list):
             rows = saved
         elif (
@@ -261,8 +272,13 @@ class Runtime:
         ):
             rows, cursors = saved.get("turns"), saved.get("cursors")
             metadata = saved.get("fallback_metadata", {})
+            generation = saved.get("endpoint_generation", 0)
         else:
             invalid = True
+        if type(generation) is not int or generation < 0:
+            invalid = True
+        if invalid or generation != self._endpoint_generation:
+            rows, cursors = [], {}
         if not isinstance(rows, list):
             rows = []
             invalid = True

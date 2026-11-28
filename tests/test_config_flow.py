@@ -105,6 +105,7 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
     [
         ("match", "reconfigure_successful"),
         ("same_url", "reconfigure_successful"),
+        ("same_endpoint", "reconfigure_successful"),
         ("wrong_server", "wrong_server"),
         ("no_configured_keys", "wrong_server"),
         ("unreachable", "cannot_connect"),
@@ -116,7 +117,7 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
         ("token_changed", "server_changed"),
     ],
 )
-async def test_reconfigure_changes_only_url_after_verifying_bindings(
+async def test_reconfigure_updates_endpoint_after_verifying_bindings(
     configured_hass,  # noqa: F811
     case,
     reason,
@@ -130,6 +131,7 @@ async def test_reconfigure_changes_only_url_after_verifying_bindings(
     old_url = "https://server.example"
     url = {
         "same_url": old_url,
+        "same_endpoint": "https://SERVER.example:443/",
         "invalid_url": "https://server.example/?bad=true",
         "http": "http://new.example/",
     }.get(case, "https://new.example/")
@@ -214,7 +216,10 @@ async def test_reconfigure_changes_only_url_after_verifying_bindings(
         if reason == "reconfigure_successful":
             assert result["reason"] == reason
             assert result.get("translation_domain") in (None, "assist_live")
-            assert entry.data == {**data, "url": url.rstrip("/")}
+            expected = {**data, "url": url.rstrip("/")}
+            if case in {"match", "http"}:
+                expected["endpoint_generation"] = 1
+            assert entry.data == expected
             assert entry.options == {"local_only": True}
             if case == "same_url":
                 reload.assert_not_called()

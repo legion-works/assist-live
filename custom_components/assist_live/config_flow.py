@@ -15,7 +15,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 from yarl import URL
 
-from .const import CONF_FALLBACK_TTS_VOICE, CONF_NOTIFY_TTS_FAILURE, DOMAIN
+from .const import (
+    CONF_ENDPOINT_GENERATION,
+    CONF_FALLBACK_TTS_VOICE,
+    CONF_NOTIFY_TTS_FAILURE,
+    DOMAIN,
+)
 from .settings import effective_settings
 
 
@@ -405,8 +410,13 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                             url, token, except_entry_id=entry.entry_id
                         )
                         url = url.rstrip("/")
+                        data = {**entry.data, "url": url}
+                        if key != request_key(entry.data["url"]):
+                            data[CONF_ENDPOINT_GENERATION] = (
+                                entry.data.get(CONF_ENDPOINT_GENERATION, 0) + 1
+                            )
                         if self.hass.config_entries.async_update_entry(
-                            entry, data={**entry.data, "url": url}
+                            entry, data=data
                         ):
                             self.hass.config_entries.async_schedule_reload(
                                 entry.entry_id

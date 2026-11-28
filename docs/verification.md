@@ -5122,3 +5122,11 @@ The 186 local checks and an archive check of the changed files gave satisfactory
 With the published PyPI wheel for `assist-live-client==0.1.0a3`, 373 tests gave satisfactory results and strict mypy found no errors in 42 source files.
 
 The reauthentication tests also check requests that open a turn, send an event, stream STT or TTS, or send STT hints. If the server rejects the token, HA starts one flow and the fallback engine answers. HA removes the repair issue after token replacement. The test file gave 21 satisfactory results. Seven checks found faults in a copy of the code.
+
+## Server changes, reply timing, and fault checks
+
+- A change to a different server clears the event cursor and turn recovery data. An equivalent URL keeps them.
+- The report keeps the first provider byte. The `delivery` step has no value if the player starts first. The latency check uses the first reply sound from the microphone capture. Report schema version 2 does not accept a version 1 baseline.
+- During a server outage, the latency sensor stays unavailable. The fault runner uses the `satellite` field in diagnostics to connect a voice turn to its pipeline run. It does not use a redacted value. It reads the last fault counts after it saves the recording and completes the fault task.
+
+The selected test files gave 431 satisfactory results. The checks used test data and did not use a live device.
