@@ -79,6 +79,7 @@ def test_quality_scale_lists_each_rule_with_a_status_and_comment():
     for name, rule in rules.items():
         assert rule["status"] in {"done", "todo", "exempt"}, name
         assert isinstance(rule["comment"], str) and rule["comment"].strip(), name
+    assert rules["brands"]["status"] == "exempt"
     dependency = rules["dependency-transparency"]
     assert dependency["status"] == "done"
     for detail in ("Apache-2.0", "PyPI", "client-v0.1.0a1", "client-v0.1.0a2"):

@@ -50,6 +50,12 @@ AUDIO_SUFFIXES = {
     ".mid",
     ".midi",
 }
+BRAND_IMAGES = frozenset({"brand/icon.png", "brand/icon@2x.png"})
+BRAND_IMAGE_PATHS = frozenset(
+    f"custom_components/assist_live/{name}" for name in BRAND_IMAGES
+)
+MAX_BRAND_IMAGE_BYTES = 32 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def git(root: str | Path, *args: str) -> bytes:
@@ -104,10 +110,18 @@ def scan_text(text: str, denylist: Iterable[str]) -> Counter[str]:
     return +findings
 
 
+def valid_brand_png(data: bytes) -> bool:
+    return len(data) <= MAX_BRAND_IMAGE_BYTES and data.startswith(PNG_SIGNATURE)
+
+
 def scan_data(
     data: bytes, denylist: Iterable[str], licensed_audio: Collection[str], name: str
 ) -> Counter[str]:
     findings = scan_text(data.decode("utf-8", errors="replace"), denylist)
+    if name in BRAND_IMAGE_PATHS:
+        if not valid_brand_png(data):
+            findings["brand_image"] += 1
+        return +findings
     audio = (
         Path(name).suffix.lower() in AUDIO_SUFFIXES
         or (data.startswith(b"RIFF") and data[8:12] == b"WAVE")

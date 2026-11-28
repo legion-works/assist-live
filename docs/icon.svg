@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="assist-live icon">
+  <polygon points="97.28,0 512,0 512,414.72 414.72,512 0,512 0,97.28" fill="#1f242b"/>
+  <polygon points="98.46,2 510,2 510,413.54 413.54,510 2,510 2,98.46" fill="none" stroke="#c8d6e4" stroke-opacity="0.36" stroke-width="4"/>
+  <path d="M348.99,183.35 A118,118 0 0 1 348.99,328.65" fill="none" stroke="#cfebff" stroke-opacity="0.9" stroke-width="24" stroke-linecap="round"/>
+  <path d="M163.01,183.35 A118,118 0 0 0 163.01,328.65" fill="none" stroke="#cfebff" stroke-opacity="0.9" stroke-width="24" stroke-linecap="round"/>
+  <path d="M403.57,156.46 A178,178 0 0 1 403.57,355.54" fill="none" stroke="#cfebff" stroke-opacity="0.45" stroke-width="24" stroke-linecap="round"/>
+  <path d="M108.43,156.46 A178,178 0 0 0 108.43,355.54" fill="none" stroke="#cfebff" stroke-opacity="0.45" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="62" fill="#f4fbff"/>
+</svg>

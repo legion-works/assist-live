@@ -4961,3 +4961,19 @@ Two tests check for `TURN_PROFILE_HEALTH_UNAVAILABLE`: HTTP 503 before the trial
 | Keep `pause_cut` or keep `pause_rule` in two different checks | `1 failed` for each check |
 | Remove the HTTP status check | `1 failed` |
 | Make the P1 report input file | Correct row order, mode `0600`, no file replacement |
+
+## Local brand icon checks (2026-11-28 UTC)
+
+The HA 2026.11 brand reader read the two PNG files from `custom_components/assist_live/brand/`.
+The release ZIP contained the two PNG files without changes.
+The package and public tree checks examine the PNG signature and the 32 KiB size limit at these two paths.
+The public tree check also examines the file contents for private text.
+
+| Check | Result |
+| --- | --- |
+| Brand tests on `dbb9cd6` | `10 failed`. The ZIP did not contain the two icons. |
+| Public tree, CI, and quality scale test files | `187 passed` |
+| Remove the PNG signature check | `1 failed` for a text file with an approved name. |
+| Make a ZIP without `icon@2x.png` | `1 failed` for the missing file. |
+| `task hassfest` | `Integrations: 1`, `Invalid integrations: 0` |
+| `task package-check` | `PASS packaging` |

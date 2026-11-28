@@ -180,6 +180,40 @@ def test_unknown_binary_is_not_licensed_audio():
     )
 
 
+@pytest.mark.parametrize("name", ["icon.png", "icon@2x.png"])
+def test_public_tree_accepts_only_the_two_brand_png_paths(name):
+    from tools.check_public_tree import scan_data
+
+    png = b"\x89PNG\r\n\x1a\n"
+    path = f"custom_components/assist_live/brand/{name}"
+    assert not scan_data(png, (), set(), path)
+    assert "binary" in scan_data(png, (), set(), f"docs/{name}")
+    assert "binary" in scan_data(
+        png, (), set(), "custom_components/assist_live/brand/logo.png"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"Not a PNG.", b"\x89PNG\r\n\x1a\n" + b"\0" * (32 * 1024 - 7)],
+    ids=["renamed-text", "oversize"],
+)
+def test_public_tree_refuses_invalid_brand_png(payload):
+    from tools.check_public_tree import scan_data
+
+    path = "custom_components/assist_live/brand/icon.png"
+    assert "brand_image" in scan_data(payload, (), set(), path)
+
+
+def test_public_tree_still_scans_brand_png_for_private_text():
+    from tools.check_public_tree import scan_data
+
+    path = "custom_components/assist_live/brand/icon.png"
+    marker = "restricted-fixture-marker"
+    png = b"\x89PNG\r\n\x1a\n" + marker.encode()
+    assert scan_data(png, [marker], set(), path) == {"denylist": 1}
+
+
 @pytest.mark.parametrize("data", [b"\x7fdata", "\u0080data".encode()])
 def test_nonprinting_binary_is_rejected(data):
     from tools.check_public_tree import scan_data

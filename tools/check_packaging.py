@@ -11,9 +11,19 @@ from typing import TYPE_CHECKING
 from packaging.version import InvalidVersion, Version
 
 if TYPE_CHECKING or __package__:
-    from .check_public_tree import git
+    from .check_public_tree import (
+        BRAND_IMAGES,
+        MAX_BRAND_IMAGE_BYTES,
+        git,
+        valid_brand_png,
+    )
 else:
-    from check_public_tree import git
+    from check_public_tree import (
+        BRAND_IMAGES,
+        MAX_BRAND_IMAGE_BYTES,
+        git,
+        valid_brand_png,
+    )
 
 PACKAGE_FILES = {
     "__init__.py",
@@ -36,7 +46,7 @@ PACKAGE_FILES = {
     "translations/en.json",
     "tts.py",
     "tts_fallback.py",
-}
+} | BRAND_IMAGES
 
 
 def valid_client_requirement(root: Path, requirements: object) -> bool:
@@ -84,8 +94,16 @@ def check_packaging(root: str | Path) -> list[str]:
             if name not in PACKAGE_FILES:
                 failures.append(f"unexpected package file {name}")
         for name in sorted(PACKAGE_FILES):
-            if not (package / name).is_file():
+            path = package / name
+            if not path.is_file():
                 failures.append(f"package file {name}")
+            elif name in BRAND_IMAGES:
+                if path.is_symlink() or path.parent.is_symlink():
+                    failures.append(f"invalid brand image {name}")
+                    continue
+                with path.open("rb") as image:
+                    if not valid_brand_png(image.read(MAX_BRAND_IMAGE_BYTES + 1)):
+                        failures.append(f"invalid brand image {name}")
         manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
         hacs = json.loads((root / "hacs.json").read_text(encoding="utf-8"))
         for field, expected in {

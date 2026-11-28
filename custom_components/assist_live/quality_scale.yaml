@@ -10,11 +10,12 @@ rules:
       and at 5 s intervals after an unsatisfactory result. The 1 s tick
       examines only local turn deadlines.
   brands:
-    status: todo
+    status: exempt
     comment: >-
-      HA 2026.3 and subsequent versions read brand images from a brand
-      folder of a custom integration. The public tree check refuses binary
-      files, and the operator has not selected an assist-live icon.
+      The rule asks for images in the core_integrations folder of the brands
+      repository, which does not accept custom integrations. HA 2026.3 and
+      later versions read the icons from the `brand/` folder of this custom
+      integration.
   common-modules:
     status: done
     comment: >-

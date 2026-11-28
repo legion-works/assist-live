@@ -761,6 +761,8 @@ def test_package_file_set_is_explicit():
 
     assert PACKAGE_FILES == {
         "__init__.py",
+        "brand/icon.png",
+        "brand/icon@2x.png",
         "config_flow.py",
         "const.py",
         "diagnostics.py",
@@ -795,6 +797,37 @@ def packaged_root(tmp_path):
     for name in ("hacs.json", "uv.lock", ".gitignore"):
         shutil.copy(ROOT / name, tmp_path / name)
     return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("name", "payload", "expected"),
+    [
+        ("brand/icon.png", b"Not a PNG.", ["invalid brand image brand/icon.png"]),
+        (
+            "brand/icon.png",
+            b"\x89PNG\r\n\x1a\n" + b"\0" * (32 * 1024 - 7),
+            ["invalid brand image brand/icon.png"],
+        ),
+        (
+            "brand/logo.png",
+            b"\x89PNG\r\n\x1a\n",
+            ["unexpected package file brand/logo.png"],
+        ),
+    ],
+    ids=["renamed-text", "oversize", "unexpected-path"],
+)
+def test_packaging_refuses_invalid_brand_png(packaged_root, name, payload, expected):
+    from tools.check_packaging import check_packaging
+
+    brand = packaged_root / "custom_components/assist_live/brand"
+    brand.mkdir(exist_ok=True)
+    for filename in ("icon.png", "icon@2x.png"):
+        (brand / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert check_packaging(packaged_root) == []
+
+    path = brand.parent / name
+    path.write_bytes(payload)
+    assert check_packaging(packaged_root) == expected
 
 
 @pytest.mark.parametrize("git_tree", [False, True], ids=["archive", "git"])
@@ -1006,6 +1039,42 @@ def test_release_archive_checks_only_default_branch():
     assert workflow["jobs"]["archive"].get("if") == (
         "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     ), "publisher can release a branch other than the checked branch"
+
+
+def test_release_archive_contains_brand_pngs(packaged_root):
+    import shutil
+    from zipfile import ZipFile
+
+    from test_public_tree import git
+
+    shutil.copy(ROOT / "LICENSE", packaged_root / "LICENSE")
+    git(packaged_root, "init", "-b", "main")
+    git(packaged_root, "add", ".")
+    tree = git(packaged_root, "write-tree")
+    steps = yaml.safe_load(
+        (ROOT / ".github/workflows/release-artifacts.yml").read_text()
+    )["jobs"]["archive"]["steps"]
+    command = next(
+        line
+        for step in steps
+        for line in step.get("run", "").splitlines()
+        if line.startswith("git archive ")
+    )
+    args = shlex.split(command)[1:]
+    archive = packaged_root / "assist-live.zip"
+    args = [
+        arg.replace("$RUNNER_TEMP", str(packaged_root)) if arg != "HEAD" else tree
+        for arg in args
+    ]
+    git(packaged_root, *args)
+    paths = {
+        "custom_components/assist_live/brand/icon.png",
+        "custom_components/assist_live/brand/icon@2x.png",
+    }
+    with ZipFile(archive) as bundle:
+        assert paths <= set(bundle.namelist())
+        for name in paths:
+            assert bundle.read(name) == (ROOT / name).read_bytes()
 
 
 def test_release_archive_checks_published_client_before_build(tmp_path):
