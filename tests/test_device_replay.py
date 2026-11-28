@@ -1314,20 +1314,15 @@ async def test_p1_replay_verifies_profile_before_and_after_trials(
             assert "pause_cut" not in trials[label["id"]]
         assert len(copies) == 4
         assert all(not path.parent.exists() for path in copies)
+        baseline_report = build_report("p0", [baseline], [label], {}, [])
+        baseline_report["accepted"] = True
         report = build_report(
             "p1",
             written,
             corpus,
             {},
             [],
-            baseline={
-                "schema_version": 1,
-                "phase": "p0",
-                "accepted": True,
-                "baseline_config_id": baseline["baseline_config_id"],
-                "calibration_revision": baseline["calibration_revision"],
-                "profiles": {"baseline": {"reply_groups": {}}},
-            },
+            baseline=baseline_report,
         )
         assert report["gates"]["pause_coverage"] is True
         assert report["pauses"]["denominator"] == 9

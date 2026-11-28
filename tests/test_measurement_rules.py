@@ -42,8 +42,9 @@ def test_row_set_cannot_disagree_with_corpus():
 
 def test_unknown_estimate_uncertainty_is_not_silently_skipped():
     _, rows = dataset()
-    rows[0]["events"][2]["uncertainty_ms"] = None
+    rows[0]["alignment"]["uncertainty_ms"] = None
     step = group_timings(rows)["steps"]["last_voice_to_playback"]
+    assert step["n"] == len(rows)
     assert step["uncertainty_p90_ms"] is None
     assert step["uncertainty_unknown"] == 1
 
