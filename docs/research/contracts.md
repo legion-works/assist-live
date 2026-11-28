@@ -25,7 +25,7 @@ Upstream source:
 - [TTS entity](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/__init__.py)
 - [TTS helper](https://github.com/home-assistant/core/blob/1f214b8461dd1fbbd66e10765c6905f49d3c1d86/homeassistant/components/tts/helper.py)
 
-The TTS fallback uses `tts.helper.get_engine_instance`. The bootstrap does not call it.
+The TTS fallback uses `tts.helper.get_engine_instance`.
 See [Native functions](../design.md#native-functions) for the list of non-public HA interfaces and their contract checks.
 
 ## Satellite playback

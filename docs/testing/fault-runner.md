@@ -350,7 +350,10 @@ An unsatisfactory `restore` stops the run.
 Before playback, the runner snapshots the debug run IDs, turn sensor, and WAV paths for the device and selected pipeline.
 One new debug run, one new voice turn ID, and one new WAV are necessary.
 The run's `run-start` must name this satellite.
-The turn ID comes from the latency sensor, not a timestamp.
+
+The runner uses a new voice turn ID from the latency sensor if one is available.
+If the sensor does not supply one, the runner looks for a unique new voice turn in diagnostics with the same unredacted satellite key.
+The turn must open between the pipeline's `run-start` and `run-end` times.
 The archive record keeps the turn ID and `pipeline_run_id`.
 More than one possible run, turn, or WAV gives `unavailable`.
 

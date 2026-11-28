@@ -180,9 +180,13 @@ The 120 s limit and HA restart also prevent a turn from becoming a parent.
 Unavailable conversation IDs stay null.
 
 The integration starts one event subscription for each key before the forwarding entities become available.
-The subscription starts again with its last event cursor after a connection failure.
+After a connection failure, the subscription starts again with its last event cursor for the same endpoint.
 
-The HA store keeps one cursor for each satellite key, with the open turn IDs.
+The HA store keeps one cursor for each satellite key, with the open turn IDs for that endpoint.
+When reconfiguration changes the normalized endpoint, the integration increases its endpoint generation.
+On reload, it discards the previous cursors and open turn IDs.
+An equivalent URL or token-only reauthentication keeps this state.
+
 Cursor-only writes occur at most one time in 5 s. Turn changes save immediately before audio forwarding.
 When HA removes the entry from service, it saves pending cursor changes.
 A sudden process failure can replay the pending cursor batch.
@@ -197,7 +201,7 @@ HA state observations use proxy quality. Integration timestamps use measured qua
 The server checks record completeness from the necessary `stage` values.
 
 The integration saves the open turn IDs before audio forwarding.
-After an HA restart, those IDs receive `turn_superseded` with `reason=restart`.
+After an HA restart on the same endpoint, those IDs receive `turn_superseded` with `reason=restart`.
 They do not resume or get a complete status.
 A server outage can prevent these markers.
 The server deadline then gives the previous turn an `incomplete` status.

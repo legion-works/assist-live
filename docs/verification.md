@@ -5137,3 +5137,7 @@ Twelve tests gave satisfactory results with the integration code unchanged.
 Each test gave an unsatisfactory result with its fault in an isolated copy of the code.
 The tests include TTS deadlines, STT fallback, timing events, child device retention, speaker results, and rejected tokens.
 The pinned client rejects empty audio frames and out-of-order TTS sentence markers.
+
+## Documentation checks
+
+Checked the setup and test instructions against the current code. The `test_design_links.py` tests gave `2 passed`.

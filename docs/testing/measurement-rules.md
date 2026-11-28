@@ -41,9 +41,12 @@ One server `end_decision` before an STT `fallback_used` event does not cause an 
 The integration records the fallback decision and the `stt_final` event with `transcript`.
 
 One server `tts_first_byte` before a TTS `fallback_used` event does not cause an owner error.
-If this first byte is available, use its time for reply latency.
 The integration first byte gives proof of the handover. An incorrect handover gives `INVALID_HANDOVER_` and the `stage` value.
-It does not use an event from a different owner to calculate a time or read a transcript.
+The report can use that server event as the first-byte time.
+For other events, it uses only the selected owner to calculate times or read transcripts.
+
+The schema-2 `last_voice_to_playback` step ends at the first acoustic reply sound, not at the provider first byte.
+If the playback proxy comes before the first byte, the report does not measure `delivery` for that turn.
 
 ## Sets
 

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Add the experimental HA package boundary.
-- Add bootstrap and public-tree checks with tests.
+- Add public-tree checks with tests.
 - Record the design and upstream contracts.
 
 ### Added

@@ -95,22 +95,21 @@ The config flow selects the server, token, satellites, and fallback entities.
 After setup, the options flow can change the fallback entities and the fallback voice, with the same checks as the config flow.
 If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
 
-The server gives HTTP 401 for an incorrect token.
-With the current client, the config flow shows `Cannot read provisioned bindings from the server.` (`cannot_connect`).
+During setup and reconfiguration, HA shows `The server rejected the access token.` (`invalid_auth`) if the server gives HTTP 401.
+This form error does not start reauthentication.
+
+For other bindings request errors, HA shows `Cannot read provisioned bindings from the server.` (`cannot_connect`).
 Then check that the server is available and that its URL does not redirect.
-Check that the token gives access to a minimum of one provisioned satellite key.
+A minimum of one provisioned satellite key is necessary for setup.
+Access to all configured satellite keys is necessary for reconfiguration.
 See [problem checks](usage.md#cannot-read-provisioned-bindings-from-the-server).
 
-**Planned reauthentication.** This flow is not available until the integration pins client `0.1.0a3` after its release.
-That client will give `ProtocolError(kind="unauthorized")` for HTTP 401. Other refusals will stay `refused`.
-
-If setup or a subsequent server request gets `unauthorized`, the integration will start HA reauthentication and continue with the fallback engines.
-The flow will read the bindings at the same server URL with the new token.
-It will refuse a token that a different entry uses for the same server.
-With a correct token, the flow will save the token and reload the entry.
-
-For this planned flow, HA will keep one reauthentication flow for each entry. The integration will not add a repair issue for the token.
-The config flow will show `invalid_auth` for an incorrect token.
+**Reauthentication.** The pinned client `0.1.0a3` gives `ProtocolError(kind="unauthorized")` for HTTP 401.
+When a request from a loaded entry gets `unauthorized`, the integration starts HA-managed reauthentication for that entry and uses the fallback engines.
+Reauthentication waits for an open reconfiguration flow to close.
+The flow reads the bindings at the saved server URL with the new token.
+It checks access to all configured satellite keys and refuses a token that a different entry uses for the same server.
+The flow saves only the token and schedules an entry reload.
 
 HA can set up the fallback engines after assist-live, and an engine can go out of service when its integration reloads.
 Thus the fallback engines are not necessary for the setup of assist-live.
