@@ -161,7 +161,7 @@ async def test_final_turn_store_fault_keeps_options_reload_working(
 
 
 async def test_reconfigure_reloads_a_loaded_entry_without_replacing_entities(
-    runtime_entry, client
+    runtime_entry, client, caplog
 ):
     hass, entry, linked, old_ids = runtime_entry
     old_runtime = entry.runtime_data
@@ -179,6 +179,9 @@ async def test_reconfigure_reloads_a_loaded_entry_without_replacing_entities(
         patch(
             "custom_components.assist_live.AssistLiveClient", return_value=client
         ) as create_runtime,
+        patch.object(
+            hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+        ) as reload,
     ):
         flows = hass.config_entries.flow
         form = await flows.async_init(
@@ -191,6 +194,8 @@ async def test_reconfigure_reloads_a_loaded_entry_without_replacing_entities(
     create_runtime.assert_called_once_with(
         url, "test-only", session=async_get_clientsession(hass)
     )
+    reload.assert_awaited_once_with(entry.entry_id)
+    assert "should use it for scheduling a reload" not in caplog.text
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data is not old_runtime
     assert entry.runtime_data.stt[linked.id].entity_id == old_ids["satellite-a_stt"]

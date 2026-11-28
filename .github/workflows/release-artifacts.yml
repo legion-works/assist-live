@@ -21,7 +21,7 @@ jobs:
       - run: uv run --locked python tools/check_packaging.py
       - name: Require the published client version
         env:
-          CLIENT_VERSION: "0.1.0a2"
+          CLIENT_VERSION: "0.1.0a3"
         run: uv run --locked python tools/check_release_pin.py --manifest custom_components/assist_live/manifest.json --pypi-version "$CLIENT_VERSION" --require-published
       - name: Build and check the archive without publication
         run: |

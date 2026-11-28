@@ -71,7 +71,7 @@ Use **Reconfigure** to change the server URL.
 The server at the new URL must accept the current token for all configured satellite keys.
 HA cannot tell apart two servers that have the same token and keys.
 
-The manifest pins the published pre-release `assist-live-client==0.1.0a2` from PyPI.
+The manifest pins the published pre-release `assist-live-client==0.1.0a3` from PyPI.
 HA, local tests, and CI install that same client version.
 The integration itself has no release.
 Do not replace the manifest requirement with a local path or Git URL.
@@ -79,6 +79,19 @@ Do not replace the manifest requirement with a local path or Git URL.
 The client does not follow redirects for HTTP requests or WebSocket handshakes.
 The client also refuses a WebSocket redirect when the scheme, host, and port do not change.
 Use the server URL that does not give a redirect.
+
+## Reauthentication
+
+If the server rejects the saved access token, HA shows a reauthentication issue in **Settings > System > Repairs**.
+The entry stays loaded. The configured fallback engines answer turns until you replace the token.
+
+1. Make a replacement integration token on the same server.
+2. Give the token access to all satellite keys in this entry.
+3. Open the reauthentication issue. Record the replacement token and select **Submit**.
+
+Do not use a token from a different entry on the same server.
+After the check, HA saves the token and reloads the entry. The server URL and satellite keys do not change.
+If the check is unsatisfactory, see [Invalid access token](troubleshooting/invalid-token.md).
 
 ## Pipelines and voices
 
@@ -189,13 +202,14 @@ They do not resume or get a complete status.
 A server outage can prevent these markers.
 The server deadline then gives the previous turn an `incomplete` status.
 
-An unavailable server shows a repair issue.
+An unavailable server shows a repair issue. A rejected token starts reauthentication.
 Check its URL, token, provisioned keys, and process status.
 STT endpoint settings do not change with server health.
 Offline fallback observations stay local when the record server is unavailable.
 
 The ledger deadline tick runs at 1 s intervals, but unchanged state does not cause a store write.
 Server health checks run at 30 s intervals when healthy and 5 s intervals after an unsatisfactory health result.
+If the server rejects the token, new server requests stop until HA reloads the entry.
 Each request has its 200 ms health check.
 
 After three event or store failures with no good event between them, a repair issue identifies the satellite key.

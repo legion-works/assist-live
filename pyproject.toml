@@ -9,7 +9,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "assist-live-client==0.1.0a2",
+    "assist-live-client==0.1.0a3",
     "gazetteer-matcher==1.1.0",
     "ha-ffmpeg==3.2.2",
     "hassil==3.12.1",
@@ -45,7 +45,7 @@ files = ["custom_components/assist_live", "tools"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["assist_live_client.*", "pymicro_vad", "micro_vad_cpp"]
+module = ["pymicro_vad", "micro_vad_cpp"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]

@@ -315,7 +315,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "assist-live-client", specifier = "==0.1.0a2" },
+    { name = "assist-live-client", specifier = "==0.1.0a3" },
     { name = "gazetteer-matcher", specifier = "==1.1.0" },
     { name = "ha-ffmpeg", specifier = "==3.2.2" },
     { name = "hassil", specifier = "==3.12.1" },
@@ -332,14 +332,13 @@ dev = [
 
 [[package]]
 name = "assist-live-client"
-version = "0.1.0a2"
+version = "0.1.0a3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/df/9cbfba283b30fd00a576cb43d3060f424d23bf6324b8f6229d2f6e9268a8/assist_live_client-0.1.0a2.tar.gz", hash = "sha256:d4cd8c115cb95e3a608d0bb5b85b2d0bad5e367bba2e8c330cc10f2d8da82559", size = 10640, upload-time = "2026-11-25T14:01:06.004Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/0d/e186c83bafcc993f3aa6e248207dd58778123bf103781cdd7ea57dfced49/assist_live_client-0.1.0a2-py3-none-any.whl", hash = "sha256:181c30253120326d65304fa8e88819e65ef94af2b9b8a0d0ed5f265778457c12", size = 12722, upload-time = "2026-11-25T14:01:05.015Z" },
+    { url = "https://files.pythonhosted.org/packages/92/ab/98d3f98665eb967f786e44f40488ac06a4e860ac3f5974e4bd1c10297aa2/assist_live_client-0.1.0a3-py3-none-any.whl", hash = "sha256:0e2e25851cef1bf9659c467871298a122b8f961c8b42e58f29553c39a5222588", size = 13080, upload-time = "2026-11-28T15:28:50.588Z" },
 ]
 
 [[package]]

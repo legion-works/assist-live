@@ -5094,3 +5094,29 @@ The setup test compares the error message on the setup page with the English tra
 The public-tree checker accepts a Git commit range and also examines the working tree.
 The release check tests the package imports after archive extraction.
 The focused tests gave 101 satisfactory results.
+
+## Access token replacement (2026-11-28 UTC)
+
+At setup, the integration reads the server bindings. HTTP 401 starts one reauthentication flow for the entry. HTTP 403 does not start the flow.
+The entry stays loaded and the fallback engines answer turns. An HTTP 401 during an event stream connection gives the same result.
+
+The flow checks the replacement token at the same URL. All configured satellite keys are necessary. The flow refuses a token from a different entry on the same server.
+The flow saves only the token and reloads the entry one time.
+
+The checks use a wheel built from client `0.1.0a3`. No test changed an HA device.
+
+| Check | Result |
+|---|---|
+| Behavior tests before the changes at `a11651b` | `14 failed, 127 passed` |
+| Integration and fallback tests | `316 passed` |
+| Config flow coverage | `114 of 114 branches` |
+| Behavior checks with faults in a copy of the code | `6 failed` |
+| Strict mypy with the client `py.typed` marker | `44 source files`, no errors. The check refuses a string for the client health timeout. |
+| HA `2026.10.1` suite | `21 failed, 2388 passed, 1 skipped` |
+| HA `2026.10.4` suite | `21 failed, 2388 passed, 1 skipped` |
+| HA `2026.11.3` suite | `21 failed, 2389 passed` |
+
+The same 21 archive and public data checks were unsatisfactory in each suite. The runner had no repository Git metadata or Gitleaks.
+The 186 local checks and an archive check of the changed files gave satisfactory results.
+
+With the published PyPI wheel for `assist-live-client==0.1.0a3`, 373 tests gave satisfactory results and strict mypy found no errors in 42 source files.

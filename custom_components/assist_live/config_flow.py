@@ -6,7 +6,6 @@ import probatio as vol
 from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.exceptions import HomeAssistantError
@@ -193,6 +192,15 @@ def valid_satellite(hass: HomeAssistant, device: str, pipeline_select: str) -> b
     )
 
 
+def _bindings_match(entry: config_entries.ConfigEntry, bindings: set[str]) -> bool:
+    configured = set(entry.data["satellites"].values())
+    return bool(configured) and configured <= bindings
+
+
+def _bindings_error(error: ProtocolError) -> str:
+    return "invalid_auth" if error.kind == "unauthorized" else "cannot_connect"
+
+
 class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
     VERSION = 1
 
@@ -266,7 +274,9 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                         if not self.bindings:
                             raise ValueError("no bindings")
                         return await self.async_step_satellite()
-                except ProtocolError, ValueError:
+                except ProtocolError as error:
+                    errors["base"] = _bindings_error(error)
+                except ValueError:
                     errors["base"] = "cannot_connect"
                 finally:
                     if client is not None:
@@ -306,6 +316,60 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
             return await self.async_step_user(self.settings)
         return self.async_show_form(step_id="http_warning", data_schema=vol.Schema({}))
 
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url, token = entry.data["url"], user_input["token"]
+            try:
+                self._abort_if_configured(url, token, except_entry_id=entry.entry_id)
+                client = AssistLiveClient(
+                    url, token, session=async_get_clientsession(self.hass)
+                )
+                try:
+                    bindings = {row["satellite"] for row in await client.bindings()}
+                finally:
+                    await client.close()
+                if entry.data["url"] != url:
+                    errors["base"] = "server_changed"
+                elif not _bindings_match(entry, bindings):
+                    errors["base"] = "wrong_server"
+                else:
+                    self._abort_if_configured(
+                        url, token, except_entry_id=entry.entry_id
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, "token": token}
+                    )
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                    return self.async_abort(reason="reauth_successful")
+            except AbortFlow:
+                errors["base"] = "token_in_use"
+            except ProtocolError as error:
+                errors["base"] = _bindings_error(error)
+            except ValueError:
+                errors["base"] = "invalid_url"
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            errors=errors,
+            data_schema=vol.Schema(
+                {
+                    vol.Required("token"): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD
+                        )
+                    )
+                }
+            ),
+        )
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
@@ -327,33 +391,27 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                 )
                 try:
                     bindings = {row["satellite"] for row in await client.bindings()}
-                except ProtocolError:
-                    errors["base"] = "cannot_connect"
+                except ProtocolError as error:
+                    errors["base"] = _bindings_error(error)
                 finally:
                     await client.close()
                 if not errors:
-                    configured = set(entry.data["satellites"].values())
-                    if not configured or not configured <= bindings:
+                    if entry.data["token"] != token:
+                        errors["base"] = "server_changed"
+                    elif not _bindings_match(entry, bindings):
                         errors["base"] = "wrong_server"
                     else:
                         self._abort_if_configured(
                             url, token, except_entry_id=entry.entry_id
                         )
                         url = url.rstrip("/")
-                        reload_needed = (
-                            url != entry.data["url"]
-                            and entry.state is not ConfigEntryState.LOADED
-                        )
-                        result = self.async_update_and_abort(
-                            entry,
-                            data_updates={"url": url},
-                            reason="reconfigure_successful",
-                        )
-                        if reload_needed:
+                        if self.hass.config_entries.async_update_entry(
+                            entry, data={**entry.data, "url": url}
+                        ):
                             self.hass.config_entries.async_schedule_reload(
                                 entry.entry_id
                             )
-                        return result
+                        return self.async_abort(reason="reconfigure_successful")
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(

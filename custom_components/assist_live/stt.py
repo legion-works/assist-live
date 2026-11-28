@@ -285,8 +285,8 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                     await self.ledger.save()
                 try:
                     async with asyncio.timeout(HEALTH_TIMEOUT):
-                        health = await self.client.health_capabilities(
-                            timeout=HEALTH_TIMEOUT
+                        health = await self.ledger.auth.request(
+                            self.client.health_capabilities, timeout=HEALTH_TIMEOUT
                         )
                         if not self._latest_turn(turn):
                             return failed
@@ -323,7 +323,9 @@ class AssistLiveSTT(AssistLiveEntity, stt.SpeechToTextEntity):
                     self.ledger.used(turn.turn_id, "stt", "server", "unknown")
                     background = False
                     try:
-                        messages = self.client.stt(turn.turn_id, audio.server_audio())
+                        messages = self.ledger.auth.stream(
+                            self.client.stt, turn.turn_id, audio.server_audio()
+                        )
                         try:
                             while True:
                                 async with asyncio.timeout(MESSAGE_DEADLINE):

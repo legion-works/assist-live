@@ -73,9 +73,13 @@ async def test_options_change_stt_next_turn_uses_selected_entity(fallback_entry)
     defaults = form["data_schema"]({})
     assert defaults["fallback_stt"] == "stt.contract_stt", "current STT selector"
     assert defaults["fallback_tts"] == "tts.contract_tts", "current TTS selector"
-    result = await submit(hass, form, values(fallback_stt="stt.alternate_stt"))
-    assert result["type"] == "create_entry", "STT change stays one step"
-    await hass.async_block_till_done()
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        result = await submit(hass, form, values(fallback_stt="stt.alternate_stt"))
+        assert result["type"] == "create_entry", "STT change stays one step"
+        await hass.async_block_till_done()
+    reload.assert_awaited_once_with(entry.entry_id)
     runtime = entry.runtime_data
     assert runtime is not old_runtime, "options update reloads the entry"
     assert entry.options["fallback_stt"] == "stt.alternate_stt", "STT saved in options"

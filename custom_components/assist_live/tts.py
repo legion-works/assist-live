@@ -270,7 +270,9 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
         error_class = "None"
         try:
             async with asyncio.timeout(HEALTH_TIMEOUT):
-                health = await self.client.health_capabilities(timeout=HEALTH_TIMEOUT)
+                health = await self.ledger.auth.request(
+                    self.client.health_capabilities, timeout=HEALTH_TIMEOUT
+                )
                 healthy = self.ledger.server_selected(health, "tts", turn.turn_id)
                 if not healthy:
                     reason = self.ledger.records[turn.turn_id].fallback_reasons["tts"]
@@ -449,7 +451,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
         if healthy:
             self.ledger.used(turn.turn_id, "tts", "server", "unknown")
         server = (
-            self.client.tts_stream(
+            self.ledger.auth.stream(
+                self.client.tts_stream,
                 turn.turn_id,
                 capture(),
                 voice=voice,

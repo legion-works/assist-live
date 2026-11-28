@@ -31,6 +31,16 @@
         "title": "HTTP sends the access token without encryption",
         "description": "Use TLS or an isolated network. Continue only if this HTTP server is on an isolated network."
       },
+      "reauth_confirm": {
+        "title": "Replace the server access token",
+        "description": "Use a token for the configured server. The token must give access to all configured satellite keys.",
+        "data": {
+          "token": "Access token"
+        },
+        "data_description": {
+          "token": "The replacement integration token from the server."
+        }
+      },
       "reconfigure": {
         "title": "Change the assist-live server URL",
         "data": {
@@ -63,14 +73,18 @@
       "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
-      "wrong_server": "The server does not give access to all configured satellite keys with the current token.",
+      "wrong_server": "The server does not give access to all configured satellite keys with this token.",
+      "invalid_auth": "The server rejected the access token.",
+      "token_in_use": "A different entry uses this token for the same server.",
+      "server_changed": "The server URL or token changed during the check. Try again.",
       "invalid_url": "Use an HTTP or HTTPS server URL without user information, a query, or a fragment.",
       "invalid_satellite": "Select a provisioned key and a satellite with an HA Assist pipeline control (pipeline or pipeline_n). Select that control, not a VAD or wake word control.",
       "binding_used": "This device or key is already in use."
     },
     "abort": {
       "already_configured": "An entry for this server and token is configured.",
-      "reconfigure_successful": "The server URL is changed."
+      "reconfigure_successful": "The server URL is changed.",
+      "reauth_successful": "The server access token is changed."
     }
   },
   "options": {

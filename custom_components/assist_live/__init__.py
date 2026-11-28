@@ -12,7 +12,7 @@ from assist_live_client.models import HealthCapabilities, TimingEvent
 from assist_live_client.protocol import ProtocolError
 from homeassistant.components import assist_pipeline
 from homeassistant.components.assist_satellite.entity import AssistSatelliteState
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import (
     CoreState,
@@ -43,6 +43,7 @@ from .repairs import (
     update_issues,
 )
 from .routing import selected_pipelines
+from .server_auth import ServerAuth
 from .settings import FallbackMetadata, effective_settings
 from .stt_hints import STTHints
 
@@ -67,9 +68,12 @@ class Runtime:
         self.hass = hass
         self.entry = entry
         self.client = client
+        self._reauth_deferred = False
+        self.auth = ServerAuth(self._start_reauth)
         self._unsaved_state = hass.data.setdefault(_UNSAVED_STATE, {})
         self.hints = STTHints(hass, client, entry.data["satellites"].values())
         self.ledger = TurnLedger(client)
+        self.hints.auth = self.ledger.auth = self.auth
         self.ledger.create_event_task = lambda coro: hass.async_create_background_task(
             coro, "assist-live-timing-events"
         )
@@ -103,7 +107,16 @@ class Runtime:
 
     @property
     def server_healthy(self) -> bool:
-        return self._healthy is True
+        return self._healthy is True and not self.auth.rejected
+
+    @callback
+    def _start_reauth(self) -> None:
+        # HA does not start reauthentication during reconfiguration.
+        self._reauth_deferred = any(
+            self.entry.async_get_active_flows(self.hass, {SOURCE_RECONFIGURE})
+        )
+        if not self._reauth_deferred:
+            self.entry.async_start_reauth(self.hass)
 
     @callback
     def update_options(self, entry: ConfigEntry) -> None:
@@ -332,10 +345,12 @@ class Runtime:
         stored_state_issue(self.hass, self.entry.entry_id, invalid)
 
     async def _events(self, satellite: str) -> None:
-        while True:
+        while not self.auth.rejected:
             try:
-                stream = self.client.events(
-                    satellite, after_event_id=self.cursors.get(satellite, 0)
+                stream = self.auth.stream(
+                    self.client.events,
+                    satellite,
+                    after_event_id=self.cursors.get(satellite, 0),
                 )
                 try:
                     async for envelope in stream:
@@ -356,7 +371,10 @@ class Runtime:
                     if isinstance(stream, AsyncGenerator):
                         await stream.aclose()
             except Exception:
+                if self.auth.rejected:
+                    break
                 await self._sleep(self._note_failure(satellite))
+        event_stream_issue(self.hass, self.entry.entry_id, satellite, False)
 
     def _note_failure(self, satellite: str) -> float:
         failures = self.failures.get(satellite, 0) + 1
@@ -391,13 +409,15 @@ class Runtime:
                             True,
                         )
         try:
-            health = await self.client.health_capabilities(timeout=HEALTH_TIMEOUT)
+            health = await self.auth.request(
+                self.client.health_capabilities, timeout=HEALTH_TIMEOUT
+            )
         except ProtocolError, TimeoutError, OSError:
             healthy = False
         else:
             healthy = False
             if isinstance(health, HealthCapabilities):
-                healthy = health.healthy is True
+                healthy = health.healthy is True and not self.auth.rejected
                 if healthy:
                     self.last_healthy = dt_util.utcnow()
                     self.last_healthy_health = health
@@ -418,6 +438,8 @@ class Runtime:
                 listener()
 
     async def _maintenance(self, _: object) -> None:
+        if self._reauth_deferred:
+            self._start_reauth()
         for satellite in self.entry.data["satellites"].values():
             self.ledger.current(satellite)
         self.ledger.prune()
@@ -434,7 +456,11 @@ class Runtime:
         entry_selectors = self.entry.data.get("pipeline_selects", {})
         if not entry_selectors:
             update_issues(
-                self.hass, self.entry.entry_id, self.server_healthy, [], set()
+                self.hass,
+                self.entry.entry_id,
+                self.server_healthy or self.auth.rejected,
+                [],
+                set(),
             )
             return
         pipelines = assist_pipeline.async_get_pipelines(self.hass)
@@ -482,7 +508,7 @@ class Runtime:
         update_issues(
             self.hass,
             self.entry.entry_id,
-            self.server_healthy,
+            self.server_healthy or self.auth.rejected,
             selected,
             forwarding_ids,
         )
@@ -556,25 +582,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
     client = AssistLiveClient(
         entry.data["url"], entry.data["token"], session=async_get_clientsession(hass)
     )
-    url = entry.data["url"]
     runtime = Runtime(hass, entry, client)
     entry.runtime_data = runtime
     forwarding_started = False
     try:
+        with suppress(ProtocolError, TimeoutError, OSError):
+            async with asyncio.timeout(HEALTH_TIMEOUT):
+                await runtime.auth.request(client.bindings)
         await runtime.start()
         await runtime.refresh_health()
 
-        async def entry_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
+        async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
+            nonlocal settings
             current = effective_settings(updated)
-            if updated.data["url"] != url or any(
+            reload = any(
                 current[name] != settings[name]
                 for name in ("fallback_stt", "fallback_tts")
-            ):
+            )
+            settings = current
+            if reload:
                 await hass.config_entries.async_reload(updated.entry_id)
             else:
                 runtime.update_options(updated)
 
-        entry.async_on_unload(entry.add_update_listener(entry_updated))
+        entry.async_on_unload(entry.add_update_listener(options_updated))
         forwarding_started = True
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         saved = dict(entry.data.get("pipelines", {}))

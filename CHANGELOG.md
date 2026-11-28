@@ -19,6 +19,7 @@
 - Add corpus import, voice-boundary marks, correct-transcript review, device replay, playback calibration, and native-function reports.
 - Add simulated and hardware fault runners with recording qualification, same-engine baselines, bounded replacements, and cleanup checks.
 - Add the HA quality scale file, field descriptions in the config and options steps, and installation and removal steps.
+- Replace rejected access tokens through Home Assistant. The fallback engines stay available while the entry waits for a new token. `assist-live-client==0.1.0a3` is necessary.
 
 ### Changes
 

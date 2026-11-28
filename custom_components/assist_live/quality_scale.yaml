@@ -28,8 +28,8 @@ rules:
   config-flow-test-coverage:
     status: done
     comment: >-
-      The setup, reconfiguration, and options flow tests give 100 % branch
-      coverage of config_flow.py (106 of 106 branches).
+      The setup, reconfiguration, reauthentication, and options flow tests
+      give 100 % branch coverage of config_flow.py (114 of 114 branches).
   dependency-transparency:
     status: done
     comment: >-
@@ -73,12 +73,11 @@ rules:
     status: done
     comment: The config flow reads the server bindings before it makes the entry.
   test-before-setup:
-    status: todo
+    status: done
     comment: >-
-      Setup continues when the server is unavailable, because the fallback
-      engines must answer turns. The pinned client gives one refused error
-      for each HTTP error status, so setup cannot find an incorrect token.
-      The Silver reauthentication flow must have the same client change.
+      Setup reads the server bindings. HTTP 401 starts reauthentication.
+      Setup continues so the fallback engines can answer turns. Tests use
+      HTTP 401 and 403 responses to check both paths.
   unique-config-entry:
     status: done
     comment: >-
@@ -118,8 +117,11 @@ rules:
     status: done
     comment: Each entity platform sets PARALLEL_UPDATES to 0.
   reauthentication-flow:
-    status: todo
-    comment: The integration has no reauthentication flow.
+    status: done
+    comment: >-
+      An unauthorized result starts one HA flow for the entry. The flow
+      tests the new token on the same server and requires all configured
+      satellite keys. Tests check token reuse, fallback, and a single reload.
   test-coverage:
     status: done
     comment: >-
@@ -211,9 +213,10 @@ rules:
     comment: assist-live-client uses asyncio and aiohttp.
   inject-websession:
     status: done
-    comment: Setup and both config flow paths give the HA session to the client.
+    comment: Setup and all config flow paths give the HA session to the client.
   strict-typing:
-    status: todo
+    status: done
     comment: >-
-      Strict mypy examines the integration. The pinned client lacks py.typed.
-      Client 0.1.0a3 adds the marker.
+      Strict mypy examines the integration with the client py.typed marker
+      from version 0.1.0a3. A type check refuses a string for the client
+      health timeout argument.

@@ -18,6 +18,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from .const import HEALTH_TIMEOUT
+from .server_auth import ServerAuth
 
 _LOGGER = logging.getLogger(__name__)
 _DEVICE_FIELDS = ("name", "name_by_user", "area_id", "parent_device_id")
@@ -67,6 +68,7 @@ class STTHints:
     ) -> None:
         self.hass = hass
         self.client = client
+        self.auth = ServerAuth()
         self.status: dict[str, HintStatus] = {
             satellite: {
                 "count": 0,
@@ -196,8 +198,8 @@ class STTHints:
                 if self._rebuild:
                     self._rebuild = False
                     self._ready = False
-                    self._health = await self.client.health_capabilities(
-                        timeout=HEALTH_TIMEOUT
+                    self._health = await self.auth.request(
+                        self.client.health_capabilities, timeout=HEALTH_TIMEOUT
                     )
                 if self._health is None or not self._health.stt_hints:
                     for satellite in satellites:
@@ -215,7 +217,7 @@ class STTHints:
                     continue
                 try:
                     async with asyncio.timeout(2):
-                        await self.client.set_hints(satellite, names)
+                        await self.auth.request(self.client.set_hints, satellite, names)
                 except Exception as error:
                     self._failed([satellite], error)
                 else:

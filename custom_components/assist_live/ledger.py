@@ -17,6 +17,7 @@ from .const import (
     MAX_SPEAKER_READS_PER_SATELLITE,
     TIMING_EVENT_TIMEOUT,
 )
+from .server_auth import ServerAuth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ class TurnLedger:
         self, client: AssistLiveClient, *, clock: Callable[[], float] = time.monotonic
     ) -> None:
         self.client = client
+        self.auth = ServerAuth()
         self.clock = clock
         self.records: dict[str, Record] = {}
         self._active: dict[str, str] = {}
@@ -594,7 +596,7 @@ class TurnLedger:
         self._opening[turn.turn_id] = asyncio.Event()
         try:
             async with asyncio.timeout(10):
-                await self.client.open_turn(turn)
+                await self.auth.request(self.client.open_turn, turn)
             self._pending_opens.pop(turn.turn_id, None)
             self._connected.add(turn.turn_id)
             self.schedule_events()
@@ -662,7 +664,7 @@ class TurnLedger:
                     self._opening[turn.turn_id] = asyncio.Event()
                     try:
                         async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
-                            await self.client.open_turn(turn)
+                            await self.auth.request(self.client.open_turn, turn)
                     except ProtocolError as error:
                         if error.kind != "refused":
                             self._events_failed = True
@@ -708,7 +710,7 @@ class TurnLedger:
                 continue
             try:
                 async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
-                    await self.client.event(event)
+                    await self.auth.request(self.client.event, event)
             except ProtocolError as error:
                 if error.kind == "refused":
                     retained = any(item is event for item in self._pending)
@@ -754,7 +756,8 @@ class TurnLedger:
             try:
                 # docs/design.md: each timing event request has a 2 s limit.
                 async with asyncio.timeout(TIMING_EVENT_TIMEOUT):
-                    await self.client.event(
+                    await self.auth.request(
+                        self.client.event,
                         TimingEvent(
                             row["turn_id"],
                             row["satellite"],
@@ -764,7 +767,7 @@ class TurnLedger:
                             "measured",
                             None,
                             data={"reason": "restart"},
-                        )
+                        ),
                     )
             except ProtocolError, TimeoutError, OSError:
                 pass

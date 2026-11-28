@@ -108,10 +108,12 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
         ("wrong_server", "wrong_server"),
         ("no_configured_keys", "wrong_server"),
         ("unreachable", "cannot_connect"),
+        ("unauthorized", "invalid_auth"),
         ("invalid_url", "invalid_url"),
         ("http", "reconfigure_successful"),
         ("duplicate", "already_configured"),
         ("concurrent_duplicate", "already_configured"),
+        ("token_changed", "server_changed"),
     ],
 )
 async def test_reconfigure_changes_only_url_after_verifying_bindings(
@@ -162,6 +164,10 @@ async def test_reconfigure_changes_only_url_after_verifying_bindings(
         new_client.bindings.return_value = [{"satellite": "satellite-a"}]
     elif case == "unreachable":
         new_client.bindings.side_effect = ProtocolError("unreachable")
+    elif case == "unauthorized":
+        new_client.bindings.side_effect = ProtocolError(
+            "request refused", kind="unauthorized"
+        )
     elif case == "concurrent_duplicate":
 
         async def competing_entry():
@@ -169,6 +175,15 @@ async def test_reconfigure_changes_only_url_after_verifying_bindings(
             return new_client.bindings.return_value
 
         new_client.bindings.side_effect = competing_entry
+    elif case == "token_changed":
+
+        async def change_token():
+            hass.config_entries.async_update_entry(
+                entry, data={**data, "token": "replacement"}
+            )
+            return new_client.bindings.return_value
+
+        new_client.bindings.side_effect = change_token
 
     def create_client(target, token, *, session):
         assert target == url
@@ -209,7 +224,9 @@ async def test_reconfigure_changes_only_url_after_verifying_bindings(
             assert (result.get("errors") or {"base": result["reason"]}) == {
                 "base": reason
             }
-            assert entry.data == data
+            assert entry.data == (
+                {**data, "token": "replacement"} if case == "token_changed" else data
+            )
             reload.assert_not_called()
             if case == "wrong_server":
                 new_client.bindings.return_value.append({"satellite": "satellite-c"})
