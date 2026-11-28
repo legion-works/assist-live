@@ -17,6 +17,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
 )
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_stt_forward import Fallback as SttFallback
 from test_stt_forward import audio, metadata
@@ -50,6 +51,10 @@ async def assert_fallback_turns(entry):
         metadata(), audio([bytes(320)])
     )
     assert result.text == "test command"
+    await assert_fallback_tts(runtime)
+
+
+async def assert_fallback_tts(runtime):
     response = await runtime.tts["device-a"].async_stream_tts_audio(
         TTSAudioRequest("en", {}, text())
     )
@@ -135,6 +140,60 @@ async def test_concurrent_unauthorized_requests_start_reauth_once(
         await assert_fallback_turns(entry)
         client.health_capabilities.assert_not_awaited()
         assert not runtime.server_healthy
+
+
+@pytest.mark.parametrize(
+    "method", ["open_turn", "event", "stt", "tts_stream", "set_hints"]
+)
+async def test_runtime_client_rejection_starts_one_reauth_and_uses_fallback(
+    lifecycle_entry, client, method
+):
+    hass, entry = lifecycle_entry
+    runtime = entry.runtime_data
+    health = HealthCapabilities(True, True, True, stt_hints=method == "set_hints")
+    client.health_capabilities.return_value = health
+    request = getattr(client, method)
+    error = ProtocolError("request refused", kind="unauthorized")
+
+    if method in {"stt", "tts_stream"}:
+
+        async def rejected_stream():
+            raise error
+            yield
+
+        request.return_value = rejected_stream()
+    else:
+        request.side_effect = error
+
+    with patch.object(
+        type(entry),
+        "async_start_reauth",
+        autospec=True,
+        side_effect=type(entry).async_start_reauth,
+    ) as start:
+        if method == "event":
+            turn = runtime.ledger.open_voice("satellite-a")
+            runtime.ledger.mark(turn.turn_id, "stt_final")
+            assert await runtime.ledger.connect(turn)
+            await runtime.ledger._event_sender
+            start.assert_called_once_with(entry, hass)
+            await assert_fallback_tts(runtime)
+            assert runtime.ledger.current("satellite-a") == turn
+        elif method == "set_hints":
+            runtime.hints.observe_health(health)
+            await runtime.hints._task
+            start.assert_called_once_with(entry, hass)
+        elif method == "tts_stream":
+            await assert_fallback_tts(runtime)
+
+        if method not in {"event", "tts_stream"}:
+            await assert_fallback_turns(entry)
+        start.assert_called_once_with(entry, hass)
+        request.assert_called_once()
+        await hass.async_block_till_done()
+        flows = list(entry.async_get_active_flows(hass, {SOURCE_REAUTH}))
+        assert len(flows) == 1
+        hass.config_entries.flow.async_abort(flows[0]["flow_id"])
 
 
 async def test_event_upgrade_unauthorized_starts_reauth(
@@ -326,6 +385,9 @@ async def test_reauth_preserves_entry_and_reloads(
     runtime._health_due = 0
     await runtime.refresh_health()
     await hass.async_block_till_done()
+    issues = ir.async_get(hass)
+    issue_id = f"config_entry_reauth_assist_live_{entry.entry_id}"
+    assert issues.async_get_issue("homeassistant", issue_id) is not None
     flows = list(entry.async_get_active_flows(hass, {SOURCE_REAUTH}))
     assert len(flows) == 1, "UNAUTHORIZED_DID_NOT_START_REAUTH"
     flow_id = flows[0]["flow_id"]
@@ -359,6 +421,7 @@ async def test_reauth_preserves_entry_and_reloads(
     assert validate.call_args.args == (old_data["url"], token)
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
+    assert issues.async_get_issue("homeassistant", issue_id) is None
     assert result.get("translation_domain") in (None, "assist_live")
     assert entry.data == {**old_data, "token": token}
     assert entry.runtime_data is not runtime, "REAUTH_DID_NOT_RELOAD"

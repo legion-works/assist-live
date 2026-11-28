@@ -5120,3 +5120,5 @@ The same 21 archive and public data checks were unsatisfactory in each suite. Th
 The 186 local checks and an archive check of the changed files gave satisfactory results.
 
 With the published PyPI wheel for `assist-live-client==0.1.0a3`, 373 tests gave satisfactory results and strict mypy found no errors in 42 source files.
+
+The reauthentication tests also check requests that open a turn, send an event, stream STT or TTS, or send STT hints. If the server rejects the token, HA starts one flow and the fallback engine answers. HA removes the repair issue after token replacement. The test file gave 21 satisfactory results. Seven checks found faults in a copy of the code.

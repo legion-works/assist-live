@@ -34,9 +34,7 @@ rules:
     status: done
     comment: >-
       assist-live-client has the Apache-2.0 license. A public workflow in
-      assist-live-server builds and publishes the client to PyPI. The
-      annotated tags client-v0.1.0a1 and client-v0.1.0a2 in assist-live-server
-      mark the published commits.
+      assist-live-server builds and publishes the client to PyPI.
   docs-actions:
     status: exempt
     comment: The integration has no HA `actions`.
