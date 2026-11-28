@@ -142,26 +142,26 @@ rules:
     status: exempt
     comment: HA cannot discover the server at a new URL.
   docs-data-update:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#data-updates explains event updates, health intervals, and availability.
   docs-examples:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#examples gives YAML automations for latency and reply failure.
   docs-known-limitations:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#known-limits gives setup, voice, and playback limits.
   docs-supported-devices:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/setup.md#devices gives tested hardware and device requirements.
   docs-supported-functions:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#entities-and-functions lists each entity and its function.
   docs-troubleshooting:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#problem-checks gives symptoms, causes, and repair steps.
   docs-use-cases:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: docs/usage.md#use-cases gives uses for voice forwarding, fallback, and latency.
   dynamic-devices:
     status: exempt
     comment: >-

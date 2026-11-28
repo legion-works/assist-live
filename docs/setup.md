@@ -12,14 +12,19 @@ Before you install the integration, make sure that you have these items:
 - A standard HA STT entity and a standard TTS entity for fallback.
 - For each satellite, an HA device with an `assist_satellite` entity and an HA Assist pipeline control.
 
-Setup accepts only satellites with the HA Assist pipeline control. ESPHome, Wyoming, and VoIP satellites use this control.
-Its entity registry translation key is `pipeline` or `pipeline_n`.
-
 No release is available. To install the integration from the repository:
 
 1. Copy `custom_components/assist_live/` to the `custom_components/` folder of the HA configuration folder.
 2. Restart HA.
 3. Do the steps in [Server and standard engines](#server-and-standard-engines).
+
+## Devices
+
+The [satellite reply test](verification.md#reply-start-before-slow-server-audio-on-a-satellite-2026-11-25-utc) used one Home Assistant Voice Preview Edition with stock firmware. It did not test question replies.
+
+The integration can use Assist satellites that have an `assist_satellite` entity and a compatible pipeline control on the same HA device. The pipeline control is a `select` entity with registry translation key `pipeline` or `pipeline_n`. ESPHome, Wyoming, and VoIP satellites can have these entities. These are setup requirements, not test results for other models.
+
+The integration cannot use a device without the two entities. A speaker that only has a `media_player` entity is not an Assist satellite.
 
 ## Server and standard engines
 

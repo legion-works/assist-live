@@ -13,6 +13,14 @@ The design adds turn detection, streamed voice, and timing records to HA Assist.
 The native satellite keeps timers, announcements, mute, and the selected conversation agent.
 These are design goals, not compatibility or performance claims.
 
+## User documentation
+
+- [Setup and devices](docs/setup.md)
+- [Use cases, entities, and automation examples](docs/usage.md)
+- [Configuration](docs/configuration.md)
+- [Problem checks](docs/usage.md#problem-checks)
+- [Privacy](docs/privacy.md)
+
 ## Development
 
 Use Python `3.14.2` or a subsequent version and `uv`.

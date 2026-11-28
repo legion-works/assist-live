@@ -5038,3 +5038,18 @@ Each device record has one owner. Cleanup does not remove a composite device.
 | Archive, CI, and public data tests with their tools | `176 passed` |
 
 Each HA suite had the same 21 failures. The suite runner had no Gitleaks or repository Git metadata.
+
+## HA quality scale: Gold documentation rules (2026-11-28 UTC)
+
+The [setup page](setup.md#devices) and the [user documentation](usage.md) give the information for seven Gold documentation rules.
+These rules do not give the integration the Gold level.
+The reply test used stock firmware on one Home Assistant Voice Preview Edition. For other satellites, the device list gives the setup requirements.
+This change has no new device test.
+
+| Check | Result |
+|---|---|
+| Documentation tests at `dbb9cd6` | `8 failed, 4 passed`. The seven rule statuses were `todo`. The page with the YAML examples was missing. |
+| Documentation, design, and record tests | `29 passed`. The HA automation editor's validator accepts the two examples and checks their `triggers` fields. |
+| Markdown targets on the changed user pages | 46 targets are correct. |
+| Check with seven changed headings and one incorrect YAML `actions` key | `8 failed`. Each rule check found its missing heading. The HA schema refused the incorrect key. |
+| Check with `entity_idd` in `numeric_state` | The first test gave `1 passed` with the incorrect field. The test with the automation editor's validator gave `1 failed`. HA refused `entity_idd`. |

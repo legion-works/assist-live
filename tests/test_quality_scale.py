@@ -1,8 +1,11 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
 import yaml
+from homeassistant.components.automation.config import async_validate_config_item
+from test_design_links import heading_slugs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -127,6 +130,36 @@ def test_shipped_translation_has_reconfigure_success_message():
     assert english["config"]["abort"]["reconfigure_successful"] == (
         "The server URL is changed."
     )
+
+
+@pytest.mark.parametrize(
+    "name", [rule for rule in RULES["gold"] if rule.startswith("docs-")]
+)
+def test_gold_docs_rule_has_reachable_evidence(name):
+    path = ROOT / "custom_components/assist_live/quality_scale.yaml"
+    rule = yaml.safe_load(path.read_text(encoding="utf-8"))["rules"][name]
+    assert rule["status"] == "done", name
+    match = re.search(r"(docs/[\w-]+\.md)#([\w-]+)", rule["comment"])
+    assert match is not None, name
+    page, anchor = match.groups()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert re.search(rf"\]\({re.escape(page)}(?:#[\w-]+)?\)", readme), page
+    assert anchor in heading_slugs((ROOT / page).read_text(encoding="utf-8")), (
+        f"{page}#{anchor}"
+    )
+
+
+async def test_documented_examples_validate_as_ha_automations(hass):
+    page = ROOT / "docs/usage.md"
+    assert page.is_file(), "Missing user guide with automation examples"
+    examples = re.findall(
+        r"^```yaml\n(.*?)^```$", page.read_text(encoding="utf-8"), re.M | re.S
+    )
+    assert len(examples) >= 2
+    for index, example in enumerate(examples):
+        assert await async_validate_config_item(
+            hass, str(index), yaml.safe_load(example)
+        )
 
 
 @pytest.mark.parametrize(
