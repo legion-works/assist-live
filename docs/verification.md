@@ -5130,3 +5130,10 @@ The reauthentication tests also check requests that open a turn, send an event, 
 - During a server outage, the latency sensor stays unavailable. The fault runner uses the `satellite` field in diagnostics to connect a voice turn to its pipeline run. It does not use a redacted value. It reads the last fault counts after it saves the recording and completes the fault task.
 
 The selected test files gave 431 satisfactory results. The checks used test data and did not use a live device.
+
+## Integration fault checks (2026-11-28 UTC)
+
+Twelve tests gave satisfactory results with the integration code unchanged.
+Each test gave an unsatisfactory result with its fault in an isolated copy of the code.
+The tests include TTS deadlines, STT fallback, timing events, child device retention, speaker results, and rejected tokens.
+The pinned client rejects empty audio frames and out-of-order TTS sentence markers.
