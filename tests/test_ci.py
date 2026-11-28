@@ -1,3 +1,4 @@
+import re
 import shlex
 from pathlib import Path
 
@@ -332,6 +333,31 @@ def test_ci_has_required_jobs():
         "secrets",
         "ci-complete",
     }
+
+
+def test_hacs_checks_brands_in_ci_and_locally():
+    assert (ROOT / "custom_components/assist_live/brand/icon.png").is_file()
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["hacs"]["steps"]
+    step = next(
+        step for step in steps if step.get("uses", "").startswith("hacs/action@")
+    )
+    assert "brands" not in re.split(r"[,\s]+", step["with"].get("ignore", "")), (
+        "CI must run the HACS brands check"
+    )
+
+    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
+    commands = [shlex.split(command) for command in taskfile["tasks"]["hacs"]["cmds"]]
+    ignores = [
+        arg.partition("=")[2]
+        for args in commands
+        for arg in args
+        if arg.startswith("INPUT_IGNORE=")
+    ]
+    assert all("brands" not in re.split(r"[,\s]+", value) for value in ignores), (
+        "Taskfile must run the HACS brands check"
+    )
 
 
 @pytest.mark.parametrize("environment", [None, [], "invalid"])

@@ -5074,3 +5074,17 @@ The quality scale distinguishes local maintenance from network health checks.
 | Change four documentation claims and put the hosted HACS brands skip in a copy | `5 failed, 1 passed`. The local HACS setting did not change. |
 | Stock HACS brands validator without network access | The validator accepted the local icon. It did not accept the file list without the icon path when the brands index was empty. |
 | Full stock HACS check with `task hacs` | It stopped because it had no GitHub token. The hosted check is pending. |
+
+## Fault qualification and HACS regression tests (2026-11-28 UTC)
+
+The new tests use the code and settings at `82b48bf`.
+The fault test uses synthetic samples. It checks the qualification result when the capture does not contain the full fit window.
+The HACS test checks the workflow, the local task, and the icon file.
+The setup test compares the error message on the setup page with the English translation.
+
+| Check | Result |
+|---|---|
+| `uv run --locked pytest tests/test_fault_hardware.py tests/test_ci.py tests/test_quality_scale.py -q` | `338 passed` |
+| Increase the window limit in a copy of the fit code | Qualification gave `unavailable`, not `correlation_unavailable`. |
+| Add the brands skip to the workflow or the local task | The test found each skip. |
+| Change the `binding_used` error message on a copy of the setup page | The test did not find the English error message. |

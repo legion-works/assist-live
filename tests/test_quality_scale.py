@@ -132,6 +132,16 @@ def test_shipped_translation_has_reconfigure_success_message():
     )
 
 
+def test_setup_guide_quotes_the_shipped_binding_error():
+    path = ROOT / "custom_components/assist_live/translations/en.json"
+    message = json.loads(path.read_text(encoding="utf-8"))["config"]["error"][
+        "binding_used"
+    ]
+    setup = (ROOT / "docs/setup.md").read_text(encoding="utf-8")
+    quotes = {quote.removesuffix(".") for quote in re.findall(r"`([^`\n]+)`", setup)}
+    assert message.removesuffix(".") in quotes, "Setup must quote the binding error"
+
+
 @pytest.mark.parametrize(
     "name", [rule for rule in RULES["gold"] if rule.startswith("docs-")]
 )

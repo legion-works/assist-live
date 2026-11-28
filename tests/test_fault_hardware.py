@@ -2185,6 +2185,32 @@ def test_correlation_rejection_has_named_public_cause(correlation):
     )
 
 
+def test_qualification_rejects_clipped_correlation_window():
+    hardware = hardware_module()
+    rng = random.Random(128)
+    width = 1920
+    samples = [rng.randrange(-8000, 8000) for _ in range(6 * width)]
+    samples[-2 * width : -width] = [
+        value // 8 for value in samples[-2 * width : -width]
+    ]
+    samples[-width:] = [value // 2 for value in samples[-width:]]
+    reference = struct.pack(f"<{len(samples)}h", *samples)
+    shift_bytes = 80
+    last_third = len(reference) - 4 * width
+    recording = (
+        reference[:last_third] + bytes(shift_bytes) + reference[last_third:-shift_bytes]
+    )
+    fit = hardware.correlate(recording, reference)
+    assert fit["offset_samples"] == 0
+    assert fit["windows"][-1]["offset_samples"] + width == (
+        len(samples) + shift_bytes // 2
+    )
+
+    row = hardware_row()
+    row.update(failures=[], failure_messages=[], correlation=fit)
+    assert hardware.qualification_failure(row) == "correlation_unavailable"
+
+
 async def test_qualification_uses_same_three_cooldown_restart_limit(
     run_bench, monkeypatch, readiness_clock
 ):
