@@ -41,15 +41,15 @@ HA 2026.10.1 and 2026.10.4 do not export the function in `assist_pipeline.__all_
 HA 2026.11.3 exports it at [`assist_pipeline/__init__.py:67`](https://github.com/home-assistant/core/blob/2026.11.3/homeassistant/components/assist_pipeline/__init__.py#L67).
 [`tests/test_pipeline_lookup_contract.py`](../tests/test_pipeline_lookup_contract.py) checks the signature, the preferred pipeline result, and the errors for a missing pipeline or store.
 
-HA developer documentation also gives two public entity-interface types that their component modules do not export through `__all__`:
+HA developer documentation also gives these public entity-interface types. Their component modules do not export them through `__all__`:
 
 - [`SpeechAudioProcessing`](https://developers.home-assistant.io/docs/core/entity/stt/#audio-processing) from `homeassistant.components.stt.models`.
 - [`TTSAudioRequest`](https://developers.home-assistant.io/docs/core/entity/tts/#stream-audio) from `homeassistant.components.tts.entity`.
+- [`AssistSatelliteState`](https://developers.home-assistant.io/docs/core/entity/assist-satellite/#states) from `homeassistant.components.assist_satellite.entity`.
 
 Contract tests pin their import paths and the fields that assist-live uses on each HA version in CI.
 
-The satellite state listener imports `AssistSatelliteState` from `homeassistant.components.assist_satellite.entity`.
-The definition is at [`entity.py:40`](https://github.com/home-assistant/core/blob/2026.11.3/homeassistant/components/assist_satellite/entity.py#L40).
+The `AssistSatelliteState` definition is at [`entity.py:40`](https://github.com/home-assistant/core/blob/2026.11.3/homeassistant/components/assist_satellite/entity.py#L40).
 HA 2026.10.1, 2026.10.4, and 2026.11.3 do not export it in `assist_satellite.__all__`.
 The four values are the same in each of these versions.
 The listener sends a satellite state to the server only if the state is one of these values.
@@ -269,10 +269,12 @@ The server ends a turn before the maximum time only with all three conditions:
   The words "cancel" and "continue" are not opening verbs, because a person frequently says them alone as a reply.
   Thus a scene or a script with a start-word name ends at the maximum time without voice.
 
-If those conditions do not apply, the turn ends at the maximum time without voice (initial default: 1.5 s).
-The `safe` and `fast` settings keep all three conditions.
-P1 selects their values with human recordings.
-If `safe` does not satisfy the executable-prefix test, it uses only the maximum time without voice.
+If those conditions do not apply, the turn ends at the maximum time without voice.
+The `safe` and `fast` settings keep all three conditions and use the same values.
+The minimum time without voice is 400 ms, and the maximum is 1500 ms.
+The Smart Turn limit is 0.8.
+P1 runs compare the `profile` names, not different thresholds, until measurements with human recordings give different values.
+If `safe` does not satisfy the executable-prefix test in P1, use only the maximum time without voice for `safe`.
 
 The turn audio can start with the end of the wake word, and the user can pause before the command.
 Thus the turn detector uses a start guard:

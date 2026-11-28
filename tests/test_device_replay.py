@@ -22,6 +22,7 @@ from tools.device_replay import (
     AlsaOutput,
     Capture,
     ClientEvents,
+    DebugRecordings,
     ReplayError,
     align_capture,
     attach_evidence,
@@ -355,7 +356,7 @@ def test_acceptance_refuses_limit():
     assert check_options(options("--limit", "2")) == "baseline"
 
 
-def test_documented_acceptance_commands_supply_ha_counter_sources():
+def test_documented_acceptance_commands_supply_ha_sources():
     procedures = (ROOT / "docs/testing/device-replay.md").read_text().splitlines()
     commands = [
         parser().parse_args(shlex.split(line)[4:])
@@ -374,6 +375,12 @@ def test_documented_acceptance_commands_supply_ha_counter_sources():
                 args.device_loss_entity,
             )
         ), f"ACCEPTANCE_COUNTER_SOURCES_{args.phase.upper()}"
+        if args.phase == "p1":
+            assert (args.ha_container, args.ha_device_id, args.ha_pipeline_name) == (
+                "$HA_CONTAINER",
+                "$HA_DEVICE_ID",
+                "$HA_PIPELINE_NAME",
+            ), f"P1_DEBUG_SCOPE_{args.profile.upper()}"
 
 
 @pytest.mark.asyncio
@@ -603,6 +610,82 @@ class FakeEvents:
 
     async def close(self):
         self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_count", "rule", "reason", "cut"),
+    [
+        (1, "position", None, True),
+        (0, "clock", "no_debug_recording", False),
+        (2, "clock", "no_debug_recording", False),
+    ],
+    ids=["matching", "absent", "ambiguous"],
+)
+async def test_replay_pause_uses_one_new_scoped_wav(
+    tmp_path, monkeypatch, new_count, rule, reason, cut
+):
+    label, recording = bundle(tmp_path, pause=True)
+    rng = random.Random(1379)
+    recording.samples[:] = [value * rng.choice((-1, 1)) for value in recording.samples]
+    debug_wav = tmp_path / "debug.wav"
+    with wave.open(str(debug_wav), "wb") as wav:
+        wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        wav.writeframes(
+            b"".join(
+                struct.pack("<h", round(value * 32768))
+                for value in recording.samples[800:21600]
+            )
+        )
+    debug_bytes = debug_wav.read_bytes()
+    digest = hashlib.sha256(debug_bytes).hexdigest()
+    capture = FakeCapture(recording)
+    scope = "/config/pipeline_recordings/test-device/Test Pipeline"
+    old = f"{scope}/old/01_stt-test.wav"
+    new = [f"{scope}/new-{i}/01_stt-test.wav" for i in range(new_count)]
+    snapshots = []
+    copies = []
+
+    async def docker(action, container, *args):
+        if action == "cp":
+            assert container in {f"test-ha:{path}" for path in new}
+            target = Path(args[0])
+            target.write_bytes(debug_bytes)
+            copies.append(target)
+            return ""
+        assert action == "exec" and container == "test-ha"
+        if args[-1] == scope:
+            snapshots.append(capture.finished)
+            return json.dumps([old, *new] if capture.finished else [old])
+        assert args[-1] in new
+        return digest
+
+    monkeypatch.setattr("tools.device_replay.docker_command", docker)
+    speech = event("speech_start", 1600, source="server")
+    speech["data"]["onset_ms"] = 100
+    decision = event("end_decision", 2900, source="server")
+    decision["data"]["end_sample"] = 15600
+    events = FakeEvents()
+    events.exported = [*events.events, speech, decision]
+
+    row = await replay_sample(
+        label,
+        tmp_path,
+        tmp_path / "wake.wav",
+        FakeOutput(),
+        capture,
+        events,
+        phase="p1",
+        debug=DebugRecordings("test-ha", "test-device", "Test Pipeline", tmp_path),
+    )
+
+    row["phase"] = "p1"
+    assert pause_cut(row, label) is cut
+    assert row["pause_rule"] == rule
+    assert row.get("pause_rule_reason") == reason
+    assert snapshots == [False, True]
+    assert len(copies) == (1 if new_count == 1 else 0)
+    assert all(not path.exists() for path in copies)
 
 
 @pytest.mark.asyncio

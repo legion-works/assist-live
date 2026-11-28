@@ -4977,3 +4977,19 @@ The public tree check also examines the file contents for private text.
 | Make a ZIP without `icon@2x.png` | `1 failed` for the missing file. |
 | `task hassfest` | `Integrations: 1`, `Invalid integrations: 0` |
 | `task package-check` | `PASS packaging` |
+
+## P1 debug WAV procedure and replay checks (2026-11-28 UTC)
+
+The P1 procedure supplies the device and pipeline for the position rule.
+The two `profile` names use the same end-of-turn thresholds.
+The design lists `AssistSatelliteState` as a public entity-interface type from the HA documentation.
+
+The replay test uses synthetic WAV data and simulated Docker responses.
+One new WAV gives the position rule and a cut. No new WAV or two new WAVs give the clock rule with `no_debug_recording` and no cut.
+No test used a live device.
+
+| Check | Result |
+|---|---|
+| Procedure and replay checks with the commands at `dbb9cd6` | `1 failed, 3 passed` |
+| Replay, report, and design tests | `305 passed` |
+| Remove the pipeline option from `fast` and accept two new WAVs | `2 failed, 2 passed` |

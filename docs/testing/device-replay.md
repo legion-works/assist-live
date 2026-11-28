@@ -145,12 +145,22 @@ Without `--limit`, replay also uses acceptance mode when `--acceptance` is missi
 
 ### P1 runs by `profile`
 
+The `safe` and `fast` settings use the same values.
+The minimum time without voice is 400 ms, and the maximum is 1500 ms.
+The Smart Turn limit is 0.8.
+P1 runs compare the `profile` names, not different thresholds, until measurements give different values.
+
+Use the position rule for P1 pause trials.
+Enable HA debug WAV files as in the [fault runner](fault-runner.md#hardware-trials).
+Set `HA_CONTAINER`, `HA_DEVICE_ID`, and `HA_PIPELINE_NAME` for the same isolated HA container, device, and pipeline as the replay.
+Do not start other runs on that device and pipeline during a trial.
+
 Start the isolated test server with `ASSIST_LIVE_TURN_PROFILE=safe`.
 For each run, use a new `ASSIST_LIVE_RUN_ID` in the replay process and the recorder.
 Use a new `ASSIST_LIVE_OPERATION_RECORDS` path and a new output path for each run.
 
 ```sh
-uv run python tools/device_replay.py --phase p1 --profile safe --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-safe.jsonl"
+uv run python tools/device_replay.py --phase p1 --profile safe --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --ha-container "$HA_CONTAINER" --ha-device-id "$HA_DEVICE_ID" --ha-pipeline-name "$HA_PIPELINE_NAME" --acceptance --output "$RUNROOT/p1-safe.jsonl"
 ```
 
 After the first run, restart the test server with `ASSIST_LIVE_TURN_PROFILE=fast`.
@@ -158,7 +168,7 @@ Do not change the server during a run.
 Keep the baseline configuration identifier and calibration revision the same in the two runs.
 
 ```sh
-uv run python tools/device_replay.py --phase p1 --profile fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --acceptance --output "$RUNROOT/p1-fast.jsonl"
+uv run python tools/device_replay.py --phase p1 --profile fast --labels tests/data/labels.jsonl --audio-root "$CORPUS_AUDIO" --split held_out --wake-word --external-mic --clock-record "$CLOCK_RECORD" --ha-url "$HA_URL" --ha-token-file "$HA_TOKEN_FILE" --integration-entry "$INTEGRATION_ENTRY" --device-loss-entity "$DEVICE_LOSS_ENTITY" --ha-container "$HA_CONTAINER" --ha-device-id "$HA_DEVICE_ID" --ha-pipeline-name "$HA_PIPELINE_NAME" --acceptance --output "$RUNROOT/p1-fast.jsonl"
 ```
 
 After the two runs, put the server back in its initial configuration.
@@ -187,12 +197,11 @@ The P1 row keeps that P0 transcript as `baseline_transcript`.
 For `safe` and `fast`, the runner uses the held-out `replay` and `pause` rows.
 A P0 transcript is not necessary for a pause row.
 
-To use the position rule, set `--ha-container`, `--ha-device-id`, and `--ha-pipeline-name` for the same isolated HA device and pipeline as the replay.
-Enable the HA debug WAV files as in the [fault runner](fault-runner.md).
-Do not start other runs on that device and pipeline during a trial.
-The runner looks for one new STT debug WAV in that scope for each pause trial.
+With the three debug recording options, the runner looks for one new STT debug WAV in the specified device and pipeline.
 It copies the WAV to a private temporary directory in the output directory, checks its hash, and removes the copy after it reads it.
 It does not remove the HA recording or include audio in the output.
+
+A P1 command with none of the debug recording options is clock-only for pause trials.
 
 The server event `end_decision` can give `end_sample`, the number of 16 kHz mono samples at the decision.
 The runner fits the HA debug WAV to the external capture with the same correlation and window checks as the fault runner.
