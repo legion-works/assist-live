@@ -66,6 +66,8 @@ async def test_provisioned_unique_device_bindings(hass):
 
 
 async def test_user_validates_server_and_advances(hass, available_fallbacks):
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
     from custom_components.assist_live.config_flow import AssistLiveConfigFlow
 
     flow = AssistLiveConfigFlow()
@@ -79,7 +81,7 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
         patch(
             "custom_components.assist_live.config_flow.AssistLiveClient",
             return_value=client,
-        ),
+        ) as create_client,
     ):
         result = await flow.async_step_user(
             {
@@ -91,7 +93,133 @@ async def test_user_validates_server_and_advances(hass, available_fallbacks):
         )
     assert result["step_id"] == "satellite"
     assert flow.bindings == {"satellite-a"}
+    assert create_client.call_args.kwargs.get("session") is async_get_clientsession(
+        hass
+    )
     client.close.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("match", "reconfigure_successful"),
+        ("same_url", "reconfigure_successful"),
+        ("wrong_server", "wrong_server"),
+        ("no_configured_keys", "wrong_server"),
+        ("unreachable", "cannot_connect"),
+        ("invalid_url", "invalid_url"),
+        ("http", "reconfigure_successful"),
+        ("duplicate", "already_configured"),
+        ("concurrent_duplicate", "already_configured"),
+    ],
+)
+async def test_reconfigure_changes_only_url_after_verifying_bindings(
+    configured_hass,  # noqa: F811
+    case,
+    reason,
+):
+    from assist_live_client.protocol import ProtocolError
+    from homeassistant.config_entries import SOURCE_RECONFIGURE
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    hass = configured_hass
+    old_url = "https://server.example"
+    url = {
+        "same_url": old_url,
+        "invalid_url": "https://server.example/?bad=true",
+        "http": "http://new.example/",
+    }.get(case, "https://new.example/")
+    data = {
+        "url": old_url,
+        "token": "test-only",
+        "satellites": {}
+        if case == "no_configured_keys"
+        else {"device-a": "satellite-a", "device-c": "satellite-c"},
+        "pipelines": {"device-a": "pipeline-a"},
+    }
+    entry = MockConfigEntry(
+        domain="assist_live", data=data, options={"local_only": True}
+    )
+    entry.add_to_hass(hass)
+
+    def add_duplicate():
+        MockConfigEntry(
+            domain="assist_live", data={**data, "url": "https://NEW.example:443"}
+        ).add_to_hass(hass)
+
+    if case == "duplicate":
+        add_duplicate()
+
+    new_client = AsyncMock()
+    new_client.bindings.return_value = [
+        {"satellite": "satellite-b"},
+        {"satellite": "satellite-c"},
+        {"satellite": "satellite-a"},
+    ]
+    if case == "wrong_server":
+        new_client.bindings.return_value = [{"satellite": "satellite-a"}]
+    elif case == "unreachable":
+        new_client.bindings.side_effect = ProtocolError("unreachable")
+    elif case == "concurrent_duplicate":
+
+        async def competing_entry():
+            add_duplicate()
+            return new_client.bindings.return_value
+
+        new_client.bindings.side_effect = competing_entry
+
+    def create_client(target, token, *, session):
+        assert target == url
+        assert token == data["token"]
+        assert session is async_get_clientsession(hass)
+        return new_client
+
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.AssistLiveClient",
+            side_effect=create_client,
+        ) as create,
+        patch.object(hass.config_entries, "async_schedule_reload") as reload,
+    ):
+        flows = hass.config_entries.flow
+        form = await flows.async_init(
+            "assist_live",
+            context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+        )
+        assert form["step_id"] == "reconfigure"
+        [field] = form["data_schema"].schema
+        assert field.description["suggested_value"] == old_url
+        result = await flows.async_configure(form["flow_id"], {"url": url})
+        if case == "http":
+            assert result["step_id"] == "http_warning"
+            create.assert_not_called()
+            result = await flows.async_configure(form["flow_id"], {})
+        if reason == "reconfigure_successful":
+            assert result["reason"] == reason
+            assert result.get("translation_domain") in (None, "assist_live")
+            assert entry.data == {**data, "url": url.rstrip("/")}
+            assert entry.options == {"local_only": True}
+            if case == "same_url":
+                reload.assert_not_called()
+            else:
+                reload.assert_called_once_with(entry.entry_id)
+        else:
+            assert (result.get("errors") or {"base": result["reason"]}) == {
+                "base": reason
+            }
+            assert entry.data == data
+            reload.assert_not_called()
+            if case == "wrong_server":
+                new_client.bindings.return_value.append({"satellite": "satellite-c"})
+                result = await flows.async_configure(form["flow_id"], {"url": url})
+                assert result["reason"] == "reconfigure_successful"
+                assert entry.data["url"] == url.rstrip("/")
+    if case == "wrong_server":
+        assert new_client.close.await_count == 2
+    elif case not in {"duplicate", "invalid_url"}:
+        new_client.close.assert_awaited_once()
 
 
 async def test_user_refuses_stt_when_the_component_is_not_ready(
@@ -976,17 +1104,18 @@ async def test_real_entry_registers_pair_and_owns_pipeline(
     )
     assert b"".join([chunk async for chunk in response.data_gen])
     assert selected_voices == ["voice-two"]
-    sensors = [
-        state
-        for state in hass.states.async_all("sensor")
-        if "last_turn_latency" in state.entity_id
-    ]
-    assert len(sensors) == 1
-    assert sensors[0].attributes["quality"] == "missing"
-    assert (
-        sensors[0].attributes["friendly_name"]
-        == "Synthetic satellite Last turn latency"
-    ), "sensor name is in the context of its device"
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "sensor", "assist_live", "satellite-a_last_turn_latency"
+    )
+    assert entity_id is not None
+    sensor = registry.async_get(entity_id)
+    assert sensor.disabled_by is None
+    assert sensor.original_name == "Last turn latency"
+    assert sensor.device_id == device.id
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert {"turn_id", "turn_type"} <= state.attributes.keys()
     sending, cancelled = asyncio.Event(), asyncio.Event()
 
     async def hanging_event(event):

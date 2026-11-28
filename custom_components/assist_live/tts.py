@@ -49,7 +49,9 @@ def fallback_engine(hass: HomeAssistant, entity_id: str) -> tts.TextToSpeechEnti
     except KeyError:
         engine = None
     if not isinstance(engine, tts.TextToSpeechEntity):
-        raise HomeAssistantError("fallback TTS unavailable")
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="fallback_tts_unavailable"
+        )
     return engine
 
 
@@ -247,12 +249,17 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 for lang in engine.supported_languages
             )
         ):
-            raise HomeAssistantError("fallback TTS language unavailable")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="fallback_tts_language_unavailable",
+            )
         if self.supported_languages and not any(
             language_matches(request.language, lang)
             for lang in self.supported_languages
         ):
-            raise HomeAssistantError("TTS language unavailable")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="tts_language_unavailable"
+            )
         turn = self.ledger.open_tts(self.satellite)
         voice = request.options.get("voice")
         turn_record = self.ledger.records[turn.turn_id]
@@ -283,7 +290,9 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
             if self.ledger.current(self.satellite) != turn:
                 _LOGGER.debug("turn superseded during open")
                 self.ledger.schedule_events()
-                raise HomeAssistantError("turn superseded during open")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="tts_turn_superseded"
+                )
             if not connected:
                 record = self.ledger.records[turn.turn_id]
                 reason = record.open_failure
@@ -303,7 +312,8 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         continue
                     if len(part) > 16384 or size + len(part) > 16384:
                         failure = HomeAssistantError(
-                            "TTS text limit is 16384 characters"
+                            translation_domain=DOMAIN,
+                            translation_key="tts_text_limit",
                         )
                         return
                     size += len(part)
@@ -313,7 +323,9 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                         buffer.append(part)
                         changed.notify_all()
             except Exception:
-                failure = HomeAssistantError("TTS text source failed")
+                failure = HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="tts_text_source_failed"
+                )
             finally:
                 async with changed:
                     done = True
@@ -394,7 +406,10 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                     self.fallback_entity_id,
                     reason="fallback_unavailable",
                 )
-                raise HomeAssistantError("fallback TTS unavailable")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="fallback_tts_unavailable",
+                )
             fallback_language = next(
                 (
                     lang
@@ -404,7 +419,10 @@ class AssistLiveTTS(AssistLiveEntity, tts.TextToSpeechEntity):
                 None,
             )
             if fallback_language is None:
-                raise HomeAssistantError("fallback TTS language unavailable")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="fallback_tts_language_unavailable",
+                )
             options = {**(engine.default_options or {}), **request.options}
             options.pop("voice", None)
             fallback_voice = self.fallback_voice or (engine.default_options or {}).get(

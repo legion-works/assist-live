@@ -1,11 +1,12 @@
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.util.file import WriteError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -159,6 +160,44 @@ async def test_final_turn_store_fault_keeps_options_reload_working(
     assert entry.runtime_data.cursors == {"satellite-a": 50}
 
 
+async def test_reconfigure_reloads_a_loaded_entry_without_replacing_entities(
+    runtime_entry, client
+):
+    hass, entry, linked, old_ids = runtime_entry
+    old_runtime = entry.runtime_data
+    url = "https://new.example"
+    validator = AsyncMock()
+    validator.bindings.return_value = [
+        {"satellite": "satellite-a"},
+        {"satellite": "satellite-b"},
+    ]
+    with (
+        patch(
+            "custom_components.assist_live.config_flow.AssistLiveClient",
+            return_value=validator,
+        ),
+        patch(
+            "custom_components.assist_live.AssistLiveClient", return_value=client
+        ) as create_runtime,
+    ):
+        flows = hass.config_entries.flow
+        form = await flows.async_init(
+            "assist_live",
+            context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+        )
+        result = await flows.async_configure(form["flow_id"], {"url": url})
+        assert result["reason"] == "reconfigure_successful"
+        await hass.async_block_till_done()
+    create_runtime.assert_called_once_with(
+        url, "test-only", session=async_get_clientsession(hass)
+    )
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data is not old_runtime
+    assert entry.runtime_data.stt[linked.id].entity_id == old_ids["satellite-a_stt"]
+    assert entry.runtime_data.tts[linked.id].entity_id == old_ids["satellite-a_tts"]
+    assert all(hass.states.get(entity_id) is not None for entity_id in old_ids.values())
+
+
 async def test_satellite_state_updates_only_its_own_turn(runtime_entry):
     hass, entry, _, _ = runtime_entry
     runtime = entry.runtime_data
@@ -211,7 +250,69 @@ async def test_setup_removes_empty_legacy_devices(runtime_entry):
     } == old_ids
 
 
-async def test_user_can_remove_only_empty_owned_devices(runtime_entry):
+async def test_setup_removes_stale_device_and_its_owned_entities(runtime_entry):
+    hass, entry, linked, old_ids = runtime_entry
+    devices = dr.async_get(hass)
+    registry = er.async_get(hass)
+    stale = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("assist_live", "retired")}
+    )
+    orphan = registry.async_get_or_create(
+        "sensor",
+        "assist_live",
+        "retired_last_turn_latency",
+        config_entry=entry,
+        device_id=stale.id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert devices.async_get(stale.id) is None
+    assert registry.async_get(orphan.entity_id) is None
+    assert devices.async_get(linked.id) == linked
+    assert all(
+        registry.async_get(entity_id) is not None for entity_id in old_ids.values()
+    )
+
+
+async def test_setup_removes_empty_fallback_without_removing_linked_device(
+    runtime_entry,
+):
+    hass, entry, linked, _ = runtime_entry
+    devices = dr.async_get(hass)
+    fallback = devices.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("assist_live", "satellite-a")},
+        connections={VOICE_MAC},
+    )
+    assert fallback.id != linked.id
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    assert devices.async_get(fallback.id) is None
+    assert devices.async_get(linked.id) == linked
+
+
+async def test_manual_removal_refuses_legacy_composite_view(runtime_entry):
+    from attr import evolve
+
+    from custom_components.assist_live import async_remove_config_entry_device
+
+    hass, entry, linked, _ = runtime_entry
+    devices = dr.async_get(hass)
+    owned = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("assist_live", "retired")}
+    )
+    composite = evolve(
+        owned,
+        id="legacy-composite-id",
+        composite_subentries={entry.entry_id: {None}, linked.config_entry_id: {None}},
+    )
+    assert not await async_remove_config_entry_device(hass, entry, composite)
+    assert devices.async_get(linked.id) == linked
+
+
+async def test_user_can_remove_only_devices_with_no_active_or_foreign_entities(
+    runtime_entry,
+):
     from custom_components.assist_live import async_remove_config_entry_device
 
     hass, entry, linked, _ = runtime_entry
@@ -222,7 +323,7 @@ async def test_user_can_remove_only_empty_owned_devices(runtime_entry):
     )
     assert await async_remove_config_entry_device(hass, entry, empty)
     assert not await async_remove_config_entry_device(hass, entry, linked)
-    registry.async_get_or_create(
+    foreign = registry.async_get_or_create(
         "sensor",
         "esphome",
         "other-entity",
@@ -231,6 +332,12 @@ async def test_user_can_remove_only_empty_owned_devices(runtime_entry):
         disabled_by=er.RegistryEntryDisabler.USER,
     )
     assert not await async_remove_config_entry_device(hass, entry, empty)
+    registry.async_remove(foreign.entity_id)
+    orphan = registry.async_get_or_create(
+        "stt", "assist_live", "unused_stt", config_entry=entry, device_id=empty.id
+    )
+    assert await async_remove_config_entry_device(hass, entry, empty)
+    assert registry.async_get(orphan.entity_id) is None
 
 
 async def test_satellite_devices_and_names_keep_existing_registry_ids(runtime_entry):

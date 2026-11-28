@@ -4993,3 +4993,48 @@ No test used a live device.
 | Procedure and replay checks with the commands at `dbb9cd6` | `1 failed, 3 passed` |
 | Replay, report, and design tests | `305 passed` |
 | Remove the pipeline option from `fast` and accept two new WAVs | `2 failed, 2 passed` |
+
+## Gold integration checks (2026-11-28 UTC)
+
+Reconfigure uses the saved token to read the bindings at the new URL.
+The new URL must give access to each configured satellite key.
+After a satisfactory check, HA changes only the URL and reloads the entry.
+The registry tests check that entity IDs and unique IDs do not change.
+
+The latency sensor is diagnostic and off by default for new entities.
+Setup removes devices and their entities if this entry owns them and does not use them.
+The config flow uses the HA client session. Errors that users see have translation keys.
+
+| Check | Result |
+|---|---|
+| Behavior tests at `dbb9cd6` | `6 failed, 11 passed` |
+| Integration tests for these changes | `196 passed` |
+| Config flow coverage | `106 of 106 branches` |
+| Behavior tests with six faults in copies of the code | `6 failed` |
+| HA `2026.10.1` suite | `21 failed, 2347 passed, 1 skipped` |
+| HA `2026.10.4` suite | `21 failed, 2347 passed, 1 skipped` |
+| HA `2026.11.3` suite | `21 failed, 2348 passed` |
+
+The suite runner had no Gitleaks or Git metadata for this repository.
+The 21 failures in each suite were in the archive and public data checks.
+
+## Gold review checks (2026-11-28 UTC)
+
+The diagnostic latency sensor stays on by default. Device replay reads its turn state.
+A new entry supplies this state after setup.
+Reconfigure shows a message from the integration when it changes the server URL.
+
+Cleanup removes an empty fallback device and keeps the native satellite device.
+Each device record has one owner. Cleanup does not remove a composite device.
+
+| Check | Result |
+|---|---|
+| Review tests before the changes | `6 failed` in two runs |
+| Integration and replay tests with the changes | `281 passed` |
+| Config flow coverage | `106 of 106 branches` |
+| HA `2026.10.1` suite | `21 failed, 2350 passed, 1 skipped` |
+| HA `2026.10.4` suite | `21 failed, 2350 passed, 1 skipped` |
+| HA `2026.11.3` suite | `21 failed, 2351 passed` |
+| Archive, CI, and public data tests with their tools | `176 passed` |
+
+Each HA suite had the same 21 failures. The suite runner had no Gitleaks or repository Git metadata.

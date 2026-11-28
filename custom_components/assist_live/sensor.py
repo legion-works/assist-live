@@ -1,7 +1,7 @@
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -31,6 +31,7 @@ class TurnLatencySensor(AssistLiveEntity, SensorEntity):
     _attr_should_poll = False
     _attr_translation_key = "last_turn_latency"
     _attr_device_class = SensorDeviceClass.DURATION
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
     _unrecorded_attributes = frozenset({"turn_id", "turn_type"})
 

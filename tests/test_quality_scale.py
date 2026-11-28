@@ -91,14 +91,42 @@ def test_quality_scale_lists_each_rule_with_a_status_and_comment():
         "integration-owner",
         "log-when-unavailable",
         "test-coverage",
+        "devices",
+        "entity-category",
+        "entity-disabled-by-default",
+        "exception-translations",
+        "reconfiguration-flow",
+        "repair-issues",
+        "stale-devices",
+        "inject-websession",
     ):
         assert rules[name]["status"] == "done", name
+    for name in (
+        "discovery",
+        "discovery-update-info",
+        "dynamic-devices",
+        "icon-translations",
+    ):
+        assert rules[name]["status"] == "exempt", name
+    assert rules["strict-typing"]["status"] == "todo"
 
 
 def test_manifest_has_an_integration_owner():
     path = ROOT / "custom_components/assist_live/manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     assert manifest["codeowners"] == ["@iceteaSA"]
+
+
+def test_shipped_translation_has_reconfigure_success_message():
+    component = ROOT / "custom_components/assist_live"
+    source = json.loads((component / "strings.json").read_text(encoding="utf-8"))
+    english = json.loads(
+        (component / "translations/en.json").read_text(encoding="utf-8")
+    )
+    assert english == source
+    assert english["config"]["abort"]["reconfigure_successful"] == (
+        "The server URL is changed."
+    )
 
 
 @pytest.mark.parametrize(

@@ -6,11 +6,13 @@ import probatio as vol
 from assist_live_client import AssistLiveClient
 from assist_live_client.protocol import ProtocolError
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 from yarl import URL
 
@@ -207,8 +209,11 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         self.satellites: dict[str, str] = {}
         self.selects: dict[str, str] = {}
         self._http_confirmed: str | None = None
+        self._reconfigure_url: str | None = None
 
-    def _abort_if_configured(self, url: object, token: object) -> None:
+    def _abort_if_configured(
+        self, url: object, token: object, *, except_entry_id: str | None = None
+    ) -> None:
         # The connection slots of one server token are sufficient for five
         # satellites. Thus two entries can use one server with different
         # tokens. An entry with the same server and token is a duplicate.
@@ -220,7 +225,8 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         for entry in self._async_current_entries(include_ignore=False):
             stored = entry.data.get("url")
             if (
-                isinstance(stored, str)
+                entry.entry_id != except_entry_id
+                and isinstance(stored, str)
                 and entry.data.get("token") == token
                 and request_key(stored) == key
             ):
@@ -241,7 +247,9 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
                 try:
                     try:
                         client = AssistLiveClient(
-                            user_input["url"], user_input["token"]
+                            user_input["url"],
+                            user_input["token"],
+                            session=async_get_clientsession(self.hass),
                         )
                     except ValueError:
                         errors["base"] = "invalid_url"
@@ -290,9 +298,69 @@ class AssistLiveConfigFlow(config_entries.ConfigFlow, domain="assist_live"):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
+            if self._reconfigure_url is not None:
+                url, self._reconfigure_url = self._reconfigure_url, None
+                self._http_confirmed = url
+                return await self.async_step_reconfigure({"url": url})
             self._http_confirmed = self.settings["url"]
             return await self.async_step_user(self.settings)
         return self.async_show_form(step_id="http_warning", data_schema=vol.Schema({}))
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        entry = self._get_reconfigure_entry()
+        url = entry.data["url"]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = user_input["url"]
+            if (key := request_key(url)) is None:
+                errors["base"] = "invalid_url"
+            elif key[0] == "http" and url != self._http_confirmed:
+                self._reconfigure_url = url
+                return await self.async_step_http_warning()
+            else:
+                token = entry.data["token"]
+                self._abort_if_configured(url, token, except_entry_id=entry.entry_id)
+                client = AssistLiveClient(
+                    url, token, session=async_get_clientsession(self.hass)
+                )
+                try:
+                    bindings = {row["satellite"] for row in await client.bindings()}
+                except ProtocolError:
+                    errors["base"] = "cannot_connect"
+                finally:
+                    await client.close()
+                if not errors:
+                    configured = set(entry.data["satellites"].values())
+                    if not configured or not configured <= bindings:
+                        errors["base"] = "wrong_server"
+                    else:
+                        self._abort_if_configured(
+                            url, token, except_entry_id=entry.entry_id
+                        )
+                        url = url.rstrip("/")
+                        reload_needed = (
+                            url != entry.data["url"]
+                            and entry.state is not ConfigEntryState.LOADED
+                        )
+                        result = self.async_update_and_abort(
+                            entry,
+                            data_updates={"url": url},
+                            reason="reconfigure_successful",
+                        )
+                        if reload_needed:
+                            self.hass.config_entries.async_schedule_reload(
+                                entry.entry_id
+                            )
+                        return result
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema({vol.Required("url"): str}), {"url": url}
+            ),
+            errors=errors,
+        )
 
     async def async_step_satellite(
         self, user_input: dict[str, Any] | None = None

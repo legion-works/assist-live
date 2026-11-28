@@ -7,6 +7,24 @@ def test_latency_sensor_exists_without_a_control_path():
     assert "sensor" in PLATFORMS
 
 
+def test_latency_is_diagnostic(ledger):
+    from homeassistant.const import EntityCategory
+
+    from custom_components.assist_live.sensor import TurnLatencySensor
+
+    assert TurnLatencySensor("satellite-a", "device-a", ledger).entity_category is (
+        EntityCategory.DIAGNOSTIC
+    )
+
+
+def test_turn_by_turn_latency_is_enabled_by_default(ledger):
+    from custom_components.assist_live.sensor import TurnLatencySensor
+
+    assert TurnLatencySensor(
+        "satellite-a", "device-a", ledger
+    ).entity_registry_enabled_default
+
+
 @pytest.mark.parametrize(
     "quality,want",
     [("measured", "measured"), ("proxy", "proxy"), ("estimate", "proxy")],

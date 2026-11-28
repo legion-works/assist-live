@@ -194,8 +194,9 @@ async def test_superseded_tts_open_does_not_play_fallback(client, caplog, pruned
             now[0] = 11.0
             ledger.prune()
         release.set()
-        with pytest.raises(HomeAssistantError, match="turn superseded during open"):
+        with pytest.raises(HomeAssistantError) as error:
             await asyncio.wait_for(task, 1)
+        assert error.value.translation_key == "tts_turn_superseded"
     assert ledger.current("satellite-a") == replacement
     assert not hasattr(fallback, "text")
     assert not any(

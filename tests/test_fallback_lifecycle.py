@@ -132,8 +132,9 @@ async def test_startup_turn_creates_missing_engine_repair(lifecycle_entry, part)
             )
             assert result.result == stt.SpeechResultState.ERROR
         else:
-            with pytest.raises(HomeAssistantError, match="^fallback TTS unavailable$"):
+            with pytest.raises(HomeAssistantError) as error:
                 await forward.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
+            assert error.value.translation_key == "fallback_tts_unavailable"
         record = runtime.ledger.latest["satellite-a"]
         assert record.fallback_reasons[part] == "fallback_unavailable", (
             "BOOT_TURN_FALLBACK_CAUSE_MISSING"
@@ -169,10 +170,11 @@ async def test_loaded_unavailable_engine_is_selectable_but_not_used(
             )
             assert result.result == stt.SpeechResultState.ERROR, "UNAVAILABLE_STT_USED"
         else:
-            with pytest.raises(HomeAssistantError, match="^fallback TTS unavailable$"):
+            with pytest.raises(HomeAssistantError) as error:
                 await runtime.tts["device-a"].async_stream_tts_audio(
                     TTSAudioRequest("en", {}, text())
                 )
+            assert error.value.translation_key == "fallback_tts_unavailable"
         assert runtime.ledger.latest["satellite-a"].fallback_reasons[part] == (
             "fallback_unavailable"
         )
@@ -180,6 +182,8 @@ async def test_loaded_unavailable_engine_is_selectable_but_not_used(
 
 @pytest.mark.parametrize("part", ["stt", "tts"])
 async def test_missing_fallback_turn_and_recovery(lifecycle_entry, part):
+    from homeassistant.helpers import translation
+
     hass, entry = lifecycle_entry
     runtime = entry.runtime_data
     forward = getattr(runtime, part)["device-a"]
@@ -199,7 +203,10 @@ async def test_missing_fallback_turn_and_recovery(lifecycle_entry, part):
             try:
                 await forward.async_stream_tts_audio(TTSAudioRequest("en", {}, text()))
             except HomeAssistantError as error:
-                assert str(error) == "fallback TTS unavailable", "UNNAMED_TTS_ERROR"
+                await translation.async_get_translations(
+                    hass, "en", "exceptions", {"assist_live"}
+                )
+                assert str(error) == "The fallback TTS engine is unavailable"
             else:
                 pytest.fail("MISSING_TTS_ACCEPTED")
         record = runtime.ledger.latest["satellite-a"]
@@ -303,10 +310,11 @@ async def test_setup_succeeds_with_both_fallbacks_absent(
             assert runtime.ledger.latest["satellite-a"].fallback_reasons["stt"] == (
                 "fallback_unavailable"
             ), "FIRST_MISSING_STT_CAUSE_LOST"
-            with pytest.raises(HomeAssistantError, match="^fallback TTS unavailable$"):
+            with pytest.raises(HomeAssistantError) as error:
                 await runtime.tts["device-a"].async_stream_tts_audio(
                     TTSAudioRequest("en", {}, text())
                 )
+            assert error.value.translation_key == "fallback_tts_unavailable"
             assert runtime.ledger.latest["satellite-a"].fallback_reasons["tts"] == (
                 "fallback_unavailable"
             ), "FIRST_MISSING_TTS_CAUSE_LOST"

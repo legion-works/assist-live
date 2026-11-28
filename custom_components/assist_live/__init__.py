@@ -130,7 +130,10 @@ class Runtime:
         ):
             mode = "local"
         if self.ledger.local_only and mode != "local":
-            raise HomeAssistantError("fallback destination refused")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="fallback_destination_refused",
+            )
         return mode
 
     @callback
@@ -177,7 +180,9 @@ class Runtime:
             await self.store.async_save(data)
             # HA Store logs some write failures without raising them.
             if await self.store.async_load() != data:
-                raise HomeAssistantError("turn store write not confirmed")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="turn_store_write_failed"
+                )
             self._unsaved_state.pop(self.entry.entry_id, None)
             self._last_saved = data
             self._last_write = self.clock()
@@ -506,17 +511,36 @@ class Runtime:
 type AssistLiveConfigEntry = ConfigEntry[Runtime]
 
 
-def _can_remove_device(
+def _remove_stale_device_entities(
     hass: HomeAssistant, entry: AssistLiveConfigEntry, device: dr.AnyDeviceEntry
 ) -> bool:
-    return (
-        device.config_entry_id == entry.entry_id
-        and device.id not in entry.data["satellites"]
-        and not dr.async_entries_for_parent_device(dr.async_get(hass), device.id)
-        and not er.async_entries_for_device(
-            er.async_get(hass), device.id, include_disabled_entities=True
-        )
+    satellites = entry.data["satellites"]
+    if (
+        device.is_composite_device
+        or device.config_entry_id != entry.entry_id
+        or device.id in satellites
+        or dr.async_entries_for_parent_device(dr.async_get(hass), device.id)
+    ):
+        return False
+    registry = er.async_get(hass)
+    entities = er.async_entries_for_device(
+        registry, device.id, include_disabled_entities=True
     )
+    active_ids = {
+        f"{key}_{suffix}"
+        for key in satellites.values()
+        for suffix in ("stt", "tts", "last_turn_latency")
+    }
+    if any(
+        entity.config_entry_id != entry.entry_id
+        or entity.platform != DOMAIN
+        or entity.unique_id in active_ids
+        for entity in entities
+    ):
+        return False
+    for entity in entities:
+        registry.async_remove(entity.entity_id)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -> bool:
@@ -532,6 +556,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
     client = AssistLiveClient(
         entry.data["url"], entry.data["token"], session=async_get_clientsession(hass)
     )
+    url = entry.data["url"]
     runtime = Runtime(hass, entry, client)
     entry.runtime_data = runtime
     forwarding_started = False
@@ -539,9 +564,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
         await runtime.start()
         await runtime.refresh_health()
 
-        async def options_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
+        async def entry_updated(hass: HomeAssistant, updated: ConfigEntry) -> None:
             current = effective_settings(updated)
-            if any(
+            if updated.data["url"] != url or any(
                 current[name] != settings[name]
                 for name in ("fallback_stt", "fallback_tts")
             ):
@@ -549,7 +574,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
             else:
                 runtime.update_options(updated)
 
-        entry.async_on_unload(entry.add_update_listener(options_updated))
+        entry.async_on_unload(entry.add_update_listener(entry_updated))
         forwarding_started = True
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         saved = dict(entry.data.get("pipelines", {}))
@@ -584,7 +609,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) -
         await runtime._maintenance(None)
         devices = dr.async_get(hass)
         for device_entry in dr.async_entries_for_config_entry(devices, entry.entry_id):
-            if _can_remove_device(hass, entry, device_entry):
+            if _remove_stale_device_entities(hass, entry, device_entry):
                 devices.async_remove_device(device_entry.id)
     except BaseException:
         # Cleanup must not replace the setup error or cancellation.
@@ -624,4 +649,4 @@ async def async_remove_entry(hass: HomeAssistant, entry: AssistLiveConfigEntry) 
 async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: AssistLiveConfigEntry, device: dr.AnyDeviceEntry
 ) -> bool:
-    return _can_remove_device(hass, entry, device)
+    return _remove_stale_device_entities(hass, entry, device)

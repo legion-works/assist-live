@@ -65,10 +65,12 @@ async def test_tts_fallback_language_narrower_than_advertised(client, ledger):
     fallback.supported_languages = ["zz"]
     assert "en" not in forward.supported_languages
     assert "en" not in fallback.supported_languages
-    with pytest.raises(HomeAssistantError, match="language unavailable"):
+    with pytest.raises(HomeAssistantError) as error:
         await forward.async_stream_tts_audio(
             TTSAudioRequest("en", {"voice": "voice-2"}, text())
         )
+    assert error.value.translation_domain == "assist_live"
+    assert error.value.translation_key == "fallback_tts_language_unavailable"
     assert not hasattr(fallback, "text")
     client.health_capabilities.assert_not_awaited()
     assert ledger.records == {}
@@ -108,10 +110,11 @@ async def test_tts_text_limit_is_characters(client, ledger, part, count):
         yield part * count
         yield "x"
 
-    with pytest.raises(HomeAssistantError, match="text limit"):
+    with pytest.raises(HomeAssistantError) as error:
         await entity(client, ledger, Fallback()).async_stream_tts_audio(
             TTSAudioRequest("en", {"voice": "voice-2"}, source())
         )
+    assert error.value.translation_key == "tts_text_limit"
     turn = ledger.current("satellite-a")
     assert "tts_failed" in ledger.records[turn.turn_id].stages
 

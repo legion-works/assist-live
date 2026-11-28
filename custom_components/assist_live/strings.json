@@ -31,6 +31,15 @@
         "title": "HTTP sends the access token without encryption",
         "description": "Use TLS or an isolated network. Continue only if this HTTP server is on an isolated network."
       },
+      "reconfigure": {
+        "title": "Change the assist-live server URL",
+        "data": {
+          "url": "Server URL"
+        },
+        "data_description": {
+          "url": "The new address of the same server. The server must accept the current token for all configured satellite keys."
+        }
+      },
       "satellite": {
         "title": "Satellite binding",
         "description": "Select a provisioned anonymous key for this device. Use a different key and pipeline for each device. See the setup instructions.",
@@ -54,12 +63,14 @@
       "unknown_destination": "The destination is unknown. Record a local decision only after a check of the fallback integration.",
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "cannot_connect": "Cannot read provisioned bindings from the server.",
+      "wrong_server": "The server does not give access to all configured satellite keys with the current token.",
       "invalid_url": "Use an HTTP or HTTPS server URL without user information, a query, or a fragment.",
       "invalid_satellite": "Select a provisioned key and a satellite with an HA Assist pipeline control (pipeline or pipeline_n). Select that control, not a VAD or wake word control.",
       "binding_used": "This device or key is already in use."
     },
     "abort": {
-      "already_configured": "An entry for this server and token is configured."
+      "already_configured": "An entry for this server and token is configured.",
+      "reconfigure_successful": "The server URL is changed."
     }
   },
   "options": {
@@ -116,6 +127,16 @@
       "cloud_destination": "A cloud fallback cannot use the local-only option.",
       "invalid_fallback_voice": "Select a voice from the fallback engine or its default."
     }
+  },
+  "exceptions": {
+    "fallback_destination_refused": {"message": "The local-only option does not permit this fallback engine."},
+    "turn_store_write_failed": {"message": "HA could not save the turn record."},
+    "fallback_tts_unavailable": {"message": "The fallback TTS engine is unavailable."},
+    "fallback_tts_language_unavailable": {"message": "The fallback TTS engine does not support this language."},
+    "tts_language_unavailable": {"message": "The TTS engine does not support this language."},
+    "tts_turn_superseded": {"message": "A newer turn replaced the TTS request."},
+    "tts_text_limit": {"message": "The TTS text limit is 16384 characters."},
+    "tts_text_source_failed": {"message": "The source of the TTS text failed."}
   },
   "issues": {
     "unknown_tts_voice": {

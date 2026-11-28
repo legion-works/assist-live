@@ -61,6 +61,10 @@ Each satellite can use one event connection and two audio connections.
 
 The HTTP warning has no fields. Select **Submit** only on an isolated network.
 
+Use **Reconfigure** to change the server URL.
+The server at the new URL must accept the current token for all configured satellite keys.
+HA cannot tell apart two servers that have the same token and keys.
+
 The manifest pins the published pre-release `assist-live-client==0.1.0a2` from PyPI.
 HA, local tests, and CI install that same client version.
 The integration itself has no release.

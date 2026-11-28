@@ -27,8 +27,8 @@ rules:
   config-flow-test-coverage:
     status: done
     comment: >-
-      The setup and options flow tests give 100 % branch coverage of
-      config_flow.py (92 of 92 branches).
+      The setup, reconfiguration, and options flow tests give 100 % branch
+      coverage of config_flow.py (106 of 106 branches).
   dependency-transparency:
     status: done
     comment: >-
@@ -127,19 +127,20 @@ rules:
 
   # Gold
   devices:
-    status: todo
+    status: done
     comment: >-
-      The entities connect to the satellite devices of other integrations. Not
-      examined against the rule.
+      The STT, TTS, and latency entities use the linked HA satellite device
+      with its native identifiers and metadata. If that device is absent,
+      DeviceInfo groups the entities by the configured satellite key.
   diagnostics:
     status: done
     comment: diagnostics.py gives redacted config entry diagnostics.
   discovery:
-    status: todo
-    comment: Not examined.
+    status: exempt
+    comment: The server does not announce a service that HA can discover.
   discovery-update-info:
-    status: todo
-    comment: Not examined.
+    status: exempt
+    comment: HA cannot discover the server at a new URL.
   docs-data-update:
     status: todo
     comment: Not examined.
@@ -162,47 +163,56 @@ rules:
     status: todo
     comment: Not examined.
   dynamic-devices:
-    status: todo
-    comment: Not examined.
+    status: exempt
+    comment: >-
+      Each entry has a fixed set of explicit satellite links. New server keys
+      do not identify an HA device and do not add a link on their own.
   entity-category:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: The latency sensor is diagnostic. STT and TTS are primary entities.
   entity-device-class:
     status: done
     comment: The latency sensor uses the `duration` device class.
   entity-disabled-by-default:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: >-
+      The integration has no noisy entities. The diagnostic sensor stays on:
+      device replay reads its turn state and it measures latency once per turn.
   entity-translations:
     status: done
     comment: The entity names come from strings.json.
   exception-translations:
-    status: todo
-    comment: The integration gives HomeAssistantError errors without translation keys.
+    status: done
+    comment: HomeAssistantError uses the domain and keys in the exception translations.
   icon-translations:
-    status: todo
-    comment: Not examined.
+    status: exempt
+    comment: The entities use the HA platform or device class icons.
   reconfiguration-flow:
-    status: todo
-    comment: The integration has no reconfiguration flow.
+    status: done
+    comment: >-
+      Reconfigure tests the new URL with the saved token and requires all
+      configured satellite keys. It changes only the URL and reloads the entry.
   repair-issues:
-    status: todo
-    comment: repairs.py makes repair issues. Not examined against the rule.
+    status: done
+    comment: >-
+      The issue translations give actions for server, pipeline, fallback engine,
+      event stream, storage, voice selection, and destination problems.
   stale-devices:
-    status: todo
-    comment: Not examined.
+    status: done
+    comment: >-
+      Setup removes devices and entities for old links that this entry owns.
+      Users can also remove these devices from the device page. The integration
+      keeps devices with active links, child devices, or other owners' entities.
 
   # Platinum
   async-dependency:
     status: done
     comment: assist-live-client uses asyncio and aiohttp.
   inject-websession:
-    status: todo
-    comment: >-
-      Setup gives the HA client session to the client. The config flow
-      makes its client without that session.
+    status: done
+    comment: Setup and both config flow paths give the HA session to the client.
   strict-typing:
     status: todo
     comment: >-
-      Strict mypy examines the integration. The client package has no
-      py.typed marker.
+      Strict mypy examines the integration. The pinned client lacks py.typed.
+      Client 0.1.0a3 adds the marker.
