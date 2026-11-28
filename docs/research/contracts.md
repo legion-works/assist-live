@@ -44,7 +44,7 @@ The end of the service call and `idle` must not give the late-result service pro
 The manifest pins the published PyPI pre-release `assist-live-client==0.1.0a2`.
 A release manifest must use `assist-live-client==<exact version>`, with the pre-release suffix when applicable.
 That client version must be on PyPI before the integration release.
-The bootstrap checker rejects other requirement names, version ranges, and more entries.
+The packaging check rejects other requirement names, version ranges, and more entries.
 
 ## Prototype results and limits
 

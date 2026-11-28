@@ -455,16 +455,6 @@ The wake and complete-recording checks continue to apply.
 Transcript or device-operation results do not select replacements.
 Exhaustion gives `unavailable`, which makes the hardware gate unsatisfactory.
 
-## Append-only records
+## Verification records
 
-Run `task records-check` to check `docs/verification.md` against the merge base of `main` and `HEAD`.
-`task check` includes this check.
-The check includes uncommitted file changes.
-It names each changed, deleted, or new line before the end of the previous record.
-Add new records only at the end of the file.
-
-CI fetches the full history.
-On a push, the check uses the previous `main` commit from the push event.
-On a pull request, it uses the merge base of `origin/main` and `HEAD`.
-An unreadable base commit causes failure.
-To select a base commit, use `uv run --locked python tools/check_records.py --base "$BASE_COMMIT"`.
+Add new records at the end of `docs/verification.md`.

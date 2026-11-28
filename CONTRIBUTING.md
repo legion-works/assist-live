@@ -28,16 +28,21 @@ Without `PRIVATE_DENYLIST`, `task check` prints `NOT CHECKED private denylist` a
 Set `PRIVATE_DENYLIST` to an external file to include the private-denylist check.
 An unavailable file or a denylist hit stops the check with a failure.
 
+`task check` uses the public-tree checker to examine the working tree and Git history.
+
 CI runs HA runtime tests, integrated type checks, hassfest, and HACS validation.
 See `docs/verification.md` for local check results.
 
 To run the private-denylist check, set `PRIVATE_DENYLIST` to an external file:
 
 ```sh
-uv run python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"
+uv run --locked python tools/check_public_tree.py --history --root . --private-denylist "$PRIVATE_DENYLIST"
 ```
 
 The command uses Git and `gitleaks` on `PATH`.
+To examine only the commits in a range, replace `--history` with `--history-range main..HEAD`.
+This option also examines the working tree.
+
 The optional `--licensed-audio FILE` input contains one approved SHA-256 hash on each line.
 Use comments to record each audio source, license, attribution, and consent record when applicable.
 Use only CC0, CC-BY-4.0, or approved synthetic test audio.

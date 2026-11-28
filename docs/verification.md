@@ -5088,3 +5088,9 @@ The setup test compares the error message on the setup page with the English tra
 | Increase the window limit in a copy of the fit code | Qualification gave `unavailable`, not `correlation_unavailable`. |
 | Add the brands skip to the workflow or the local task | The test found each skip. |
 | Change the `binding_used` error message on a copy of the setup page | The test did not find the English error message. |
+
+## Repository checks (2026-11-28 UTC)
+
+The public-tree checker accepts a Git commit range and also examines the working tree.
+The release check tests the package imports after archive extraction.
+The focused tests gave 101 satisfactory results.

@@ -11,7 +11,7 @@
 | `custom_components/assist_live/llm.py`, `tests/test_llm.py` | Spoken-reply rules for the HA Assist API |
 | `custom_components/assist_live/sensor.py` | Last-turn latency, quality, source, and uncertainty for each satellite |
 | `custom_components/assist_live/entity.py` | Base entity: entity names and the satellite device connection |
-| `custom_components/assist_live/quality_scale.yaml`, `tests/test_quality_scale.py` | HA quality scale rules, their status, and the rule list check |
+| `custom_components/assist_live/quality_scale.yaml` | HA quality scale rules and their status |
 | `docs/configuration.md`, `docs/privacy.md` | Modes, local-only limits, transcript policy, and diagnostics |
 | `tests/test_modes.py`, `test_diagnostics.py`, `test_sensor.py` | Destination policy, metadata, redaction, and timing tests |
 | `tools/check_release_pin.py`, `tests/test_release_pin.py` | Client version and PyPI publication check |
@@ -29,10 +29,9 @@
 | `docs/design.md` | Public design and phase gates |
 | `docs/research/contracts.md` | Upstream contracts and prototype limits |
 | `docs/verification.md` | Commands and gate results |
-| `tests/test_package.py` | Package boundary test |
-| `tests/test_public_tree.py` | Bootstrap and privacy checker tests |
-| `tools/check_bootstrap.py` | Package and document checks |
-| `tools/check_public_tree.py` | Worktree and reachable-history checks |
+| `tools/check_packaging.py`, `tests/test_package.py` | Package metadata, archive extraction, and import checks |
+| `tools/check_public_tree.py`, `tests/test_public_tree.py` | Working tree and Git history checks |
+| `tools/check_ci.py`, `tests/test_ci.py` | Release publisher and CI result checks |
 | `tools/corpus.py`, `tests/test_corpus.py` | Corpus source pins, records, fetch limits, and checks |
 | `tools/annotate_corpus.py`, `tests/test_annotate_corpus.py` | Local boundary marks, checked import, and calibration statistics |
 | `tools/test_environment.py`, `tests/test_test_environment.py` | Virtual intent coverage, reply groups, and operation records |

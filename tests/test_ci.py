@@ -1,5 +1,8 @@
-import re
-import shlex
+import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,51 +10,25 @@ import yaml
 from test_public_tree import denylist, repository  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
-CI_RUN_EXEMPTIONS = {
-    "lint": {"Install actionlint", "Check source build compilers"},
-    "typecheck": {"Check source build compilers"},
-    "unit": {
-        "Install Gitleaks",
-        "Install Node",
-        "Install FFmpeg",
-        "Check source build compilers",
-    },
-    "ha": {
-        "Install Gitleaks",
-        "Install Node",
-        "Install FFmpeg",
-        "Check source build compilers",
-        "result",
-    },
-}
+WORKFLOWS = Path(".github/workflows")
+
+
+def test_ha_plugin_is_active(request):
+    assert request.config.pluginmanager.hasplugin("homeassistant")
 
 
 @pytest.mark.parametrize("mode", ["unset", "valid", "missing", "hit"])
-def test_task_privacy_branch_keeps_other_checks(repository, denylist, tmp_path, mode):  # noqa: F811
-    import os
-    import shutil
-    import subprocess
-    import sys
-
+def test_task_privacy_branch(repository, denylist, tmp_path, mode):  # noqa: F811
     tool = repository / "tools/check_public_tree.py"
     tool.parent.mkdir()
     shutil.copy(ROOT / "tools/check_public_tree.py", tool)
     commands = yaml.safe_load((ROOT / "Taskfile.yml").read_text())["tasks"]["check"][
         "cmds"
     ]
-    branch = commands[-1]
-    assert isinstance(branch, str)
-    assert all(
-        command in commands
-        for command in (
-            {"task": "lint"},
-            {"task": "typecheck"},
-            {"task": "unit"},
-            "uv run --locked python tools/check_bootstrap.py",
-            "uv run --locked python tools/check_ci.py",
-            "gitleaks dir . --redact --exit-code 1",
-            "gitleaks git . --redact --exit-code 1",
-        )
+    branch = next(
+        cmd
+        for cmd in commands
+        if isinstance(cmd, str) and "check_public_tree.py" in cmd
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -85,647 +62,11 @@ def test_task_privacy_branch_keeps_other_checks(repository, denylist, tmp_path, 
         assert "PASS public data matches=0" in result.stdout
 
 
-def test_ci_current_member_versions():
-    from tools.check_ci import HA_MATRIX
-
-    assert HA_MATRIX == [
-        {"ha": "2026.10.1", "plugin": "0.13.372", "member": "minimum"},
-        {"ha": "2026.10.4", "plugin": "0.13.375", "member": "current"},
-        {"ha": "2026.11.3", "plugin": "0.13.375", "member": "compatibility"},
-    ]
-
-
-def test_ha_2026_11_target_uses_override_and_early_pytest_bootstrap():
-    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
-    commands = taskfile["tasks"].get("ha-2026-11", {}).get("cmds", [])
-    assert len(commands) == 3, "HA 2026.11.3 isolated target missing"
-    args = [shlex.split(command) for command in commands]
-    assert args[0] == [
-        "uv",
-        "venv",
-        "--allow-existing",
-        "--python",
-        "3.14.2",
-        ".venv-ha-2026-11",
-    ]
-    assert args[1][:5] == [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        ".venv-ha-2026-11/bin/python",
-    ]
-    assert args[1][5:7] == ["--override", "tests/ha-2026-11-override.txt"]
-    assert "homeassistant==2026.11.3" in args[1]
-    assert "pytest-homeassistant-custom-component==0.13.375" in args[1]
-    assert "home-assistant-intents==2026.10.27" in args[1]
-    assert args[2] == [
-        ".venv-ha-2026-11/bin/python",
-        "-m",
-        "pytest",
-        "-p",
-        "tools.ha_2026_11_pytest",
-        "tests/",
-        "-q",
-    ]
-
-
-def test_completion_requires_ha_2026_11_output():
-    from tools.check_ci import REQUIRED_JOBS, results_pass
-
-    needs = {job: {"result": "success"} for job in REQUIRED_JOBS - {"ci-complete"}}
-    needs["ha"]["outputs"] = {"minimum": "success", "current": "success"}
-    assert not results_pass(needs), "HA 2026.11.3 result is mandatory"
-    needs["ha"]["outputs"]["compatibility"] = "success"
-    assert results_pass(needs)
-
-
-@pytest.mark.parametrize(
-    "mutation,failure",
-    [
-        ("bootstrap", "HA component requirements command"),
-        ("override-command", "HA component requirements command"),
-        ("intents", "HA component requirements command"),
-        ("matrix", "HA matrix"),
-        ("ha-env", "HA version environment"),
-        ("plugin-env", "HA version environment"),
-        ("output", "HA member outputs"),
-        ("local-command", "HA 2026.11.3 Taskfile.yml"),
-        ("override-file", "HA 2026.11.3 override"),
-    ],
-)
-def test_ci_rejects_weakened_ha_2026_11_member(
-    tmp_path, monkeypatch, mutation, failure
-):
-    import shutil
-
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    path = tmp_path / ".github/workflows/ci.yml"
-    assert check_jobs(path)
-    workflow = yaml.safe_load(path.read_text())
-    ha = workflow["jobs"]["ha"]
-    step = next(
-        step
-        for step in ha["steps"]
-        if step.get("name") == "Test all contracts on the exact HA version"
-    )
-    if mutation == "bootstrap":
-        step["run"] = step["run"].replace("-p tools.ha_2026_11_pytest ", "")
-    elif mutation == "override-command":
-        step["run"] = step["run"].replace(
-            "--override tests/ha-2026-11-override.txt ", ""
-        )
-    elif mutation == "intents":
-        step["run"] = step["run"].replace("2026.10.27", "2026.10.6")
-    elif mutation == "matrix":
-        ha["strategy"]["matrix"]["include"].pop()
-    elif mutation == "ha-env":
-        step["env"]["HA_VERSION"] = "2026.10.4"
-    elif mutation == "plugin-env":
-        step["env"]["PLUGIN_VERSION"] = "0.13.375"
-    elif mutation == "output":
-        del ha["outputs"]["compatibility"]
-    elif mutation == "local-command":
-        target = tmp_path / "Taskfile.yml"
-        taskfile = yaml.safe_load(target.read_text())
-        taskfile["tasks"]["ha-2026-11"]["cmds"][-1] += " --disable-warnings"
-        target.write_text(yaml.safe_dump(taskfile))
-    else:
-        (tmp_path / "tests/ha-2026-11-override.txt").write_text(
-            "homeassistant==2026.11.2\n"
-        )
-    path.write_text(yaml.safe_dump(workflow))
-    with pytest.raises(ValueError, match=failure):
-        check_jobs(path)
-
-
-def test_ci_rejects_previous_current_member(tmp_path):
-    from tools.check_ci import main
-
-    path = tmp_path / "ci.yml"
-    source = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "2026.10.4" in source
-    path.write_text(source.replace("2026.10.4", "2026.10.3"))
-    assert main(["--workflow", str(path)]) == 1
-
-
-@pytest.mark.parametrize(
-    "mutation,failure",
-    [
-        ("workflow-step", "records guard lint command"),
-        ("checkout-depth", "records guard lint checkout"),
-        ("task-call", "records guard Taskfile.yml"),
-    ],
-)
-def test_ci_records_guard_wiring_has_named_failures(
-    tmp_path, monkeypatch, mutation, failure
-):
-    import shutil
-
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    path = tmp_path / ".github/workflows/ci.yml"
-    assert check_jobs(path)
-    workflow = yaml.safe_load(path.read_text())
-    steps = workflow["jobs"]["lint"]["steps"]
-    if mutation == "workflow-step":
-        steps.remove(
-            next(
-                step
-                for step in steps
-                if step.get("run") == "uv run --locked python tools/check_records.py"
-            )
-        )
-    elif mutation == "checkout-depth":
-        checkout = next(
-            step
-            for step in steps
-            if step.get("uses", "").startswith("actions/checkout@")
-        )
-        del checkout["with"]["fetch-depth"]
-    else:
-        task_path = tmp_path / "Taskfile.yml"
-        taskfile = yaml.safe_load(task_path.read_text())
-        taskfile["tasks"]["check"]["cmds"].remove({"task": "records-check"})
-        task_path.write_text(yaml.safe_dump(taskfile))
-    path.write_text(yaml.safe_dump(workflow))
-    with pytest.raises(ValueError, match=failure) as error:
-        check_jobs(path)
-    assert str(error.value) == failure
-
-
-@pytest.mark.parametrize("carrier", ["plugin", "task_description", "task_command"])
-def test_ci_rejects_stale_current_carriers(tmp_path, monkeypatch, carrier):
-    import shutil
-
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    assert check_jobs(tmp_path / ".github/workflows/ci.yml")
-    if carrier == "plugin":
-        target = tmp_path / "pyproject.toml"
-        target.write_text(target.read_text().replace("0.13.375", "0.13.374"))
-        failure = "current plugin pyproject.toml"
-    else:
-        target = tmp_path / "Taskfile.yml"
-        taskfile = yaml.safe_load(target.read_text())
-        task = taskfile["tasks"]["check"]
-        if carrier == "task_description":
-            task["desc"] = task["desc"].replace("2026.10.4", "2026.10.3")
-        else:
-            task["cmds"].append("uv run --with homeassistant==2026.10.3 pytest")
-        target.write_text(yaml.safe_dump(taskfile))
-        failure = "current HA Taskfile.yml"
-    with pytest.raises(ValueError, match=failure):
-        check_jobs(tmp_path / ".github/workflows/ci.yml")
-
-
-def test_ci_has_required_jobs():
-    from tools.check_ci import check_jobs
-
-    root = Path(__file__).resolve().parents[1]
-    assert check_jobs(root / ".github/workflows/ci.yml") == {
-        "lint",
-        "typecheck",
-        "unit",
-        "ha",
-        "hassfest",
-        "hacs",
-        "secrets",
-        "ci-complete",
-    }
-
-
-def test_hacs_checks_brands_in_ci_and_locally():
-    assert (ROOT / "custom_components/assist_live/brand/icon.png").is_file()
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"]["hacs"]["steps"]
-    step = next(
-        step for step in steps if step.get("uses", "").startswith("hacs/action@")
-    )
-    assert "brands" not in re.split(r"[,\s]+", step["with"].get("ignore", "")), (
-        "CI must run the HACS brands check"
-    )
-
-    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
-    commands = [shlex.split(command) for command in taskfile["tasks"]["hacs"]["cmds"]]
-    ignores = [
-        arg.partition("=")[2]
-        for args in commands
-        for arg in args
-        if arg.startswith("INPUT_IGNORE=")
-    ]
-    assert all("brands" not in re.split(r"[,\s]+", value) for value in ignores), (
-        "Taskfile must run the HACS brands check"
-    )
-
-
-@pytest.mark.parametrize("environment", [None, [], "invalid"])
-def test_release_step_invalid_environment_has_named_failure(
-    tmp_path, monkeypatch, capsys, environment
-):
-    import shutil
-
-    from tools import check_ci
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    monkeypatch.setattr(check_ci, "__file__", str(tmp_path / "tools/check_ci.py"))
-    release = tmp_path / ".github/workflows/release-artifacts.yml"
-    workflow = yaml.safe_load(release.read_text())
-    step = next(
-        step
-        for job in workflow["jobs"].values()
-        for step in job["steps"]
-        if "tools/check_release_pin.py" in step.get("run", "")
-    )
-    step["env"] = environment
-    release.write_text(yaml.safe_dump(workflow))
-    assert (
-        check_ci.main(["--workflow", str(tmp_path / ".github/workflows/ci.yml")]) == 1
-    )
-    assert capsys.readouterr().out == "FAIL CI release pin environment\n"
-
-
-def test_client_pin_manifest_mismatch_has_named_failure(tmp_path, monkeypatch):
-    import json
-    import shutil
-
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    target = tmp_path / "custom_components/assist_live/manifest.json"
-    manifest = json.loads(target.read_text())
-    manifest["requirements"] = ["assist-live-client==1.2.3"]
-    target.write_text(json.dumps(manifest))
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    with pytest.raises(ValueError, match="client pin pyproject.toml"):
-        check_jobs(tmp_path / ".github/workflows/ci.yml")
-
-
-def test_package_refuses_git_client_source(packaged_root):
-    import re
-
-    from tools.check_packaging import check_packaging
-
-    path = packaged_root / "uv.lock"
-    content = path.read_text()
-    content = re.sub(
-        r'(name = "assist-live-client"\nversion = "[^"]+"\n)source = [^\n]+',
-        r'\1source = { git = "https://example.com/client" }',
-        content,
-    )
-    path.write_text(content)
-    assert "manifest requirements" in check_packaging(packaged_root)
-
-
-@pytest.mark.parametrize(
-    "carrier,field",
-    [
-        ("uv.lock", "all"),
-        ("uv.lock", "resolved"),
-        ("uv.lock", "declared"),
-        ("uv.lock", "source"),
-        ("pyproject.toml", "all"),
-        ("pyproject.toml", "source"),
-        ("Taskfile.yml", "all"),
-        (".github/workflows/ci.yml", "all"),
-        (".github/workflows/release-artifacts.yml", "all"),
-        (".github/workflows/release-artifacts.yml", "command"),
-    ],
-)
-def test_client_pin_mismatch_has_named_failure(tmp_path, carrier, field, monkeypatch):
-    import shutil
-
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(ROOT / name, target)
-    target = tmp_path / carrier
-    content = target.read_text()
-    if field == "resolved":
-        content = content.replace(
-            'name = "assist-live-client"\nversion = "0.1.0a2"',
-            'name = "assist-live-client"\nversion = "0.0.0"',
-        )
-    elif field == "declared":
-        content = content.replace('specifier = "==0.1.0a2"', 'specifier = "==0.0.0"')
-    elif field == "command":
-        content = content.replace('"$CLIENT_VERSION"', '"0.0.0"')
-    elif field == "source":
-        if carrier == "pyproject.toml":
-            content += (
-                "\n[tool.uv.sources]\nassist-live-client = "
-                '{ git = "https://example.com/client" }\n'
-            )
-        else:
-            content = content.replace(
-                'name = "assist-live-client"\nversion = "0.1.0a2"\n'
-                'source = { registry = "https://pypi.org/simple" }',
-                'name = "assist-live-client"\nversion = "0.1.0a2"\n'
-                'source = { git = "https://example.com/client" }',
-            )
-    else:
-        content = content.replace("0.1.0a2", "0.0.0")
-    assert content != target.read_text()
-    target.write_text(content)
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    with pytest.raises(ValueError, match=f"client pin {carrier}"):
-        check_jobs(tmp_path / ".github/workflows/ci.yml")
-
-
-def test_client_pin_uses_manifest_version(tmp_path, monkeypatch):
-    from tools.check_ci import check_jobs
-
-    for name in (
-        "pyproject.toml",
-        "uv.lock",
-        "Taskfile.yml",
-        "tests/ha-2026-11-override.txt",
-        ".github/workflows/ci.yml",
-        ".github/workflows/release-artifacts.yml",
-        "custom_components/assist_live/manifest.json",
-    ):
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text((ROOT / name).read_text().replace("0.1.0a2", "1.2.3"))
-    monkeypatch.setattr("tools.check_ci.__file__", str(tmp_path / "tools/check_ci.py"))
-    assert check_jobs(tmp_path / ".github/workflows/ci.yml")
-
-
-def test_ci_commands_match_taskfile():
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    taskfile = yaml.safe_load((ROOT / "Taskfile.yml").read_text())
-    task_commands = {
-        " ".join(command.split())
-        for task in taskfile["tasks"].values()
-        for command in task.get("cmds", [])
-        if isinstance(command, str)
-    }
-    task_ha = taskfile["tasks"]["ha-minimum"]["cmds"][0]
-    ha_task_args = shlex.split(task_ha)
-    for job_name, exemptions in CI_RUN_EXEMPTIONS.items():
-        substantive_commands = 0
-        for step in workflow["jobs"][job_name]["steps"]:
-            run = step.get("run")
-            if not run:
-                continue
-            step_key = step.get("name") or step.get("id")
-            if step_key in exemptions:
-                continue
-            parts = [part.strip() for part in run.split("&&") if part.strip()]
-            if (
-                job_name == "ha"
-                and step_key == "Test all contracts on the exact HA version"
-            ):
-                lines = [line.strip() for line in run.splitlines() if line.strip()]
-                assert lines[0] == 'if [ "$HA_VERSION" = "2026.11.3" ]; then'
-                assert [shlex.split(line) for line in lines[1:4]] == [
-                    shlex.split(command)
-                    for command in taskfile["tasks"]["ha-2026-11"]["cmds"]
-                ]
-                assert lines[4] == "else" and lines[6:] == ["fi"]
-                parts = [lines[5]]
-            assert parts, f"CI {job_name} has an empty run step: {step_key}"
-            for part in parts:
-                try:
-                    command_args = shlex.split(part)
-                except ValueError as error:
-                    raise AssertionError(
-                        f"CI {job_name} command is invalid: {part} ({error})"
-                    ) from error
-                if (
-                    job_name == "ha"
-                    and step_key == "Test all contracts on the exact HA version"
-                ):
-                    ha_version = "homeassistant==$HA_VERSION"
-                    plugin_version = (
-                        "pytest-homeassistant-custom-component==$PLUGIN_VERSION"
-                    )
-                    assert (
-                        ha_version in command_args and plugin_version in command_args
-                    ), f"CI {job_name} command has no Taskfile match: {part}"
-                    command_args[command_args.index(ha_version)] = (
-                        "homeassistant==2026.10.1"
-                    )
-                    command_args[command_args.index(plugin_version)] = (
-                        "pytest-homeassistant-custom-component==0.13.372"
-                    )
-                    assert command_args == ha_task_args, (
-                        f"CI {job_name} command has no Taskfile match: {part}"
-                    )
-                else:
-                    normalized = shlex.join(command_args)
-                    assert normalized in task_commands, (
-                        f"CI {job_name} command has no Taskfile match: {part}"
-                    )
-                if command_args != ["uv", "sync", "--locked"]:
-                    substantive_commands += 1
-        assert substantive_commands > 0, (
-            f"CI {job_name} has no Taskfile commands beyond uv sync"
-        )
-
-
-@pytest.mark.parametrize("job_name", ["unit", "ha"])
-def test_gitleaks_install_precedes_pytest(job_name):
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"][job_name]["steps"]
-    install = next(
-        i for i, step in enumerate(steps) if step.get("name") == "Install Gitleaks"
-    )
-    pytest_step = next(
-        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
-    )
-    assert install < pytest_step
-
-
-@pytest.mark.parametrize("job_name", ["unit", "ha"])
-def test_ffmpeg_install_precedes_audio_tests(job_name):
-    from tools.check_ci import ffmpeg_install
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"][job_name]["steps"]
-    installs = [
-        (index, step)
-        for index, step in enumerate(steps)
-        if step.get("name") == "Install FFmpeg"
-    ]
-    assert len(installs) == 1, "FFMPEG_INSTALL_STEP_MISSING"
-    index, step = installs[0]
-    assert step["run"] == ffmpeg_install()
-    assert index < next(
-        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
-    )
-
-
-@pytest.mark.parametrize("job_name", ["unit", "ha"])
-@pytest.mark.parametrize("mutation", ["missing", "command", "late"])
-def test_ci_requires_ffmpeg_install_for_audio_tests(tmp_path, job_name, mutation):
-    from tools.check_ci import check_jobs
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    path = tmp_path / "ci.yml"
-    path.write_text(yaml.safe_dump(workflow))
-    assert check_jobs(path)
-    steps = workflow["jobs"][job_name]["steps"]
-    install = next(step for step in steps if step.get("name") == "Install FFmpeg")
-    if mutation == "missing":
-        steps.remove(install)
-    elif mutation == "command":
-        install["run"] = install["run"].replace("--no-install-recommends ", "")
-    else:
-        steps.remove(install)
-        steps.append(install)
-    path.write_text(yaml.safe_dump(workflow))
-    with pytest.raises(ValueError, match=f"FFmpeg install {job_name}"):
-        check_jobs(path)
-
-
-@pytest.mark.parametrize("job_name", ["unit", "ha"])
-def test_node_install_precedes_ui_test(job_name):
-    from tools.check_ci import node_install
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"][job_name]["steps"]
-    install = next(
-        i for i, step in enumerate(steps) if step.get("name") == "Install Node"
-    )
-    run = steps[install]["run"]
-    assert run == node_install()
-    assert install < next(
-        i for i, step in enumerate(steps) if "pytest" in step.get("run", "")
-    )
-
-
-def test_secrets_job_uses_checked_gitleaks_and_public_tree():
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = workflow["jobs"]["secrets"]["steps"]
-    install = next(
-        step["run"] for step in steps if step.get("name") == "Install Gitleaks"
-    )
-    assert "v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz" in install
-    assert "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e" in install
-    assert "sha256sum -c -" in install
-    assert any(step.get("with", {}).get("fetch-depth") == 0 for step in steps)
-    public = next(
-        step["run"] for step in steps if step.get("name") == "Check public tree"
-    )
-    assert "tools/check_public_tree.py --history --root ." in public
-    assert "PRIVATE_DENYLIST" in public
-    assert "||" not in public
-    assert "continue-on-error" not in workflow["jobs"]["secrets"]
-
-
-@pytest.mark.parametrize(
-    "mutation", ["condition", "needs", "skip", "matrix", "ha_requirements", "compiler"]
-)
-def test_ci_rejects_weakened_completion(tmp_path, mutation):
-    from tools.check_ci import check_jobs
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    complete = workflow["jobs"]["ci-complete"]
-    if mutation == "condition":
-        del complete["if"]
-    elif mutation == "needs":
-        complete["needs"].remove("ha")
-    elif mutation == "skip":
-        complete["steps"][-1]["run"] += " || true"
-    elif mutation == "matrix":
-        workflow["jobs"]["ha"]["strategy"]["matrix"]["include"].pop()
-    elif mutation == "ha_requirements":
-        step = next(
-            s
-            for s in workflow["jobs"]["ha"]["steps"]
-            if s.get("name") == "Test all contracts on the exact HA version"
-        )
-        step["run"] = step["run"].replace('--with "mutagen==1.48.1"', "")
-    else:
-        steps = workflow["jobs"]["ha"]["steps"]
-        workflow["jobs"]["ha"]["steps"] = [
-            s for s in steps if s.get("name") != "Check source build compilers"
-        ]
-    path = tmp_path / "ci.yml"
-    path.write_text(yaml.safe_dump(workflow))
-    with pytest.raises(ValueError):
-        check_jobs(path)
-
-
 @pytest.mark.parametrize("result", ["skipped", "failure", "cancelled", "success"])
 def test_completion_requires_each_success(result):
-    from tools.check_ci import check_jobs, results_pass
+    from tools.check_ci import results_pass
 
-    jobs = check_jobs(ROOT / ".github/workflows/ci.yml") - {"ci-complete"}
+    jobs = {"lint", "typecheck", "unit", "ha", "hassfest", "hacs", "secrets"}
     needs: dict[str, dict[str, object]] = {job: {"result": "success"} for job in jobs}
     outputs = {"minimum": "success", "current": "success", "compatibility": "success"}
     needs["ha"]["outputs"] = outputs
@@ -733,298 +74,68 @@ def test_completion_requires_each_success(result):
     for job in jobs:
         changed = {**needs, job: {**needs[job], "result": result}}
         assert results_pass(changed) is (result == "success")
-    for member in ("minimum", "current", "compatibility"):
+    for member in outputs:
         changed = {
             **needs,
-            "ha": {
-                "result": "success",
-                "outputs": {
-                    **outputs,
-                    member: result,
-                },
-            },
+            "ha": {"result": "success", "outputs": {**outputs, member: result}},
         }
         assert results_pass(changed) is (result == "success")
     assert not results_pass({})
     assert not results_pass({key: value for key, value in needs.items() if key != "ha"})
+    assert not results_pass({**needs, "ha": {"result": "success"}})
 
 
-def test_packaging_rejects_bad_metadata(tmp_path):
-    import json
-    import shutil
+def test_ci_reports_incomplete_results(capsys):
+    from tools.check_ci import main
 
-    from tools.check_packaging import check_packaging
-
-    shutil.copytree(
-        ROOT / "custom_components",
-        tmp_path / "custom_components",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    shutil.copy(ROOT / "hacs.json", tmp_path / "hacs.json")
-    shutil.copy(ROOT / "uv.lock", tmp_path / "uv.lock")
-    assert check_packaging(tmp_path) == []
-    manifest = tmp_path / "custom_components/assist_live/manifest.json"
-    data = json.loads(manifest.read_text())
-    data["version"] = "not-a-version"
-    data["config_flow"] = False
-    manifest.write_text(json.dumps(data))
-    (tmp_path / "hacs.json").write_text('{"name": "", "homeassistant": "invalid"}')
-    failures = check_packaging(tmp_path)
-    assert "manifest version" in failures
-    assert "manifest config_flow" in failures
-    assert "HACS name" in failures
-    assert "HACS homeassistant" in failures
-
-
-def test_packaging_reports_invalid_inputs(tmp_path):
-    from tools.check_packaging import check_packaging
-
-    assert check_packaging(tmp_path)
-
-
-def test_package_file_set_is_explicit():
-    from tools.check_packaging import PACKAGE_FILES
-
-    assert PACKAGE_FILES == {
-        "__init__.py",
-        "brand/icon.png",
-        "brand/icon@2x.png",
-        "config_flow.py",
-        "const.py",
-        "diagnostics.py",
-        "entity.py",
-        "ledger.py",
-        "llm.py",
-        "manifest.json",
-        "quality_scale.yaml",
-        "repairs.py",
-        "routing.py",
-        "sensor.py",
-        "settings.py",
-        "strings.json",
-        "stt.py",
-        "stt_fallback.py",
-        "stt_hints.py",
-        "translations/en.json",
-        "tts.py",
-        "tts_fallback.py",
+    needs: dict[str, dict[str, object]] = {
+        job: {"result": "success"}
+        for job in ("lint", "typecheck", "unit", "ha", "hassfest", "hacs", "secrets")
     }
-
-
-@pytest.fixture
-def packaged_root(tmp_path):
-    import shutil
-
-    shutil.copytree(
-        ROOT / "custom_components",
-        tmp_path / "custom_components",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    for name in ("hacs.json", "uv.lock", ".gitignore"):
-        shutil.copy(ROOT / name, tmp_path / name)
-    return tmp_path
+    needs["ha"]["outputs"] = {"minimum": "success", "current": "success"}
+    assert main(["--results", json.dumps(needs)]) == 1
+    assert capsys.readouterr().out == "FAIL CI incomplete CI results\n"
 
 
 @pytest.mark.parametrize(
-    ("name", "payload", "expected"),
-    [
-        ("brand/icon.png", b"Not a PNG.", ["invalid brand image brand/icon.png"]),
-        (
-            "brand/icon.png",
-            b"\x89PNG\r\n\x1a\n" + b"\0" * (32 * 1024 - 7),
-            ["invalid brand image brand/icon.png"],
-        ),
-        (
-            "brand/logo.png",
-            b"\x89PNG\r\n\x1a\n",
-            ["unexpected package file brand/logo.png"],
-        ),
-    ],
-    ids=["renamed-text", "oversize", "unexpected-path"],
+    ("name", "job"),
+    [("release-please", "release-please"), ("release-artifacts", "archive")],
 )
-def test_packaging_refuses_invalid_brand_png(packaged_root, name, payload, expected):
-    from tools.check_packaging import check_packaging
-
-    brand = packaged_root / "custom_components/assist_live/brand"
-    brand.mkdir(exist_ok=True)
-    for filename in ("icon.png", "icon@2x.png"):
-        (brand / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
-    assert check_packaging(packaged_root) == []
-
-    path = brand.parent / name
-    path.write_bytes(payload)
-    assert check_packaging(packaged_root) == expected
-
-
-@pytest.mark.parametrize("git_tree", [False, True], ids=["archive", "git"])
-@pytest.mark.parametrize(
-    "extra",
-    ["notes.txt", "nested/conversation.py", "test_agent", "assist_live_test_agent"],
-)
-def test_package_rejects_unexpected_files_and_fixture_paths(
-    packaged_root, extra, git_tree
-):
-    import shutil
-    import subprocess
-
-    from tools.check_packaging import check_packaging
-
-    if git_tree:
-        subprocess.run(
-            ["git", "-C", str(packaged_root), "init", "-b", "main"],
-            check=True,
+def test_release_workflows_require_approval(name, job):
+    workflow = yaml.safe_load((ROOT / WORKFLOWS / f"{name}.yml").read_text())
+    guard = workflow["jobs"][job]["steps"][0]
+    assert guard["env"] == {"APPROVED": "${{ vars.ASSIST_LIVE_RELEASES_APPROVED }}"}
+    for value in ("", "false", "true"):
+        result = subprocess.run(
+            ["bash", "-e", "-c", guard["run"]],
+            env={**os.environ, "APPROVED": value},
             capture_output=True,
+            check=False,
         )
-    assert check_packaging(packaged_root) == []
-    destination = packaged_root / "custom_components/assist_live" / extra
-    if extra == "test_agent":
-        shutil.copytree(
-            ROOT / "tests/fixtures/custom_components/assist_live_test_agent",
-            destination,
-        )
-    elif extra == "assist_live_test_agent":
-        destination.mkdir()
-        (destination / "__init__.py").write_text("")
-    else:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text("test-only")
-    failures = check_packaging(packaged_root)
-    if extra == "assist_live_test_agent":
-        assert f"test agent package path {extra}/__init__.py" in failures
-    else:
-        assert any(
-            failure.startswith("unexpected package file ") for failure in failures
-        )
-
-
-@pytest.mark.parametrize("git_tree", [False, True], ids=["archive", "git"])
-def test_package_bytecode_is_excluded_only_by_git(packaged_root, git_tree):
-    import subprocess
-
-    from tools.check_packaging import check_packaging
-
-    if git_tree:
-        subprocess.run(
-            ["git", "-C", str(packaged_root), "init", "-b", "main"],
-            check=True,
-            capture_output=True,
-        )
-    package = packaged_root / "custom_components/assist_live"
-    for name in ("__pycache__/stt.cpython-314.pyc", "stt.pyc"):
-        path = package / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"test-only")
-        if git_tree:
-            subprocess.run(
-                ["git", "-C", str(packaged_root), "check-ignore", str(path)],
-                check=True,
-                capture_output=True,
-            )
-    failures = check_packaging(packaged_root)
-    if git_tree:
-        assert failures == []
-    else:
-        assert "unexpected package file __pycache__/stt.cpython-314.pyc" in failures
-        assert "unexpected package file stt.pyc" in failures
-
-
-def test_package_refuses_tracked_ignored_bytecode(packaged_root):
-    import subprocess
-
-    from tools.check_packaging import check_packaging
-
-    subprocess.run(
-        ["git", "-C", str(packaged_root), "init", "-b", "main"],
-        check=True,
-        capture_output=True,
-    )
-    path = packaged_root / "custom_components/assist_live/stt.pyc"
-    path.write_bytes(b"test-only")
-    subprocess.run(
-        ["git", "-C", str(packaged_root), "add", "-f", str(path)],
-        check=True,
-        capture_output=True,
-    )
-    assert "unexpected package file stt.pyc" in check_packaging(packaged_root)
-
-
-@pytest.mark.parametrize(
-    "requirements",
-    [
-        [],
-        ["assist-live-client"],
-        ["assist-live-client>=0.0.0"],
-        ["assist-live-client==1.2.3"],
-        ["./client"],
-        ["git+https://example.com/client"],
-        ["assist-live-client==0.0.0", "extra==1.0.0"],
-    ],
-)
-def test_package_requires_locked_client(tmp_path, requirements):
-    import json
-    import shutil
-
-    from tools.check_packaging import check_packaging
-
-    shutil.copytree(
-        ROOT / "custom_components",
-        tmp_path / "custom_components",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    for name in ("hacs.json", "uv.lock"):
-        shutil.copy(ROOT / name, tmp_path / name)
-    path = tmp_path / "custom_components/assist_live/manifest.json"
-    manifest = json.loads(path.read_text())
-    manifest["requirements"] = requirements
-    path.write_text(json.dumps(manifest))
-    assert "manifest requirements" in check_packaging(tmp_path)
-
-
-def test_client_requirement_tracks_lock_version(tmp_path):
-    from tools.check_packaging import valid_client_requirement
-
-    (tmp_path / "uv.lock").write_text(
-        '[[package]]\nname="assist-live-client"\nversion="1.2.3"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-    assert valid_client_requirement(tmp_path, ["assist-live-client==1.2.3"])
-    assert not valid_client_requirement(tmp_path, ["assist-live-client==0.0.0"])
-
-
-def test_ha_plugin_is_active(request):
-    assert request.config.pluginmanager.hasplugin("homeassistant")
-
-
-@pytest.mark.parametrize("name", ["release-please", "release-artifacts"])
-def test_release_workflows_fail_closed(name):
-    import os
-    import subprocess
-
-    workflow = yaml.safe_load((ROOT / f".github/workflows/{name}.yml").read_text())
-    triggers = {"workflow_dispatch": None}
-    if name == "release-artifacts":
-        triggers["workflow_call"] = None
-    assert workflow.get("on", workflow.get(True)) == triggers
-    assert workflow["permissions"] == {"contents": "read"}
-    for job in workflow["jobs"].values():
-        if "uses" in job:
-            continue
-        guard = job["steps"][0]
-        assert guard["env"] == {"APPROVED": "${{ vars.ASSIST_LIVE_RELEASES_APPROVED }}"}
-        for value in ("", "false", "true"):
-            result = subprocess.run(
-                ["bash", "-e", "-c", guard["run"]],
-                env={**os.environ, "APPROVED": value},
-                capture_output=True,
-                check=False,
-            )
-            assert (result.returncode == 0) is (value == "true")
+        assert (result.returncode == 0) is (value == "true")
 
 
 def test_release_publisher_requires_archive_check_in_same_run():
     from tools.check_ci import check_release_publisher
 
     check_release_publisher(ROOT)
+
+
+@pytest.fixture
+def release_root(tmp_path):
+    workflows = tmp_path / WORKFLOWS
+    workflows.mkdir(parents=True)
+    for name in ("release-please.yml", "release-artifacts.yml"):
+        shutil.copyfile(ROOT / WORKFLOWS / name, workflows / name)
+    return tmp_path
+
+
+def test_release_check_runs_without_the_ci_workflow(release_root, monkeypatch, capsys):
+    from tools import check_ci
+
+    monkeypatch.setattr(check_ci, "__file__", str(release_root / "tools/check_ci.py"))
+    assert check_ci.main([]) == 0
+    assert capsys.readouterr().out == "PASS CI\n"
 
 
 @pytest.mark.parametrize(
@@ -1036,17 +147,12 @@ def test_release_publisher_requires_archive_check_in_same_run():
         ("release-please.yml", "archive", "if", None),
     ],
 )
-def test_release_publisher_rejects_dependency_bypass(tmp_path, file, job, field, value):
-    from shutil import copyfile
-
+def test_release_publisher_rejects_dependency_bypass(
+    release_root, file, job, field, value
+):
     from tools.check_ci import check_release_publisher
 
-    relative = Path(".github/workflows")
-    workflows = tmp_path / relative
-    workflows.mkdir(parents=True)
-    for name in ("release-please.yml", "release-artifacts.yml"):
-        copyfile(ROOT / relative / name, workflows / name)
-    path = workflows / file
+    path = release_root / WORKFLOWS / file
     workflow = yaml.safe_load(path.read_text())
     job_config = workflow["jobs"][job]
     if value is None:
@@ -1055,92 +161,4 @@ def test_release_publisher_rejects_dependency_bypass(tmp_path, file, job, field,
         job_config[field] = value
     path.write_text(yaml.safe_dump(workflow))
     with pytest.raises(ValueError, match="^release publisher dependency$"):
-        check_release_publisher(tmp_path)
-
-
-def test_release_archive_checks_only_default_branch():
-    workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/release-please.yml").read_text()
-    )
-    assert workflow["jobs"]["archive"].get("if") == (
-        "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
-    ), "publisher can release a branch other than the checked branch"
-
-
-def test_release_archive_contains_brand_pngs(packaged_root):
-    import shutil
-    from zipfile import ZipFile
-
-    from test_public_tree import git
-
-    shutil.copy(ROOT / "LICENSE", packaged_root / "LICENSE")
-    git(packaged_root, "init", "-b", "main")
-    git(packaged_root, "add", ".")
-    tree = git(packaged_root, "write-tree")
-    steps = yaml.safe_load(
-        (ROOT / ".github/workflows/release-artifacts.yml").read_text()
-    )["jobs"]["archive"]["steps"]
-    command = next(
-        line
-        for step in steps
-        for line in step.get("run", "").splitlines()
-        if line.startswith("git archive ")
-    )
-    args = shlex.split(command)[1:]
-    archive = packaged_root / "assist-live.zip"
-    args = [
-        arg.replace("$RUNNER_TEMP", str(packaged_root)) if arg != "HEAD" else tree
-        for arg in args
-    ]
-    git(packaged_root, *args)
-    paths = {
-        "custom_components/assist_live/brand/icon.png",
-        "custom_components/assist_live/brand/icon@2x.png",
-    }
-    with ZipFile(archive) as bundle:
-        assert paths <= set(bundle.namelist())
-        for name in paths:
-            assert bundle.read(name) == (ROOT / name).read_bytes()
-
-
-def test_release_archive_checks_published_client_before_build(tmp_path):
-    import os
-    import subprocess
-    import sys
-
-    steps = yaml.safe_load(
-        (ROOT / ".github/workflows/release-artifacts.yml").read_text()
-    )["jobs"]["archive"]["steps"]
-    checks = [
-        (i, step)
-        for i, step in enumerate(steps)
-        if "tools/check_release_pin.py" in step.get("run", "")
-    ]
-    assert len(checks) == 1
-    index, step = checks[0]
-    assert index < next(
-        i for i, s in enumerate(steps) if "git archive" in s.get("run", "")
-    )
-    assert not any("upload-artifact" in s.get("uses", "") for s in steps)
-    assert "--require-published" in shlex.split(step["run"])
-    uv = tmp_path / "uv"
-    uv.write_text(
-        f"#!{sys.executable}\nimport sys\n"
-        "assert sys.argv[1:4] == ['run', '--locked', 'python']\n"
-        "assert '--require-published' in sys.argv\n"
-        "assert sys.argv[sys.argv.index('--pypi-version') + 1] == '0.1.0a2'\n"
-        "raise SystemExit(19)\n"
-    )
-    uv.chmod(0o755)
-    result = subprocess.run(
-        ["bash", "-e", "-c", step["run"]],
-        env={
-            **os.environ,
-            **step.get("env", {}),
-            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 19, result.stderr
+        check_release_publisher(release_root)

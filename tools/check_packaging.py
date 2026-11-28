@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,29 +26,6 @@ else:
         valid_brand_png,
     )
 
-PACKAGE_FILES = {
-    "__init__.py",
-    "config_flow.py",
-    "const.py",
-    "diagnostics.py",
-    "entity.py",
-    "ledger.py",
-    "llm.py",
-    "manifest.json",
-    "quality_scale.yaml",
-    "repairs.py",
-    "routing.py",
-    "sensor.py",
-    "settings.py",
-    "strings.json",
-    "stt.py",
-    "stt_fallback.py",
-    "stt_hints.py",
-    "translations/en.json",
-    "tts.py",
-    "tts_fallback.py",
-} | BRAND_IMAGES
-
 
 def valid_client_requirement(root: Path, requirements: object) -> bool:
     try:
@@ -60,6 +38,26 @@ def valid_client_requirement(root: Path, requirements: object) -> bool:
         )
     except OSError, ValueError, KeyError, TypeError:
         return False
+
+
+def check_imports(root: Path) -> bool:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from custom_components.assist_live import async_setup_entry; "
+            "from custom_components.assist_live import "
+            "config_flow, diagnostics, llm, sensor, stt, tts",
+            str(root.resolve()),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    return result.returncode == 0
 
 
 def check_packaging(root: str | Path) -> list[str]:
@@ -91,13 +89,13 @@ def check_packaging(root: str | Path) -> list[str]:
             name = path.as_posix()
             if "assist_live_test_agent" in name.casefold():
                 failures.append(f"test agent package path {name}")
-            if name not in PACKAGE_FILES:
-                failures.append(f"unexpected package file {name}")
-        for name in sorted(PACKAGE_FILES):
+            if path.suffix.casefold() == ".pyc":
+                failures.append(f"package bytecode {name}")
+        for name in sorted(BRAND_IMAGES):
             path = package / name
             if not path.is_file():
                 failures.append(f"package file {name}")
-            elif name in BRAND_IMAGES:
+            else:
                 if path.is_symlink() or path.parent.is_symlink():
                     failures.append(f"invalid brand image {name}")
                     continue
@@ -155,8 +153,12 @@ def check_packaging(root: str | Path) -> list[str]:
         )
         if strings != english or not strings["config"]["step"]["user"]:
             failures.append("config flow strings")
+        if not failures and not check_imports(root):
+            failures.append("package imports")
     except subprocess.CalledProcessError:
         failures.append("package file inventory")
+    except subprocess.TimeoutExpired:
+        failures.append("package imports timed out")
     except OSError, ValueError, KeyError, TypeError, AttributeError:
         failures.append("package metadata input")
     return failures

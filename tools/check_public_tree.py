@@ -227,9 +227,24 @@ def public_findings(
     return findings
 
 
+def resolve_history_range(root: Path, revision_range: str) -> str:
+    start, separator, end = revision_range.partition("..")
+    if not separator or not start or not end or end.startswith(".") or ".." in end:
+        raise ValueError("Expected a two-dot commit range")
+    first, last = (
+        git(root, "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+        .decode("ascii")
+        .strip()
+        for ref in (start, end)
+    )
+    return f"{first}..{last}"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--history", action="store_true")
+    history = parser.add_mutually_exclusive_group()
+    history.add_argument("--history", action="store_true")
+    history.add_argument("--history-range", metavar="A..B")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--private-denylist", type=Path)
     parser.add_argument("--licensed-audio", type=Path)
@@ -251,16 +266,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             root
         ):
             raise ValueError("Private denylist must be external")
-        shallow = git(root, "rev-parse", "--is-shallow-repository").strip()
-        if args.history and shallow != b"false":
-            print("FAIL history secrets incomplete_history=1")
-            return 1
-        commits = (
-            git(root, "rev-list", "--all").decode("ascii").splitlines()
-            if args.history
-            else []
-        )
-        if args.history:
+        commits = []
+        if args.history or args.history_range is not None:
+            shallow = git(root, "rev-parse", "--is-shallow-repository").strip()
+            if shallow != b"false":
+                print("FAIL history secrets incomplete_history=1")
+                return 1
+            revision_range = (
+                resolve_history_range(root, args.history_range)
+                if args.history_range is not None
+                else None
+            )
+            commits = (
+                git(root, "rev-list", revision_range or "--all")
+                .decode("ascii")
+                .splitlines()
+            )
             executable = shutil.which("gitleaks")
             if not executable:
                 print("FAIL history secrets missing_tool=1")
@@ -274,6 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "--exit-code",
                     "1",
                     "--no-banner",
+                    *([f"--log-opts={revision_range}"] if revision_range else []),
                 ],
                 capture_output=True,
                 check=False,

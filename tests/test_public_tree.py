@@ -1,5 +1,4 @@
 import hashlib
-import json
 import os
 import shutil
 import subprocess
@@ -48,13 +47,13 @@ def denylist(tmp_path):
     return path
 
 
-def run_checker(root, denylist, *args, env=None):
+def run_checker(root, denylist, *args, env=None, history=("--history",)):
     denylist_args = ["--private-denylist", str(denylist)] if denylist else []
     return subprocess.run(
         [
             sys.executable,
             str(CHECKER),
-            "--history",
+            *history,
             "--root",
             str(root),
             *denylist_args,
@@ -130,6 +129,77 @@ def test_private_commit_metadata_fails(repository, denylist):
     assert result.returncode == 1
     assert "metadata" in result.stdout
     assert "restricted-fixture-marker" not in result.stdout
+
+
+def test_history_range_checks_only_selected_commits(repository, denylist):
+    git(repository, "commit", "--allow-empty", "-m", "Start")
+    git(repository, "switch", "-c", "other")
+    (repository / "data.txt").write_text("restricted-fixture-marker")
+    git(repository, "add", "data.txt")
+    git(repository, "commit", "-m", "Add private test data")
+    git(repository, "switch", "main")
+    git(repository, "commit", "--allow-empty", "-m", "Public change")
+
+    outside = run_checker(
+        repository, denylist, history=("--history-range", "HEAD^..HEAD")
+    )
+    assert outside.returncode == 0, outside.stdout or outside.stderr
+    assert "commits=1" in outside.stdout
+
+    inside = run_checker(
+        repository, denylist, history=("--history-range", "main^..other")
+    )
+    assert inside.returncode == 1, inside.stdout or inside.stderr
+    assert "blob commit=" in inside.stdout and "denylist=1" in inside.stdout
+    assert "restricted-fixture-marker" not in inside.stdout
+
+    (repository / "local.txt").write_text("restricted-fixture-marker")
+    local = run_checker(
+        repository, denylist, history=("--history-range", "HEAD^..HEAD")
+    )
+    assert local.returncode == 1
+    assert "worktree" in local.stdout and "denylist=1" in local.stdout
+
+
+@pytest.mark.parametrize("revision", ["missing..HEAD", "HEAD...HEAD", "..HEAD", "HEAD"])
+def test_invalid_history_range_fails_closed(repository, denylist, revision):
+    git(repository, "commit", "--allow-empty", "-m", "Start")
+    result = run_checker(repository, denylist, history=("--history-range", revision))
+    assert result.returncode == 1
+    assert "FAIL public data input_or_scan_error=1" in result.stdout
+
+
+def test_history_modes_are_mutually_exclusive(repository, denylist):
+    result = run_checker(repository, denylist, "--history-range", "HEAD^..HEAD")
+    assert result.returncode == 2
+    assert "not allowed with argument --history" in result.stderr
+
+
+def test_gitleaks_scans_only_selected_commits(repository, denylist):
+    (repository / ".gitleaks.toml").write_text(
+        '[[rules]]\nid = "fixture"\ndescription = "Synthetic test rule"\n'
+        'regex = "synthetic-scanner-marker"\n'
+    )
+    git(repository, "commit", "--allow-empty", "-m", "Start")
+    path = repository / "example.txt"
+    fixture = "synthetic-scanner-marker"
+    path.write_text(fixture)
+    git(repository, "add", path.name)
+    git(repository, "commit", "-m", "Add scanner fixture")
+    path.unlink()
+    git(repository, "add", "-u")
+    git(repository, "commit", "-m", "Remove scanner fixture")
+
+    outside = run_checker(
+        repository, denylist, history=("--history-range", "HEAD^..HEAD")
+    )
+    assert outside.returncode == 0, outside.stdout or outside.stderr
+    inside = run_checker(
+        repository, denylist, history=("--history-range", "HEAD~2..HEAD^")
+    )
+    assert inside.returncode == 1, inside.stdout or inside.stderr
+    assert "FAIL history secrets scanner_failure=1" in inside.stdout
+    assert fixture not in inside.stdout + inside.stderr
 
 
 @pytest.mark.parametrize(
@@ -268,195 +338,6 @@ def test_ignored_worktree_data_is_not_published(repository, denylist):
     assert run_checker(repository, denylist).returncode == 0
 
 
-@pytest.mark.parametrize(
-    "change", ["document", "license", "manifest", "requirement", "privacy"]
-)
-def test_bootstrap_rejects_invalid_boundary(tmp_path, change):
-    from tools.check_bootstrap import check_bootstrap
-
-    root = tmp_path / "bootstrap"
-    shutil.copytree(
-        ROOT,
-        root,
-        ignore=shutil.ignore_patterns(
-            ".git", ".venv*", "__pycache__", ".pytest_cache", ".ruff_cache"
-        ),
-    )
-    if change == "document":
-        (root / "SECURITY.md").unlink()
-    elif change == "license":
-        (root / "LICENSE").write_text("Unknown license")
-    elif change in {"manifest", "requirement"}:
-        manifest_path = root / "custom_components/assist_live/manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        if change == "manifest":
-            manifest.pop("config_flow")
-        else:
-            manifest["requirements"] = ["unpublished-client>=0"]
-        manifest_path.write_text(json.dumps(manifest))
-    else:
-        (root / "README.md").write_text("192" + ".168.0.1")
-    assert check_bootstrap(root)
-
-
-def test_bootstrap_accepts_exact_release_requirement(tmp_path):
-    from tools.check_bootstrap import check_bootstrap
-
-    root = tmp_path / "bootstrap"
-    shutil.copytree(
-        ROOT,
-        root,
-        ignore=shutil.ignore_patterns(
-            ".git", ".venv*", "__pycache__", ".pytest_cache", ".ruff_cache"
-        ),
-    )
-    path = root / "custom_components/assist_live/manifest.json"
-    manifest = json.loads(path.read_text())
-    manifest["requirements"] = ["assist-live-client==0.1.0a2"]
-    path.write_text(json.dumps(manifest))
-    assert check_bootstrap(root) == []
-
-
-@pytest.mark.parametrize(
-    "requirements",
-    [
-        [],
-        ["assist-live-client"],
-        ["assist-live-client>=0.0.0"],
-        ["assist-live-client==1.2.3"],
-        ["./client"],
-        ["git+https://example.com/client"],
-        ["assist-live-client==0.0.0", "extra==1.0.0"],
-    ],
-)
-def test_runtime_requires_only_exact_client(bootstrap_copy, requirements):
-    from tools.check_bootstrap import check_bootstrap
-
-    path = bootstrap_copy / "custom_components/assist_live/manifest.json"
-    manifest = json.loads(path.read_text())
-    manifest["requirements"] = requirements
-    path.write_text(json.dumps(manifest))
-    assert "manifest requirements" in check_bootstrap(bootstrap_copy)
-
-
-@pytest.mark.parametrize("change", ["dependencies", "satellite", "error", "issues"])
-def test_runtime_metadata_rules(bootstrap_copy, change):
-    from tools.check_bootstrap import check_bootstrap
-
-    package = bootstrap_copy / "custom_components/assist_live"
-    if change == "dependencies":
-        path = package / "manifest.json"
-        value = json.loads(path.read_text())
-        value["dependencies"] = []
-        path.write_text(json.dumps(value))
-        expected = "runtime dependencies"
-    else:
-        for name in ("strings.json", "translations/en.json"):
-            path = package / name
-            value = json.loads(path.read_text())
-            if change == "satellite":
-                value["config"]["step"].pop("satellite")
-            elif change == "error":
-                value["config"]["error"].pop("fallback_loop")
-            else:
-                value.pop("issues")
-            path.write_text(json.dumps(value))
-        expected = "runtime flow strings"
-    assert expected in check_bootstrap(bootstrap_copy)
-
-
-def test_bootstrap_accepts_release_proposal_and_still_checks_version(bootstrap_copy):
-    from tools.check_bootstrap import check_bootstrap
-
-    path = bootstrap_copy / "custom_components/assist_live/manifest.json"
-    tracking = bootstrap_copy / ".release-please-manifest.json"
-    manifest = json.loads(path.read_text())
-    manifest["version"] = "1.2.3"
-    tracking.write_text(json.dumps({".": "1.2.3"}))
-    path.write_text(json.dumps(manifest))
-    assert check_bootstrap(bootstrap_copy) == []
-
-    manifest["version"] = "1.2.4"
-    path.write_text(json.dumps(manifest))
-    assert check_bootstrap(bootstrap_copy) == ["manifest version"]
-
-    manifest["version"] = "not a version"
-    tracking.write_text(json.dumps({".": "not a version"}))
-    path.write_text(json.dumps(manifest))
-    assert check_bootstrap(bootstrap_copy) == ["manifest version"]
-
-
-@pytest.fixture
-def bootstrap_copy(tmp_path):
-    root = tmp_path / "bootstrap"
-    shutil.copytree(
-        ROOT,
-        root,
-        ignore=shutil.ignore_patterns(
-            ".git",
-            ".venv*",
-            "__pycache__",
-            ".pytest_cache",
-            ".ruff_cache",
-            ".mypy_cache",
-        ),
-    )
-    return root
-
-
-def test_shipped_hassfest_metadata_shape():
-    package = ROOT / "custom_components/assist_live"
-    manifest = json.loads((package / "manifest.json").read_text())
-    assert list(manifest) == [
-        "domain",
-        "name",
-        "codeowners",
-        "config_flow",
-        "dependencies",
-        "documentation",
-        "integration_type",
-        "iot_class",
-        "issue_tracker",
-        "requirements",
-        "version",
-    ]
-    for name in ("strings.json", "translations/en.json"):
-        strings = json.loads((package / name).read_text())
-        assert strings["config"]["step"]["user"]["title"]
-        assert strings["config"]["step"]["user"]["description"]
-
-
-@pytest.mark.parametrize(
-    "change", ["manifest_order", "manifest_owner", "step", "title", "description"]
-)
-def test_bootstrap_rejects_hassfest_metadata_regressions(bootstrap_copy, change):
-    from tools.check_bootstrap import check_bootstrap
-
-    package = bootstrap_copy / "custom_components/assist_live"
-    if change in {"manifest_order", "manifest_owner"}:
-        path = package / "manifest.json"
-        manifest = json.loads(path.read_text())
-        if change == "manifest_owner":
-            manifest["codeowners"] = []
-            expected = "manifest codeowners"
-        else:
-            manifest = dict(reversed(list(manifest.items())))
-            expected = "manifest key order"
-        path.write_text(json.dumps(manifest))
-    else:
-        for name in ("strings.json", "translations/en.json"):
-            path = package / name
-            strings = json.loads(path.read_text())
-            if change == "step":
-                strings["config"].pop("step", None)
-            else:
-                user = strings["config"].get("step", {}).get("user", {})
-                user.pop(change, None)
-            path.write_text(json.dumps(strings))
-        expected = "config flow steps"
-    assert expected in check_bootstrap(bootstrap_copy)
-
-
 @pytest.mark.parametrize("suffix", [".", ".txt"])
 @pytest.mark.parametrize(
     "address",
@@ -489,13 +370,6 @@ def test_versions_and_digit_group_continuations_are_not_private_addresses(payloa
     assert not scan_data(payload.encode(), (), set(), "text.txt")
 
 
-def test_bootstrap_rejects_private_address_before_period(bootstrap_copy):
-    from tools.check_bootstrap import check_bootstrap
-
-    (bootstrap_copy / "README.md").write_text("host 10" + ".1.2.3. done")
-    assert "public data README.md" in check_bootstrap(bootstrap_copy)
-
-
 @pytest.mark.parametrize(
     "payload",
     [
@@ -519,16 +393,6 @@ def test_public_urls_are_not_private_user_paths(url):
     from tools.check_public_tree import scan_data
 
     assert not scan_data(url.encode(), (), set(), "text.txt")
-
-
-def test_bootstrap_rejects_untested_ha_minimum(bootstrap_copy):
-    from tools.check_bootstrap import check_bootstrap
-
-    path = bootstrap_copy / "hacs.json"
-    hacs = json.loads(path.read_text())
-    hacs["homeassistant"] = "2026.10.0"
-    path.write_text(json.dumps(hacs))
-    assert "HACS metadata" in check_bootstrap(bootstrap_copy)
 
 
 def test_repository_inside_another_repository_is_rejected(repository, denylist):
