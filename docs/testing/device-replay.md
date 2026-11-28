@@ -203,9 +203,13 @@ It does not remove the HA recording or include audio in the output.
 
 A P1 command with none of the debug recording options is clock-only for pause trials.
 
-The server event `end_decision` can give `end_sample`, the number of 16 kHz mono samples at the decision.
+The server event `end_decision` can give `end_sample`, the end-exclusive length of the input prefix for `final`, in 16 kHz mono samples.
+At a hard end, the value can be smaller. It counts only the samples that the STT provider accepted.
+A turn without a command start can give this position without a `final` decode.
+
 The runner fits the HA debug WAV to the external capture with the same correlation and window checks as the fault runner.
-The WAV can start before the external capture, but its end must be in the capture and all three fit windows must agree.
+The WAV can start before the external capture, but its end must be in the capture.
+All three fit windows must agree and must be fully in the capture.
 
 The runner adds `speech_start` data `onset_ms` to the fitted WAV start.
 This first voice estimate must agree with the start of voice on the capture.

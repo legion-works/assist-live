@@ -222,5 +222,9 @@ def correlate(pcm: bytes, source: bytes, *, allow_early_start: bool = False) -> 
         len(agreed) == 3
         and (allow_early_start or 0 <= offset)
         and offset + len(reference) <= len(recording)
+        and all(
+            0 <= window["offset_samples"] <= len(recording) - width
+            for window in windows
+        )
     )
     return result

@@ -96,14 +96,21 @@ After setup, the options flow can change the fallback entities and the fallback 
 If the fallback TTS entity changes, the options flow shows the voices of the new entity before it saves.
 
 The server gives HTTP 401 for an incorrect token.
-From client `0.1.0a3`, that result is `ProtocolError(kind="unauthorized")`, and other refusals stay `refused`.
-If setup or a subsequent server request gets `unauthorized`, the integration starts the HA reauthentication flow and continues, so that the fallback engines answer turns.
-The reauthentication flow gets a new token for the same server URL and reads the bindings with it.
-It refuses a token that a different entry uses for the same server.
-Then it stores the token and reloads the entry.
+With the current client, the config flow shows `Cannot read provisioned bindings from the server.` (`cannot_connect`).
+Then check that the server is available and that its URL does not redirect.
+Check that the token gives access to a minimum of one provisioned satellite key.
+See [problem checks](usage.md#cannot-read-provisioned-bindings-from-the-server).
 
-HA keeps one reauthentication flow for each entry, and the integration makes no different repair issue for the token.
-The config flow shows `invalid_auth` for an incorrect token.
+**Planned reauthentication.** This flow is not available until the integration pins client `0.1.0a3` after its release.
+That client will give `ProtocolError(kind="unauthorized")` for HTTP 401. Other refusals will stay `refused`.
+
+If setup or a subsequent server request gets `unauthorized`, the integration will start HA reauthentication and continue with the fallback engines.
+The flow will read the bindings at the same server URL with the new token.
+It will refuse a token that a different entry uses for the same server.
+With a correct token, the flow will save the token and reload the entry.
+
+For this planned flow, HA will keep one reauthentication flow for each entry. The integration will not add a repair issue for the token.
+The config flow will show `invalid_auth` for an incorrect token.
 
 HA can set up the fallback engines after assist-live, and an engine can go out of service when its integration reloads.
 Thus the fallback engines are not necessary for the setup of assist-live.
@@ -312,9 +319,12 @@ For the `final` transcript, the Parakeet provider uses the TDT beam search of th
 The beam width is 16, and the provider uses the NeMo score normalization.
 It uses no language model, no word list, and no change to the audio.
 
-The `final` decode uses the turn audio to the end sample of the turn detector, and no audio after it.
-The audio message that contains the end sample can also contain audio after the end, and that audio does not go to the `final` decode.
-Thus the `final` transcript does not change when the client divides the same audio into different messages.
+The server's `end_sample` is the end-exclusive length of the input prefix for `final`, in 16 kHz mono samples.
+Unless a hard end occurs, the prefix stops at the detector's end sample.
+Subsequent audio does not go to `final`. This includes subsequent audio in the same message.
+
+At a hard end, the prefix can be shorter. The server counts only the samples that the STT provider accepted.
+For a turn without a command start, the server can publish this position without a `final` decode.
 
 The server setting `ASSIST_LIVE_END_RULE` selects the end rule of the turn detector.
 The value `partial` is the default and keeps the current rule.

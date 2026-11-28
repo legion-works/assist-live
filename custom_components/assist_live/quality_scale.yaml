@@ -6,9 +6,10 @@ rules:
   appropriate-polling:
     status: done
     comment: >-
-      No entity polls. The runtime reads server health at 30 s intervals,
-      and at 5 s intervals after an unsatisfactory result. The 1 s tick
-      examines only local turn deadlines.
+      No entity polls. The 1 s maintenance tick checks local turn deadlines
+      and pipeline selectors, saves pending state, and calls the health scheduler.
+      The scheduler reads server health at 30 s intervals, or at 5 s intervals
+      after an unsatisfactory result.
   brands:
     status: exempt
     comment: >-

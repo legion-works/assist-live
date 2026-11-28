@@ -40,7 +40,8 @@ HTTP sends the token without encryption. The config flow shows a warning before 
 The warning lets you continue for an isolated network. It does not refuse HTTP.
 An invalid URL has a different error from a connection failure.
 
-Use each device and key only one time in an entry.
+Use each device ID and each satellite key only one time across all assist-live entries in one HA instance.
+If setup shows `This device or key is already in use`, select a device and a provisioned key that no entry uses.
 Use no more than five satellites with one token.
 Setup ends when you add the fifth satellite.
 The server has 16 audio and event connection slots for each token.

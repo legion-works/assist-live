@@ -381,7 +381,7 @@ A minimum of two windows must agree before an offset can identify `early_end`.
 The result records the peaks, ratios, window offsets, and largest offset difference.
 
 A calculated correlation that is not complete gives `status: invalid_injection` and `hardware_invalid_reason: correlation_unavailable`.
-This includes a peak, second-peak ratio, or window agreement below its threshold.
+This includes a peak, second-peak ratio, or window agreement below its threshold, and a window that is not fully in the recording.
 The runner keeps the test run and replaces it with the same recording and slot, at all four fault points.
 The maximum stays three test runs for each slot.
 After three invalid test runs, the slot gives `unavailable` and keeps the last cause, also `correlation_unavailable`.

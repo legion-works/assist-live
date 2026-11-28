@@ -5053,3 +5053,24 @@ This change has no new device test.
 | Markdown targets on the changed user pages | 46 targets are correct. |
 | Check with seven changed headings and one incorrect YAML `actions` key | `8 failed`. Each rule check found its missing heading. The HA schema refused the incorrect key. |
 | Check with `entity_idd` in `numeric_state` | The first test gave `1 passed` with the incorrect field. The test with the automation editor's validator gave `1 failed`. HA refused `entity_idd`. |
+
+## Replay fit, integration documentation, and HACS checks (2026-11-28 UTC)
+
+The P1 position rule uses three fit windows. If part of a window is not in the capture, replay uses the clock rule.
+The debug recording can start before the capture if all three windows and the end of the recording are in the capture.
+
+Client `0.1.0a3` is necessary for the reauthentication plan in the design.
+The design and replay pages give `end_sample` as the end-exclusive input prefix length for `final`.
+Setup gives the limit on the use of device IDs and satellite keys in one HA instance.
+The quality scale distinguishes local maintenance from network health checks.
+
+| Check | Result |
+|---|---|
+| Fit tests with the code at `a11651b` | `2 failed, 1 passed`. Replay used the position rule for the two clipped windows. |
+| Fit tests with limits on the windows | `3 passed`. The fit was complete for the earlier recording start with three full windows. |
+| Remove the limits from a copy of the fit code | `2 failed, 1 passed` |
+| Replay, fault, integration, documentation, and CI test files | `635 passed` |
+| Documentation and HACS setting checks at `a11651b` and after the changes | `6 failed` at the base. `6 passed` after the changes. |
+| Change four documentation claims and put the hosted HACS brands skip in a copy | `5 failed, 1 passed`. The local HACS setting did not change. |
+| Stock HACS brands validator without network access | The validator accepted the local icon. It did not accept the file list without the icon path when the brands index was empty. |
+| Full stock HACS check with `task hacs` | It stopped because it had no GitHub token. The hosted check is pending. |

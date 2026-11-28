@@ -252,6 +252,39 @@ def test_pause_fit_accepts_stream_start_before_capture():
     assert fit["offset_samples"] == -400
 
 
+@pytest.mark.parametrize("edge", ["start", "end"])
+def test_pause_fit_uses_clock_when_window_is_clipped(edge):
+    from tools.turn_audio import correlate
+
+    rng = random.Random(128)
+    window_samples = 1920
+    clipped_bytes = 80
+    samples = [rng.randrange(-8000, 8000) for _ in range(6 * window_samples)]
+    if edge == "start":
+        samples[:window_samples] = [value * 4 for value in samples[:window_samples]]
+    else:
+        samples[-2 * window_samples : -window_samples] = [
+            value // 8 for value in samples[-2 * window_samples : -window_samples]
+        ]
+        samples[-window_samples:] = [value // 2 for value in samples[-window_samples:]]
+    stream = struct.pack(f"<{len(samples)}h", *samples)
+    if edge == "start":
+        external = stream[clipped_bytes:] + bytes(3200)
+    else:
+        last_window = len(stream) - 2 * window_samples
+        external = (
+            stream[:last_window]
+            + bytes(clipped_bytes)
+            + stream[last_window:-clipped_bytes]
+        )
+    row, label = pause_fit_case({"end_sample": 6500}, True)
+    row["pause_fit"] = correlate(external, stream, allow_early_start=True)
+
+    assert pause_cut(row, label) is False
+    assert row["pause_rule"] == "clock"
+    assert row["pause_rule_reason"] == "fit_failed"
+
+
 def test_websocket_only_run_is_not_p0():
     from tools.device_replay import validate_sample
 
